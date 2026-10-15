@@ -89,7 +89,9 @@ export async function hasJoinedScheduledMeet(
   headers: Record<string, string> | null,
   resolvedConnection?: { connectionId: string; email: string },
 ): Promise<boolean> {
-  return (await getJoinedScheduledMeet(row, headers, resolvedConnection)) !== null;
+  return (
+    (await getJoinedScheduledMeet(row, headers, resolvedConnection)) !== null
+  );
 }
 
 export type JoinedScheduledMeet = {
@@ -143,14 +145,13 @@ export async function getJoinedScheduledMeet(
   const eventStart = parseEventInstant(row.started_at)?.getTime();
   const eventEnd = parseEventInstant(row.ended_at)?.getTime();
   const now = Date.now();
-  const valid = (
+  const valid =
     Number.isFinite(conferenceStart) &&
     eventStart !== undefined &&
     eventEnd !== undefined &&
     conferenceStart >= eventStart - 15 * 60_000 &&
     conferenceStart <= now + 30_000 &&
-    conferenceStart < eventEnd
-  );
+    conferenceStart < eventEnd;
   return valid
     ? {
         connectionId: connection.connectionId,

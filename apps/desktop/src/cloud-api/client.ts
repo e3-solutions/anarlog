@@ -6,7 +6,6 @@ import { supabase } from "~/auth/client";
 import { liveQueryClient } from "~/db";
 import { env } from "~/env";
 
-
 const REQUEST_TIMEOUT_MS = 30_000;
 const SCHEDULED_INVALID_REQUEST_RETRY_DELAYS_MS = [5_000, 15_000] as const;
 
@@ -421,7 +420,8 @@ async function savedMeetAttendance(sessionId: string): Promise<{
     typeof connection_id !== "string" ||
     typeof conference_record !== "string" ||
     !/^conferenceRecords\/[A-Za-z0-9_-]+$/.test(conference_record)
-  ) return null;
+  )
+    return null;
   return { connection_id, conference_record };
 }
 

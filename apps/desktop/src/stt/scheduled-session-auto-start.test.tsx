@@ -169,10 +169,15 @@ test("saves the verified conference before starting Meet recording", async () =>
   });
   let releaseSave!: () => void;
   mocks.saveJoinedScheduledMeet.mockImplementation(
-    () => new Promise<void>((resolve) => { releaseSave = resolve; }),
+    () =>
+      new Promise<void>((resolve) => {
+        releaseSave = resolve;
+      }),
   );
   render(<ScheduledSessionAutoStart sessionId="session-1" />);
-  await vi.waitFor(() => expect(mocks.saveJoinedScheduledMeet).toHaveBeenCalledTimes(1));
+  await vi.waitFor(() =>
+    expect(mocks.saveJoinedScheduledMeet).toHaveBeenCalledTimes(1),
+  );
   expect(mocks.startListening).not.toHaveBeenCalled();
   expect(mocks.saveJoinedScheduledMeet).toHaveBeenCalledWith("session-1", {
     connectionId: "meet-1",
@@ -187,11 +192,15 @@ test("keeps recording when saving Meet evidence fails", async () => {
     id: "event-1",
     meeting_link: "https://meet.google.com/abc-defg-hij",
   });
-  mocks.saveJoinedScheduledMeet.mockRejectedValue(new Error("database unavailable"));
+  mocks.saveJoinedScheduledMeet.mockRejectedValue(
+    new Error("database unavailable"),
+  );
   const log = vi.spyOn(console, "error").mockImplementation(() => {});
   try {
     render(<ScheduledSessionAutoStart sessionId="session-1" />);
-    await vi.waitFor(() => expect(mocks.startListening).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() =>
+      expect(mocks.startListening).toHaveBeenCalledTimes(1),
+    );
     expect(log).toHaveBeenCalledWith(
       "[listener] could not save Meet evidence",
       expect.any(Error),

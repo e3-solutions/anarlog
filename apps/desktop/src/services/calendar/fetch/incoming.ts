@@ -127,7 +127,9 @@ function normalizeCalendarEvent(
   };
 }
 
-export function googleSharedOccurrenceKey(event: CalendarEvent): string | undefined {
+export function googleSharedOccurrenceKey(
+  event: CalendarEvent,
+): string | undefined {
   if (event.provider !== "google") return undefined;
   const uid = event.external_id.trim();
   if (!uid) return undefined;
@@ -135,7 +137,9 @@ export function googleSharedOccurrenceKey(event: CalendarEvent): string | undefi
   if (event.recurring_event_id || event.has_recurrence_rules) {
     let original: { date?: unknown; dateTime?: unknown } | undefined;
     try {
-      const raw = JSON.parse(event.raw) as { originalStartTime?: typeof original };
+      const raw = JSON.parse(event.raw) as {
+        originalStartTime?: typeof original;
+      };
       original = raw.originalStartTime;
     } catch {
       return undefined;

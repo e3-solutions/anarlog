@@ -1,7 +1,7 @@
+import type { JoinedScheduledMeet } from "./scheduled-meet-presence";
+
 import { executeTransaction } from "~/db";
 import { enqueueDatabaseWrite } from "~/db/write-queue";
-
-import type { JoinedScheduledMeet } from "./scheduled-meet-presence";
 
 export async function saveJoinedScheduledMeet(
   sessionId: string,

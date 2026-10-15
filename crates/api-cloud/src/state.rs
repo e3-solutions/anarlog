@@ -138,15 +138,23 @@ impl AppState {
         let origin = self.config.meet_attendance_origin.as_ref()?;
         if connection_id.is_empty()
             || connection_id.len() > 256
-            || !connection_id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+            || !connection_id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
             || conference_record.len() > 512
-            || !conference_record.strip_prefix("conferenceRecords/").is_some_and(|id| {
-                !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
-            })
+            || !conference_record
+                .strip_prefix("conferenceRecords/")
+                .is_some_and(|id| {
+                    !id.is_empty()
+                        && id
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+                })
         {
             return None;
         }
-        let response = self.client
+        let response = self
+            .client
             .post(format!("{origin}/nango/google-meet/attendance"))
             .bearer_auth(token)
             .timeout(Duration::from_secs(25))
@@ -154,9 +162,17 @@ impl AppState {
                 "connection_id": connection_id,
                 "conference_record": conference_record,
             }))
-            .send().await.ok()?;
-        if !response.status().is_success() { return None; }
-        response.json::<MeetAttendanceResponse>().await.ok()?.sessions
+            .send()
+            .await
+            .ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        response
+            .json::<MeetAttendanceResponse>()
+            .await
+            .ok()?
+            .sessions
     }
 
     pub(crate) fn oauth(&self) -> &OAuthResourceConfig {

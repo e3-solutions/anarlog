@@ -153,10 +153,14 @@ describe("cloud API client", () => {
     mocks.execute.mockImplementation(async (sql: string) =>
       sql.includes("managed_app_settings")
         ? [{ value_json: '"workspace-1"' }]
-        : [{ evidence: JSON.stringify({
-            connection_id: "meet-secret",
-            conference_record: "conferenceRecords/record-1",
-          }) }],
+        : [
+            {
+              evidence: JSON.stringify({
+                connection_id: "meet-secret",
+                conference_record: "conferenceRecords/record-1",
+              }),
+            },
+          ],
     );
     mocks.getCloudSnapshot.mockResolvedValue({
       status: "ok",
@@ -164,11 +168,13 @@ describe("cloud API client", () => {
         id: "meeting-1",
         calendar_event_key: "google:9:meeting-1",
         ended_at: "2026-10-15T15:30:00.000Z",
-        transcripts: [{
-          started_at_ms: 10_000,
-          ended_at_ms: 30_000,
-          text: "A useful transcript.",
-        }],
+        transcripts: [
+          {
+            started_at_ms: 10_000,
+            ended_at_ms: 30_000,
+            text: "A useful transcript.",
+          },
+        ],
         shared_transcript_choice: {
           conference_record: null,
           meet_attendance_status: "unknown",
@@ -179,7 +185,11 @@ describe("cloud API client", () => {
         },
       },
     });
-    mocks.fetch.mockResolvedValue(new Response(JSON.stringify({ enabled: true, updated_at: null }), { status: 200 }));
+    mocks.fetch.mockResolvedValue(
+      new Response(JSON.stringify({ enabled: true, updated_at: null }), {
+        status: 200,
+      }),
+    );
 
     await syncCloudApiSnapshot("meeting-1");
     const upload = mocks.fetch.mock.calls.find(([url]) =>

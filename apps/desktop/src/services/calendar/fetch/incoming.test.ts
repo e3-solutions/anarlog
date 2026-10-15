@@ -17,14 +17,27 @@ test("groups the same Google occurrence across accounts and preserves moved recu
     external_id: "series@example.com",
     recurring_event_id: "series",
     has_recurrence_rules: true,
-    raw: JSON.stringify({ originalStartTime: { dateTime: "2026-06-01T10:00:00-04:00" } }),
+    raw: JSON.stringify({
+      originalStartTime: { dateTime: "2026-06-01T10:00:00-04:00" },
+    }),
     started_at: "2026-06-01T15:00:00Z",
   } as Parameters<typeof googleSharedOccurrenceKey>[0];
   const key = googleSharedOccurrenceKey(base);
   expect(key).toBe("google:18:series@example.com:T2026-06-01T14:00:00.000Z");
-  expect(googleSharedOccurrenceKey({ ...base, started_at: "2026-06-01T16:00:00Z" })).toBe(key);
-  expect(googleSharedOccurrenceKey({ ...base, raw: JSON.stringify({ originalStartTime: { dateTime: "2026-06-08T10:00:00-04:00" } }) })).not.toBe(key);
-  expect(googleSharedOccurrenceKey({ ...base, external_id: "" })).toBeUndefined();
+  expect(
+    googleSharedOccurrenceKey({ ...base, started_at: "2026-06-01T16:00:00Z" }),
+  ).toBe(key);
+  expect(
+    googleSharedOccurrenceKey({
+      ...base,
+      raw: JSON.stringify({
+        originalStartTime: { dateTime: "2026-06-08T10:00:00-04:00" },
+      }),
+    }),
+  ).not.toBe(key);
+  expect(
+    googleSharedOccurrenceKey({ ...base, external_id: "" }),
+  ).toBeUndefined();
 });
 
 const ctx: Ctx = {

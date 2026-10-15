@@ -170,7 +170,11 @@ impl GoogleUserInfo {
         if self.verified_email != Some(true) {
             return Err(provider_error());
         }
-        let email = self.email.ok_or_else(provider_error)?.trim().to_ascii_lowercase();
+        let email = self
+            .email
+            .ok_or_else(provider_error)?
+            .trim()
+            .to_ascii_lowercase();
         if email.is_empty() || !email.contains('@') || email.contains(char::is_whitespace) {
             return Err(provider_error());
         }
@@ -262,7 +266,9 @@ async fn connected_identity(proxy: &OwnedNangoProxy) -> Result<(String, String),
     .await?;
     let self_id = person.account_id()?;
     let userinfo: GoogleUserInfo = get(
-        &proxy.clone().base_url_override("https://www.googleapis.com"),
+        &proxy
+            .clone()
+            .base_url_override("https://www.googleapis.com"),
         "/oauth2/v1/userinfo?alt=json",
     )
     .await?;
@@ -345,12 +351,13 @@ async fn check_presence(
 }
 
 fn valid_resource(value: &str, prefix: &str) -> bool {
-    value.len() <= 512 && value.strip_prefix(prefix).is_some_and(|id| {
-        !id.is_empty()
-            && id
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-    })
+    value.len() <= 512
+        && value.strip_prefix(prefix).is_some_and(|id| {
+            !id.is_empty()
+                && id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        })
 }
 
 async fn read_attendance(
@@ -430,8 +437,8 @@ async fn read_attendance(
             let start = chrono::DateTime::parse_from_rfc3339(&session.start_time)
                 .map_err(|_| provider_error())?;
             if let Some(end_time) = &session.end_time {
-                let end = chrono::DateTime::parse_from_rfc3339(end_time)
-                    .map_err(|_| provider_error())?;
+                let end =
+                    chrono::DateTime::parse_from_rfc3339(end_time).map_err(|_| provider_error())?;
                 if end < start {
                     return Err(provider_error());
                 }
@@ -590,7 +597,11 @@ mod tests {
 
     async fn mock_identity(server: &MockServer) {
         mock_person(server, person()).await;
-        mock_userinfo(server, json!({"email":"E3@example.com","verified_email":true})).await;
+        mock_userinfo(
+            server,
+            json!({"email":"E3@example.com","verified_email":true}),
+        )
+        .await;
         mock_record(server).await;
     }
 
@@ -668,7 +679,11 @@ mod tests {
     async fn matches_account_source_id_not_person_resource_name() {
         let (server, app) = setup(true).await;
         mock_person(&server, person()).await;
-        mock_userinfo(&server, json!({"email":"E3@example.com","verified_email":true})).await;
+        mock_userinfo(
+            &server,
+            json!({"email":"E3@example.com","verified_email":true}),
+        )
+        .await;
         mock_space(&server, true).await;
         mock_record(&server).await;
         Mock::given(method("GET"))
@@ -689,7 +704,11 @@ mod tests {
     async fn other_active_participant_does_not_count_as_self() {
         let (server, app) = setup(true).await;
         mock_person(&server, person()).await;
-        mock_userinfo(&server, json!({"email":"E3@example.com","verified_email":true})).await;
+        mock_userinfo(
+            &server,
+            json!({"email":"E3@example.com","verified_email":true}),
+        )
+        .await;
         mock_space(&server, true).await;
         mock_record(&server).await;
         Mock::given(method("GET"))
@@ -709,7 +728,11 @@ mod tests {
     async fn checks_next_page_before_reporting_absent() {
         let (server, app) = setup(true).await;
         mock_person(&server, person()).await;
-        mock_userinfo(&server, json!({"email":"E3@example.com","verified_email":true})).await;
+        mock_userinfo(
+            &server,
+            json!({"email":"E3@example.com","verified_email":true}),
+        )
+        .await;
         mock_space(&server, true).await;
         mock_record(&server).await;
         Mock::given(method("GET"))
@@ -740,7 +763,11 @@ mod tests {
     async fn no_active_conference_is_absent() {
         let (server, app) = setup(true).await;
         mock_person(&server, person()).await;
-        mock_userinfo(&server, json!({"email":"E3@example.com","verified_email":true})).await;
+        mock_userinfo(
+            &server,
+            json!({"email":"E3@example.com","verified_email":true}),
+        )
+        .await;
         mock_space(&server, false).await;
         let (status, value) = post(app, "abc-defg-hij").await;
         assert_eq!(status, StatusCode::OK);
@@ -752,7 +779,11 @@ mod tests {
     async fn google_denial_is_error_not_absence() {
         let (server, app) = setup(true).await;
         mock_person(&server, person()).await;
-        mock_userinfo(&server, json!({"email":"E3@example.com","verified_email":true})).await;
+        mock_userinfo(
+            &server,
+            json!({"email":"E3@example.com","verified_email":true}),
+        )
+        .await;
         Mock::given(method("GET"))
             .and(path("/proxy/v2/spaces/abc-defg-hij"))
             .respond_with(ResponseTemplate::new(403))
@@ -789,7 +820,11 @@ mod tests {
     async fn unverified_userinfo_email_fails_closed() {
         let (server, app) = setup(true).await;
         mock_person(&server, person()).await;
-        mock_userinfo(&server, json!({"email":"e3@example.com","verified_email":false})).await;
+        mock_userinfo(
+            &server,
+            json!({"email":"e3@example.com","verified_email":false}),
+        )
+        .await;
         let (status, value) = post(app, "abc-defg-hij").await;
         assert_eq!(status, StatusCode::BAD_GATEWAY);
         assert!(value.get("present").is_none());
@@ -799,7 +834,11 @@ mod tests {
     async fn malformed_google_response_is_error_not_absence() {
         let (server, app) = setup(true).await;
         mock_person(&server, person()).await;
-        mock_userinfo(&server, json!({"email":"E3@example.com","verified_email":true})).await;
+        mock_userinfo(
+            &server,
+            json!({"email":"E3@example.com","verified_email":true}),
+        )
+        .await;
         Mock::given(method("GET"))
             .and(path("/proxy/v2/spaces/abc-defg-hij"))
             .respond_with(
@@ -816,7 +855,11 @@ mod tests {
     async fn later_page_error_is_not_reported_as_absence() {
         let (server, app) = setup(true).await;
         mock_person(&server, person()).await;
-        mock_userinfo(&server, json!({"email":"E3@example.com","verified_email":true})).await;
+        mock_userinfo(
+            &server,
+            json!({"email":"E3@example.com","verified_email":true}),
+        )
+        .await;
         mock_space(&server, true).await;
         mock_record(&server).await;
         Mock::given(method("GET"))
@@ -851,7 +894,8 @@ mod tests {
                 "participants":[{"name":"conferenceRecords/record1/participants/self",
                     "signedinUser":{"user":"users/12345"}}]
             })))
-            .mount(&server).await;
+            .mount(&server)
+            .await;
         Mock::given(method("GET"))
             .and(path("/proxy/v2/conferenceRecords/record1/participants"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -859,24 +903,31 @@ mod tests {
                     "signedinUser":{"user":"users/other"}}],
                 "nextPageToken":"next"
             })))
-            .mount(&server).await;
+            .mount(&server)
+            .await;
         Mock::given(method("GET"))
-            .and(path("/proxy/v2/conferenceRecords/record1/participants/self/participantSessions"))
+            .and(path(
+                "/proxy/v2/conferenceRecords/record1/participants/self/participantSessions",
+            ))
             .and(query_param("pageToken", "more"))
             .with_priority(1)
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "participantSessions":[{"startTime":"2026-10-15T10:20:00Z",
                     "endTime":"2026-10-15T10:50:00Z"}]
             })))
-            .mount(&server).await;
+            .mount(&server)
+            .await;
         Mock::given(method("GET"))
-            .and(path("/proxy/v2/conferenceRecords/record1/participants/self/participantSessions"))
+            .and(path(
+                "/proxy/v2/conferenceRecords/record1/participants/self/participantSessions",
+            ))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "participantSessions":[{"startTime":"2026-10-15T10:00:00Z",
                     "endTime":"2026-10-15T10:10:00Z"}],
                 "nextPageToken":"more"
             })))
-            .mount(&server).await;
+            .mount(&server)
+            .await;
         let (status, value) = post_attendance(app, "conferenceRecords/record1").await;
         assert_eq!(status, StatusCode::OK, "{value}");
         assert_eq!(value["account_email"], "e3@example.com");
@@ -884,7 +935,11 @@ mod tests {
         assert_eq!(value["sessions"][0]["start_time"], "2026-10-15T10:00:00Z");
         assert_eq!(value["sessions"][1]["end_time"], "2026-10-15T10:50:00Z");
         let requests = server.received_requests().await.unwrap();
-        assert!(requests.iter().all(|request| !request.url.path().contains("/other/participantSessions")));
+        assert!(
+            requests
+                .iter()
+                .all(|request| !request.url.path().contains("/other/participantSessions"))
+        );
     }
 
     #[tokio::test]
@@ -897,7 +952,8 @@ mod tests {
                 "participants":[{"name":"conferenceRecords/record1/participants/other",
                     "signedinUser":{"user":"users/other"}}]
             })))
-            .mount(&server).await;
+            .mount(&server)
+            .await;
         let (status, value) = post_attendance(app, "conferenceRecords/record1").await;
         assert_eq!(status, StatusCode::OK, "{value}");
         assert!(value["sessions"].is_null());
@@ -913,20 +969,27 @@ mod tests {
                 "participants":[{"name":"conferenceRecords/record1/participants/self",
                     "signedinUser":{"user":"users/12345"}}]
             })))
-            .mount(&server).await;
+            .mount(&server)
+            .await;
         Mock::given(method("GET"))
-            .and(path("/proxy/v2/conferenceRecords/record1/participants/self/participantSessions"))
+            .and(path(
+                "/proxy/v2/conferenceRecords/record1/participants/self/participantSessions",
+            ))
             .and(query_param("pageToken", "more"))
             .with_priority(1)
             .respond_with(ResponseTemplate::new(503))
-            .mount(&server).await;
+            .mount(&server)
+            .await;
         Mock::given(method("GET"))
-            .and(path("/proxy/v2/conferenceRecords/record1/participants/self/participantSessions"))
+            .and(path(
+                "/proxy/v2/conferenceRecords/record1/participants/self/participantSessions",
+            ))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "participantSessions":[{"startTime":"2026-10-15T10:00:00Z"}],
                 "nextPageToken":"more"
             })))
-            .mount(&server).await;
+            .mount(&server)
+            .await;
         let (status, value) = post_attendance(app, "conferenceRecords/record1").await;
         assert_eq!(status, StatusCode::BAD_GATEWAY, "{value}");
         assert!(value.get("sessions").is_none());
@@ -942,14 +1005,18 @@ mod tests {
                 "participants":[{"name":"conferenceRecords/record1/participants/self",
                     "signedinUser":{"user":"users/12345"}}]
             })))
-            .mount(&server).await;
+            .mount(&server)
+            .await;
         Mock::given(method("GET"))
-            .and(path("/proxy/v2/conferenceRecords/record1/participants/self/participantSessions"))
+            .and(path(
+                "/proxy/v2/conferenceRecords/record1/participants/self/participantSessions",
+            ))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "participantSessions":[{"startTime":"2026-10-15T10:20:00Z",
                     "endTime":"2026-10-15T10:10:00Z"}]
             })))
-            .mount(&server).await;
+            .mount(&server)
+            .await;
         let (status, value) = post_attendance(app, "conferenceRecords/record1").await;
         assert_eq!(status, StatusCode::BAD_GATEWAY, "{value}");
         assert!(value.get("sessions").is_none());
@@ -965,13 +1032,17 @@ mod tests {
                 "participants":[{"name":"conferenceRecords/record1/participants/self",
                     "signedinUser":{"user":"users/12345"}}]
             })))
-            .mount(&server).await;
+            .mount(&server)
+            .await;
         Mock::given(method("GET"))
-            .and(path("/proxy/v2/conferenceRecords/record1/participants/self/participantSessions"))
+            .and(path(
+                "/proxy/v2/conferenceRecords/record1/participants/self/participantSessions",
+            ))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "participantSessions":[{"startTime":"2026-10-15T10:20:00Z"}]
             })))
-            .mount(&server).await;
+            .mount(&server)
+            .await;
         let (status, value) = post_attendance(app, "conferenceRecords/record1").await;
         assert_eq!(status, StatusCode::OK, "{value}");
         assert!(value["sessions"][0]["end_time"].is_null());

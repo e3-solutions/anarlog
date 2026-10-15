@@ -15,11 +15,11 @@ import {
   finishScheduledAutoStart,
   isScheduledAutoStartInFlight,
 } from "~/stt/scheduled-auto-start-state";
+import { saveJoinedScheduledMeet } from "~/stt/scheduled-meet-evidence";
 import {
   getJoinedScheduledMeet,
   isGoogleMeetLink,
 } from "~/stt/scheduled-meet-presence";
-import { saveJoinedScheduledMeet } from "~/stt/scheduled-meet-evidence";
 import { useStartListeningState } from "~/stt/useStartListening";
 
 export function ScheduledSessionAutoStart({
@@ -140,7 +140,10 @@ function StartScheduledSessionAutoStart({
           if (!row) return { eligible: false, joined: null };
           if (!isGoogleMeetLink(row.meeting_link))
             return { eligible: true, joined: null };
-          const joined = await getJoinedScheduledMeet(row, getHeadersRef.current());
+          const joined = await getJoinedScheduledMeet(
+            row,
+            getHeadersRef.current(),
+          );
           return { eligible: joined !== null, joined };
         })
       : Promise.resolve({ eligible: true, joined: null });
