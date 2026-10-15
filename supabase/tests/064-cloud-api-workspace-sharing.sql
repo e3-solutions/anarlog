@@ -23,7 +23,7 @@ from cloud_share_test_state;
 insert into public.api_session_snapshots (user_id, session_id, content_json)
 values (
   tests.get_supabase_uid('cloud_share_owner'), 'meeting-1',
-  '{"id":"meeting-1","title":"Owner recording","transcripts":[{"text":"Owner transcript"}],"calendar_event_key":"google:uid-1","shared_transcript_choice":{"meet_attendance_status":"verified","verified_overlap_seconds":9999,"recorded_seconds":30,"transcript_coverage_seconds":20,"transcript_characters":999999}}'::jsonb
+  '{"id":"meeting-1","title":"Owner recording","transcripts":[{"text":"Owner meeting transcript"}],"calendar_event_key":"google:uid-1","shared_transcript_choice":{"meet_attendance_status":"verified","verified_overlap_seconds":9999,"recorded_seconds":30,"transcript_coverage_seconds":20,"transcript_characters":999999}}'::jsonb
 ), (
   tests.get_supabase_uid('cloud_share_member'), 'meeting-2',
   '{"id":"meeting-2","title":"Member recording","transcripts":[{"text":"Longer member transcript"}],"calendar_event_key":"google:uid-1","shared_transcript_choice":{"conference_record":"conferenceRecords/abc-123","meet_attendance_status":"verified","recorded_seconds":30,"verified_overlap_seconds":15,"transcript_coverage_seconds":20,"transcript_characters":24}}'::jsonb
@@ -88,7 +88,7 @@ select is(
   (select transcript_characters from public.api_shared_session_candidates
     where owner_user_id = tests.get_supabase_uid('cloud_share_owner')
       and session_id = 'meeting-1'),
-  16, 'stored transcript text count overrides forged client character count'
+  24, 'stored transcript text count overrides forged client character count'
 );
 
 select is(
