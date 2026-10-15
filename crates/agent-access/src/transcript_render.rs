@@ -383,6 +383,7 @@ mod tests {
             transcripts,
             speakers,
             speaker_context: None,
+            calendar_event_key: None,
         }
     }
 

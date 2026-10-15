@@ -35,6 +35,9 @@ const TabContentSettings = lazy(async () => ({
 const TabContentSharedNote = lazy(async () => ({
   default: (await import("~/shared-notes")).TabContentSharedNote,
 }));
+const TabContentSharedTranscript = lazy(async () => ({
+  default: (await import("~/shared-transcripts")).TabContentSharedTranscript,
+}));
 const TabContentSharedNotePreview = lazy(async () => ({
   default: (await import("~/shared-notes")).TabContentSharedNotePreview,
 }));
@@ -65,6 +68,9 @@ function LazyTabContent({ tab }: { tab: Tab }) {
   }
   if (tab.type === "shared_sessions") {
     return <TabContentSharedNote tab={tab} />;
+  }
+  if (tab.type === "shared_transcripts") {
+    return <TabContentSharedTranscript tab={tab} />;
   }
   if (tab.type === "shared_note_preview") {
     return <TabContentSharedNotePreview tab={tab} />;

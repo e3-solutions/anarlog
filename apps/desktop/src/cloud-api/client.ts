@@ -3,6 +3,7 @@ import { fetch } from "@tauri-apps/plugin-http";
 import { commands as localApiCommands } from "@anlg/plugin-local-api";
 
 import { supabase } from "~/auth/client";
+import { liveQueryClient } from "~/db";
 import { env } from "~/env";
 
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -22,6 +23,49 @@ export type CloudApiKey = {
 };
 
 export type CreatedCloudApiKey = CloudApiKey & { key: string };
+
+export type SharedMeetingListItem = {
+  share_id: string;
+  owner_user_id: string;
+  workspace_id: string;
+  meeting: {
+    id: string;
+    title: string;
+    started_at: string;
+    updated_at: string;
+  };
+};
+
+export type SharedMeetingExport = {
+  id: string;
+  title: string;
+  started_at: string;
+  note: { markdown: string } | null;
+  summaries: { id: string; title: string; markdown: string }[];
+  transcripts: { id: string; text: string }[];
+};
+
+export async function listSharedMeetings(): Promise<SharedMeetingListItem[]> {
+  const meetings: SharedMeetingListItem[] = [];
+  let offset: number | null = 0;
+  while (offset !== null) {
+    const page: {
+      meetings: SharedMeetingListItem[];
+      pagination: { next_offset: number | null };
+    } = await json(`/v1/shared-meetings?limit=200&offset=${offset}`);
+    meetings.push(...page.meetings);
+    offset = page.pagination.next_offset;
+  }
+  return meetings;
+}
+
+export async function getSharedMeeting(
+  shareId: string,
+): Promise<SharedMeetingExport> {
+  return json<SharedMeetingExport>(
+    `/v1/shared-meetings/${encodeURIComponent(shareId)}`,
+  );
+}
 
 type ApiErrorEnvelope = {
   error?: {
@@ -251,10 +295,24 @@ async function cloudApiEnabled(userId: string): Promise<boolean> {
       "The signed-in account changed during the request.",
     );
   }
-  if (cachedEnabled !== null) {
-    return cachedEnabled;
+  const enabled = cachedEnabled ?? (await getCloudApiSettings()).enabled;
+  if (enabled) return true;
+  if (!(await getManagedWorkspaceId())) return false;
+  return (await setCloudApiEnabled(true)).enabled;
+}
+
+async function getManagedWorkspaceId(): Promise<string | null> {
+  const rows = await liveQueryClient.execute<{ value_json: string }>(
+    "SELECT value_json FROM managed_app_settings WHERE id = ? LIMIT 1",
+    ["shared_transcript_workspace_id"],
+  );
+  if (!rows[0]) return null;
+  try {
+    const value: unknown = JSON.parse(rows[0].value_json);
+    return typeof value === "string" && value ? value : null;
+  } catch {
+    return null;
   }
-  return (await getCloudApiSettings()).enabled;
 }
 
 export async function syncCloudApiSnapshot(sessionId: string): Promise<void> {
@@ -313,6 +371,11 @@ async function performCloudApiSnapshotSync(
   if (hasSnapshotIntent(sessionId, "delete")) {
     return;
   }
+  const workspaceId = await getManagedWorkspaceId();
+  if (workspaceId && !isCompletedCalendarSnapshot(result.data)) {
+    removePendingChange(userId, sessionId, "upserts");
+    return;
+  }
   const uploaded = await enqueueSnapshotRequest(async () => {
     if (hasSnapshotIntent(sessionId, "delete")) {
       return false;
@@ -330,8 +393,61 @@ async function performCloudApiSnapshotSync(
     return true;
   });
   if (uploaded) {
+    if (workspaceId) {
+      await publishCompletedCalendarSnapshot(sessionId, workspaceId, userId);
+    }
     removePendingChange(userId, sessionId, "upserts");
   }
+}
+
+async function publishCompletedCalendarSnapshot(
+  sessionId: string,
+  workspaceId: string,
+  userId: string,
+): Promise<void> {
+  try {
+    await request(
+      `/v1/sync-snapshots/${encodeURIComponent(sessionId)}/workspace`,
+      { method: "PUT", body: JSON.stringify({ workspace_id: workspaceId }) },
+      true,
+      true,
+      userId,
+    );
+  } catch (error) {
+    // Another attendee may have published the same calendar occurrence first.
+    if (error instanceof CloudApiClientError && error.code === "conflict") {
+      return;
+    }
+    throw error;
+  }
+}
+
+function isCompletedCalendarSnapshot(snapshot: unknown): boolean {
+  if (!snapshot || typeof snapshot !== "object") return false;
+  const value = snapshot as Record<string, unknown>;
+  if (
+    typeof value.calendar_event_key !== "string" ||
+    !value.calendar_event_key ||
+    typeof value.ended_at !== "string" ||
+    !value.ended_at ||
+    !Array.isArray(value.transcripts) ||
+    value.transcripts.length === 0
+  ) {
+    return false;
+  }
+  return (
+    value.transcripts.every(
+      (transcript) =>
+        transcript &&
+        typeof transcript === "object" &&
+        typeof transcript.ended_at_ms === "number",
+    ) &&
+    value.transcripts.some(
+      (transcript) =>
+        typeof transcript.text === "string" &&
+        transcript.text.trim().length > 0,
+    )
+  );
 }
 
 async function deleteCloudApiSnapshotForUser(
@@ -389,8 +505,7 @@ export async function backfillCloudApiSnapshots(): Promise<number> {
 
 export async function initializeCloudApiBackfill(): Promise<void> {
   const current = await session();
-  const settings = await getCloudApiSettings();
-  if (!settings.enabled) {
+  if (!(await cloudApiEnabled(current.user.id))) {
     return;
   }
   await flushPendingChanges("deletes");

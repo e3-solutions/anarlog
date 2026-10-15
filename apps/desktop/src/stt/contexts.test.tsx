@@ -28,6 +28,9 @@ const {
   useConfigValueMock,
   getNearbyCalendarEventsMock,
   loadSessionEventMock,
+  createSessionMock,
+  softDeleteSessionMock,
+  openNewMock,
 } = vi.hoisted(() => ({
   listMicUsingApplicationsMock: vi.fn(),
   inspectMeetingAccessibilityMock: vi.fn(),
@@ -38,6 +41,9 @@ const {
   useConfigValueMock: vi.fn((key: string) => key !== "notification_disabled"),
   getNearbyCalendarEventsMock: vi.fn(),
   loadSessionEventMock: vi.fn(),
+  createSessionMock: vi.fn(),
+  softDeleteSessionMock: vi.fn(),
+  openNewMock: vi.fn(),
 }));
 
 vi.mock("@anlg/plugin-detect", () => ({
@@ -65,6 +71,12 @@ vi.mock("~/calendar/queries", () => ({
 
 vi.mock("~/session/queries", () => ({
   loadSessionEvent: loadSessionEventMock,
+  createSession: createSessionMock,
+  softDeleteSession: softDeleteSessionMock,
+}));
+
+vi.mock("~/store/zustand/tabs", () => ({
+  useTabs: { getState: () => ({ openNew: openNewMock }) },
 }));
 
 vi.mock("~/shared/config", () => ({
@@ -78,6 +90,25 @@ function setStoreActive(
   store.setState((state) => ({
     live: { ...state.live, sessionId, status: "active" },
   }));
+}
+
+function mockActiveSlackHuddle(slack: { id: string; name: string }) {
+  inspectMeetingAccessibilityMock.mockResolvedValue({
+    status: "ok",
+    data: [
+      {
+        activeCall: true,
+        app: slack,
+        pid: 100,
+        platform: "slack",
+        surface: "native",
+        accessibilityTrusted: true,
+        windowTitle: "Team huddle",
+        remoteScreenShare: false,
+        warnings: [],
+      },
+    ],
+  });
 }
 
 async function renderProvider(store: ReturnType<typeof createListenerStore>) {
@@ -237,9 +268,13 @@ describe("ListenerProvider detect events", () => {
     useConfigValueMock.mockReset();
     getNearbyCalendarEventsMock.mockReset();
     loadSessionEventMock.mockReset();
+    createSessionMock.mockReset().mockResolvedValue("huddle-session");
+    softDeleteSessionMock.mockReset().mockResolvedValue(null);
+    openNewMock.mockReset();
     useStoreMock.mockReturnValue(null);
     useConfigValueMock.mockImplementation(
-      (key: string) => key !== "notification_disabled",
+      (key: string) =>
+        key !== "notification_disabled" && key !== "auto_start_slack_huddles",
     );
     getNearbyCalendarEventsMock.mockImplementation(readConfiguredNearbyEvents);
     loadSessionEventMock.mockImplementation(readConfiguredSessionEvent);
@@ -1086,6 +1121,147 @@ describe("ListenerProvider detect events", () => {
     expect(showNotificationMock).not.toHaveBeenCalled();
     expect(getNearbyCalendarEventsMock).not.toHaveBeenCalled();
   });
+
+  test("auto-starts only a validated active Slack huddle using the microphone", async () => {
+    const store = createListenerStore();
+    useConfigValueMock.mockImplementation(
+      (key: string) => key === "auto_start_slack_huddles",
+    );
+    const handler = await renderProvider(store);
+    const slack = { id: "com.tinyspeck.slackmacgap", name: "Slack" };
+
+    inspectMeetingAccessibilityMock.mockResolvedValue({
+      status: "ok",
+      data: [
+        {
+          activeCall: true,
+          app: slack,
+          pid: 100,
+          platform: "slack",
+          surface: "native",
+          accessibilityTrusted: true,
+          windowTitle: "Team huddle",
+          remoteScreenShare: false,
+          warnings: [],
+        },
+      ],
+    });
+    listMicUsingApplicationsMock.mockResolvedValue({
+      status: "ok",
+      data: [slack],
+    });
+
+    handler({
+      payload: {
+        type: "micDetected",
+        key: "slack-1",
+        apps: [slack],
+        duration_secs: 15,
+      },
+    });
+
+    await vi.waitFor(() => expect(openNewMock).toHaveBeenCalledTimes(1));
+    expect(createSessionMock).toHaveBeenCalledWith("Slack huddle");
+    expect(openNewMock).toHaveBeenCalledWith({
+      type: "sessions",
+      id: "huddle-session",
+      state: { view: null, autoStart: true, scheduledAutoStart: null },
+    });
+    expect(store.getState().live.triggerAppIds).toEqual([slack.id]);
+    expect(showNotificationMock).not.toHaveBeenCalled();
+
+    handler({
+      payload: {
+        type: "micDetected",
+        key: "slack-2",
+        apps: [slack],
+        duration_secs: 15,
+      },
+    });
+    expect(inspectMeetingAccessibilityMock).toHaveBeenCalledTimes(1);
+    expect(createSessionMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not auto-start when Slack huddle validation is ambiguous", async () => {
+    const store = createListenerStore();
+    useConfigValueMock.mockImplementation(
+      (key: string) => key === "auto_start_slack_huddles",
+    );
+    const handler = await renderProvider(store);
+    const slack = { id: "com.tinyspeck.slackmacgap", name: "Slack" };
+    inspectMeetingAccessibilityMock.mockResolvedValue({
+      status: "ok",
+      data: [
+        {
+          activeCall: true,
+          app: slack,
+          pid: 100,
+          platform: "slack",
+          surface: "native",
+          accessibilityTrusted: true,
+          windowTitle: "Team huddle",
+          remoteScreenShare: false,
+          warnings: ["ambiguous controls"],
+        },
+      ],
+    });
+
+    handler({
+      payload: {
+        type: "micDetected",
+        key: "slack-1",
+        apps: [slack],
+        duration_secs: 15,
+      },
+    });
+    await vi.waitFor(() =>
+      expect(inspectMeetingAccessibilityMock).toHaveBeenCalled(),
+    );
+    expect(createSessionMock).not.toHaveBeenCalled();
+    expect(openNewMock).not.toHaveBeenCalled();
+  });
+
+  test.each(["microphone stops", "another recording starts"])(
+    "removes an unused huddle note when %s during session creation",
+    async (interruption) => {
+      const store = createListenerStore();
+      useConfigValueMock.mockImplementation(
+        (key: string) => key === "auto_start_slack_huddles",
+      );
+      const handler = await renderProvider(store);
+      const slack = { id: "com.tinyspeck.slackmacgap", name: "Slack" };
+      mockActiveSlackHuddle(slack);
+      listMicUsingApplicationsMock.mockResolvedValue({
+        status: "ok",
+        data: [slack],
+      });
+      createSessionMock.mockImplementation(async () => {
+        if (interruption === "microphone stops") {
+          listMicUsingApplicationsMock.mockResolvedValue({
+            status: "ok",
+            data: [],
+          });
+        } else {
+          setStoreActive(store, "other-session");
+        }
+        return "huddle-session";
+      });
+
+      handler({
+        payload: {
+          type: "micDetected",
+          key: "slack-1",
+          apps: [slack],
+          duration_secs: 15,
+        },
+      });
+
+      await vi.waitFor(() =>
+        expect(softDeleteSessionMock).toHaveBeenCalledWith("huddle-session"),
+      );
+      expect(openNewMock).not.toHaveBeenCalled();
+    },
+  );
 
   test.each([
     {

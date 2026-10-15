@@ -5740,6 +5740,10 @@ msgstr "Start a Pro trial or add your own LLM API key to generate a summary from
 msgid "Start Anarlog at login"
 msgstr "Start Anarlog at login"
 
+#: src/settings/general/meeting-settings.tsx
+msgid "Start for Slack huddles"
+msgstr "Start for Slack huddles"
+
 #: src/settings/general/billing.tsx
 msgid "Start free trial"
 msgstr "Start free trial"
@@ -5747,6 +5751,10 @@ msgstr "Start free trial"
 #: src/settings/general/meeting-settings.tsx
 msgid "Start listening when a scheduled meeting begins."
 msgstr "Start listening when a scheduled meeting begins."
+
+#: src/settings/general/meeting-settings.tsx
+msgid "Start listening when Slack is using your microphone and an active huddle is confirmed through Accessibility."
+msgstr "Start listening when Slack is using your microphone and an active huddle is confirmed through Accessibility."
 
 #: src/settings/team/index.tsx
 msgid "Start Pro"

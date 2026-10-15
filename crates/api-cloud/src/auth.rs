@@ -36,7 +36,12 @@ pub async fn require_cloud_connector_auth(
             Err(_) => verify_oauth_token(&state, &token).await?,
         }
     };
-    enforce_user_status(&state, &claims.sub).await?;
+    enforce_user_status(
+        &state,
+        &claims.sub,
+        request.uri().path().starts_with("/v1/shared-meetings"),
+    )
+    .await?;
     request
         .extensions_mut()
         .insert(AuthContext { token, claims });
@@ -104,7 +109,11 @@ async fn require_api_key(
     Ok(next.run(request).await)
 }
 
-async fn enforce_user_status(state: &AppState, user_id: &str) -> Result<(), CloudApiError> {
+async fn enforce_user_status(
+    state: &AppState,
+    user_id: &str,
+    allow_shared_access_without_cloud_opt_in: bool,
+) -> Result<(), CloudApiError> {
     let verified = state
         .verify_user(user_id)
         .await
@@ -112,6 +121,7 @@ async fn enforce_user_status(state: &AppState, user_id: &str) -> Result<(), Clou
     match verified.status.as_str() {
         "ok" => Ok(()),
         "subscription_required" => Err(CloudApiError::SubscriptionRequired),
+        "cloud_api_not_enabled" if allow_shared_access_without_cloud_opt_in => Ok(()),
         "cloud_api_not_enabled" => Err(CloudApiError::NotEnabled),
         _ => Err(unauthorized(state, None)),
     }

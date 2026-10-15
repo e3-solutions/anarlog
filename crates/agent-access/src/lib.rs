@@ -300,6 +300,10 @@ pub struct MeetingExport {
     /// transcript view does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker_context: Option<Value>,
+    /// Provider event identifier plus occurrence start; used only to prevent
+    /// duplicate workspace shares for the same calendar occurrence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calendar_event_key: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Type, utoipa::ToSchema)]
@@ -599,6 +603,7 @@ pub async fn get_meeting_export(pool: &SqlitePool, meeting_id: String) -> Result
         transcripts,
         speakers,
         speaker_context,
+        calendar_event_key: None,
     })
 }
 

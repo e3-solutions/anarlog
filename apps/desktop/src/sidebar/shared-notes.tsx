@@ -12,6 +12,7 @@ import {
   useSharedNoteEventKeys,
 } from "~/shared-notes/event-keys";
 import { useTabs } from "~/store/zustand/tabs";
+import { SharedTranscriptsNav } from "./shared-transcripts";
 
 export function SharedNotesNav() {
   const { t } = useLingui();
@@ -72,6 +73,7 @@ export function SharedNotesNav() {
           );
         })}
       </div>
+      <SharedTranscriptsNav />
     </div>
   );
 }

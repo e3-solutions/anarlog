@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   refreshSession: vi.fn(),
   getCloudSnapshot: vi.fn(),
   listCloudSnapshotIds: vi.fn(),
+  execute: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/plugin-http", () => ({ fetch: mocks.fetch }));
@@ -26,6 +27,7 @@ vi.mock("~/auth/client", () => ({
 vi.mock("~/env", () => ({
   env: { VITE_API_URL: "https://api.anarlog.test" },
 }));
+vi.mock("~/db", () => ({ liveQueryClient: { execute: mocks.execute } }));
 
 const storedValues = new Map<string, string>();
 vi.stubGlobal("localStorage", {
@@ -75,6 +77,139 @@ describe("cloud API client", () => {
       status: "ok",
       data: [],
     });
+    mocks.execute.mockResolvedValue([]);
+  });
+
+  it("publishes only completed calendar transcripts to the managed workspace", async () => {
+    mocks.getSession.mockResolvedValue(authSession("user-publish"));
+    mocks.execute.mockResolvedValue([{ value_json: '"workspace-1"' }]);
+    mocks.getCloudSnapshot.mockResolvedValue({
+      status: "ok",
+      data: {
+        id: "meeting-1",
+        calendar_event_key: "google-event|2026-10-15T15:00:00.000Z",
+        ended_at: "2026-10-15T15:30:00.000Z",
+        transcripts: [{ ended_at_ms: 1792092600000, text: "Decision made." }],
+      },
+    });
+    mocks.fetch.mockImplementation(
+      async (input: string) =>
+        new Response(
+          JSON.stringify(
+            input.endsWith("/v1/cloud-api/settings")
+              ? { enabled: true, updated_at: null }
+              : { share_id: "share-1" },
+          ),
+          { status: 200 },
+        ),
+    );
+
+    await syncCloudApiSnapshot("meeting-1");
+
+    expect(mocks.fetch).toHaveBeenCalledWith(
+      "https://api.anarlog.test/v1/sync-snapshots/meeting-1/workspace",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ workspace_id: "workspace-1" }),
+      }),
+    );
+
+    mocks.fetch.mockClear();
+    mocks.getCloudSnapshot.mockResolvedValue({
+      status: "ok",
+      data: {
+        id: "meeting-2",
+        calendar_event_key: "google-event-2|2026-10-15T16:00:00.000Z",
+        ended_at: "2026-10-15T16:30:00.000Z",
+        transcripts: [{ ended_at_ms: null, text: "Partial text" }],
+      },
+    });
+    await syncCloudApiSnapshot("meeting-2");
+    expect(
+      mocks.fetch.mock.calls.some(([url]) =>
+        String(url).includes("/v1/sync-snapshots/meeting-2"),
+      ),
+    ).toBe(false);
+
+    mocks.fetch.mockClear();
+    mocks.getCloudSnapshot.mockResolvedValue({
+      status: "ok",
+      data: {
+        id: "personal-huddle",
+        ended_at: "2026-10-15T17:30:00.000Z",
+        transcripts: [{ ended_at_ms: 1792096200000, text: "Personal." }],
+      },
+    });
+    await syncCloudApiSnapshot("personal-huddle");
+    expect(
+      mocks.fetch.mock.calls.some(([url]) =>
+        String(url).includes("/v1/sync-snapshots/personal-huddle"),
+      ),
+    ).toBe(false);
+  });
+
+  it("treats an already shared calendar occurrence as deduplicated", async () => {
+    mocks.getSession.mockResolvedValue(authSession("user-dedupe"));
+    mocks.execute.mockResolvedValue([{ value_json: '"workspace-1"' }]);
+    mocks.getCloudSnapshot.mockResolvedValue({
+      status: "ok",
+      data: {
+        id: "meeting-1",
+        calendar_event_key: "same-calendar-occurrence",
+        ended_at: "2026-10-15T15:30:00.000Z",
+        transcripts: [{ ended_at_ms: 1792092600000, text: "Complete." }],
+      },
+    });
+    mocks.fetch.mockImplementation(async (input: string) => {
+      if (input.endsWith("/workspace")) {
+        return new Response(
+          JSON.stringify({
+            error: { code: "conflict", message: "already shared" },
+          }),
+          { status: 409 },
+        );
+      }
+      return new Response(JSON.stringify({ enabled: true, updated_at: null }), {
+        status: 200,
+      });
+    });
+
+    await expect(syncCloudApiSnapshot("meeting-1")).resolves.toBeUndefined();
+    expect(
+      mocks.fetch.mock.calls.some(([url]) =>
+        String(url).endsWith("/workspace"),
+      ),
+    ).toBe(true);
+  });
+
+  it("enables Cloud API once when managed workspace sharing is configured", async () => {
+    mocks.getSession.mockResolvedValue(authSession("user-managed"));
+    mocks.execute.mockResolvedValue([{ value_json: '"workspace-1"' }]);
+    mocks.fetch.mockImplementation(
+      async (input: string, init?: RequestInit) => {
+        if (input.endsWith("/v1/cloud-api/settings")) {
+          return new Response(
+            JSON.stringify({
+              enabled: init?.method === "PUT",
+              updated_at: null,
+            }),
+            { status: 200 },
+          );
+        }
+        return new Response("{}", { status: 200 });
+      },
+    );
+
+    await syncCloudApiSnapshot("meeting-1");
+    await syncCloudApiSnapshot("meeting-2");
+
+    expect(
+      mocks.fetch.mock.calls.filter(
+        ([url, init]) =>
+          String(url).endsWith("/v1/cloud-api/settings") &&
+          init?.method === "PUT",
+      ),
+    ).toHaveLength(1);
   });
 
   it("does not upload a local snapshot after the signed-in account changes", async () => {

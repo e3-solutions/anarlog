@@ -21,6 +21,8 @@ pub enum CloudApiError {
     #[error("{0}")]
     InvalidRequest(String),
     #[error("{0}")]
+    Conflict(String),
+    #[error("{0}")]
     Internal(String),
 }
 
@@ -66,6 +68,7 @@ impl IntoResponse for CloudApiError {
             Self::InvalidRequest(message) => {
                 (StatusCode::BAD_REQUEST, "invalid_request", message, None)
             }
+            Self::Conflict(message) => (StatusCode::CONFLICT, "conflict", message, None),
             Self::Internal(message) => {
                 tracing::error!("[cloud-api] internal error: {message}");
                 (

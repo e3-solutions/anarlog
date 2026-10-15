@@ -20,7 +20,10 @@ import {
   showMeetingEndedPrompt,
 } from "./auto-stop";
 import { cancelAutoStopEndedNotification } from "./auto-stop-notification";
-import { inspectionsShowActiveMeetingForApps } from "./meeting-accessibility";
+import {
+  inspectionShowsActiveMeeting,
+  inspectionsShowActiveMeetingForApps,
+} from "./meeting-accessibility";
 import {
   getBrowserMeetingPlatform,
   getIgnorableApps,
@@ -37,8 +40,10 @@ import {
   getNearbyCalendarEvents,
   type NearbyCalendarEvent,
 } from "~/calendar/queries";
+import { createSession, softDeleteSession } from "~/session/queries";
 import { useConfigValue } from "~/shared/config";
 import type { ListenerStore } from "~/store/zustand/listener";
+import { useTabs } from "~/store/zustand/tabs";
 
 const MAX_TIMEOUT_DELAY_MS = 2_147_483_647;
 
@@ -71,12 +76,15 @@ export const useHandleDetectEvents = (store: ListenerStore) => {
   const stop = useStore(store, (state) => state.stop);
   const setMuted = useStore(store, (state) => state.setMuted);
   const autoStopMeetings = useConfigValue("auto_stop_meetings");
+  const autoStartSlackHuddles = useConfigValue("auto_start_slack_huddles");
   const notificationsDisabled = useConfigValue("notification_disabled");
   const notificationDetect = useConfigValue("notification_detect");
   const notificationRecording = useConfigValue("notification_recording");
 
   const autoStopMeetingsRef = useRef(autoStopMeetings);
   autoStopMeetingsRef.current = autoStopMeetings;
+  const autoStartSlackHuddlesRef = useRef(autoStartSlackHuddles);
+  autoStartSlackHuddlesRef.current = autoStartSlackHuddles;
   const notificationDetectRef = useRef(notificationDetect);
   notificationDetectRef.current = notificationDetect && !notificationsDisabled;
   const notificationRecordingRef = useRef(notificationRecording);
@@ -86,6 +94,7 @@ export const useHandleDetectEvents = (store: ListenerStore) => {
   const lastReconnectAtMsRef = useRef<number | null>(null);
   const pendingAutoStopRef = useRef<PendingAutoStop | null>(null);
   const pendingMicDetectedPromptRef = useRef(false);
+  const startedHuddleAppIdsRef = useRef(new Set<string>());
 
   useMountEffect(() => {
     let unlistenDetect: (() => void) | undefined;
@@ -157,6 +166,77 @@ export const useHandleDetectEvents = (store: ListenerStore) => {
         );
       }
     };
+
+    async function tryAutoStartSlackHuddle(
+      micApps: { id: string; name: string }[],
+    ): Promise<boolean> {
+      if (!autoStartSlackHuddlesRef.current) return false;
+      if (
+        micApps.length > 0 &&
+        micApps.every((app) => startedHuddleAppIdsRef.current.has(app.id))
+      ) {
+        return true;
+      }
+      if (store.getState().live.status !== "inactive") return false;
+
+      const micAppIds = new Set(micApps.map((app) => app.id));
+      const inspection = await detectCommands.inspectMeetingAccessibility();
+      if (inspection.status !== "ok" || !autoStartSlackHuddlesRef.current) {
+        return false;
+      }
+
+      const activeHuddle = inspection.data.find(
+        (entry) =>
+          entry.platform === "slack" &&
+          micAppIds.has(entry.app.id) &&
+          !startedHuddleAppIdsRef.current.has(entry.app.id) &&
+          inspectionShowsActiveMeeting(entry),
+      );
+      if (!activeHuddle) return false;
+
+      // An app may release its microphone while Accessibility is being read.
+      const currentMicApps = await detectCommands.listMicUsingApplications();
+      if (
+        currentMicApps.status !== "ok" ||
+        !currentMicApps.data.some((app) => app.id === activeHuddle.app.id) ||
+        !autoStartSlackHuddlesRef.current ||
+        store.getState().live.status !== "inactive"
+      ) {
+        return false;
+      }
+
+      const sessionId = await createSession("Slack huddle");
+      let opened = false;
+      try {
+        const micAfterSessionCreation =
+          await detectCommands.listMicUsingApplications();
+        if (
+          !autoStartSlackHuddlesRef.current ||
+          micAfterSessionCreation.status !== "ok" ||
+          !micAfterSessionCreation.data.some(
+            (app) => app.id === activeHuddle.app.id,
+          ) ||
+          !store.getState().canStartLiveSession(sessionId)
+        ) {
+          return false;
+        }
+
+        startedHuddleAppIdsRef.current.add(activeHuddle.app.id);
+        store.getState().setTriggerAppIds([activeHuddle.app.id]);
+        useTabs.getState().openNew({
+          type: "sessions",
+          id: sessionId,
+          state: { view: null, autoStart: true, scheduledAutoStart: null },
+        });
+        opened = true;
+        return true;
+      } finally {
+        if (!opened) {
+          startedHuddleAppIdsRef.current.delete(activeHuddle.app.id);
+          await softDeleteSession(sessionId);
+        }
+      }
+    }
 
     function scheduleAutoStop(
       delayMs: number,
@@ -387,10 +467,6 @@ export const useHandleDetectEvents = (store: ListenerStore) => {
             return;
           }
 
-          if (!notificationDetectRef.current) {
-            return;
-          }
-
           if (pendingMicDetectedPromptRef.current) {
             return;
           }
@@ -398,6 +474,16 @@ export const useHandleDetectEvents = (store: ListenerStore) => {
 
           void (async () => {
             try {
+              try {
+                if (await tryAutoStartSlackHuddle(payload.apps)) return;
+              } catch (error) {
+                console.warn(
+                  "[listener] failed to auto-start Slack huddle",
+                  error,
+                );
+              }
+              if (!notificationDetectRef.current) return;
+
               const nearbyEvents = await getNearbyCalendarEvents(
                 Date.now(),
                 15 * 60 * 1000,
@@ -469,6 +555,9 @@ export const useHandleDetectEvents = (store: ListenerStore) => {
             }
           })();
         } else if (payload.type === "micStopped") {
+          for (const app of payload.apps) {
+            startedHuddleAppIdsRef.current.delete(app.id);
+          }
           const autoStopEnabled = autoStopMeetingsRef.current !== false;
           if (!autoStopEnabled) {
             return;

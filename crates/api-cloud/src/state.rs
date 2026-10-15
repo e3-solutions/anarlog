@@ -64,6 +64,19 @@ struct SnapshotRow {
 }
 
 #[derive(Deserialize)]
+pub(crate) struct SharedSnapshotRow {
+    pub share_id: String,
+    pub owner_user_id: String,
+    pub workspace_id: String,
+    pub content_json: MeetingExport,
+}
+
+#[derive(Deserialize)]
+struct ShareIdRow {
+    share_id: String,
+}
+
+#[derive(Deserialize)]
 pub(crate) struct VerifiedKey {
     pub user_id: String,
     pub status: String,
@@ -243,6 +256,78 @@ impl AppState {
                 serde_json::json!({
                     "p_user_id": user_id,
                     "p_session_id": session_id,
+                }),
+            )
+            .await?;
+        Ok(rows.pop().map(|row| row.content_json))
+    }
+
+    pub(crate) async fn share_snapshot(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        workspace_id: &str,
+    ) -> Result<String, StoreError> {
+        let mut rows: Vec<ShareIdRow> = self
+            .rpc(
+                "set_cloud_api_snapshot_workspace",
+                serde_json::json!({
+                    "p_actor_user_id": user_id,
+                    "p_session_id": session_id,
+                    "p_workspace_id": workspace_id,
+                }),
+            )
+            .await?;
+        rows.pop().map(|row| row.share_id).ok_or_else(|| {
+            StoreError::InvalidResponse(serde_json::Error::io(std::io::Error::other(
+                "shared snapshot receipt missing",
+            )))
+        })
+    }
+
+    pub(crate) async fn unshare_snapshot(
+        &self,
+        user_id: &str,
+        session_id: &str,
+    ) -> Result<bool, StoreError> {
+        self.rpc(
+            "delete_cloud_api_snapshot_workspace",
+            serde_json::json!({
+                "p_actor_user_id": user_id,
+                "p_session_id": session_id,
+            }),
+        )
+        .await
+    }
+
+    pub(crate) async fn list_shared_snapshots(
+        &self,
+        user_id: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<SharedSnapshotRow>, StoreError> {
+        self.rpc(
+            "list_shared_cloud_api_snapshots",
+            serde_json::json!({
+                "p_actor_user_id": user_id,
+                "p_limit": limit,
+                "p_offset": offset,
+            }),
+        )
+        .await
+    }
+
+    pub(crate) async fn read_shared_snapshot(
+        &self,
+        user_id: &str,
+        share_id: &str,
+    ) -> Result<Option<MeetingExport>, StoreError> {
+        let mut rows: Vec<SnapshotRow> = self
+            .rpc(
+                "read_shared_cloud_api_snapshot",
+                serde_json::json!({
+                    "p_actor_user_id": user_id,
+                    "p_share_id": share_id,
                 }),
             )
             .await?;

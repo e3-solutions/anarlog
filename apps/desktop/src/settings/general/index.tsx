@@ -38,6 +38,7 @@ const SETTINGS_FORM_KEYS = [
   "automatic_updates",
   "auto_join_scheduled_meetings",
   "auto_start_scheduled_meetings",
+  "auto_start_slack_huddles",
   "auto_stop_meetings",
   "floating_bar_enabled",
   "show_app_in_dock",
@@ -64,6 +65,7 @@ function useSettingsForm(storedSettings: StoredSettingValues) {
       auto_join_scheduled_meetings: settingsValue.auto_join_scheduled_meetings,
       auto_start_scheduled_meetings:
         settingsValue.auto_start_scheduled_meetings,
+      auto_start_slack_huddles: settingsValue.auto_start_slack_huddles,
       auto_stop_meetings: settingsValue.auto_stop_meetings,
       floating_bar_enabled: settingsValue.floating_bar_enabled,
       show_app_in_dock: settingsValue.show_app_in_dock,
@@ -106,6 +108,7 @@ function useSettingsForm(storedSettings: StoredSettingValues) {
           normalizedValue.auto_join_scheduled_meetings,
         auto_start_scheduled_meetings:
           normalizedValue.auto_start_scheduled_meetings,
+        auto_start_slack_huddles: normalizedValue.auto_start_slack_huddles,
         auto_stop_meetings: normalizedValue.auto_stop_meetings,
         floating_bar_enabled: normalizedValue.floating_bar_enabled,
         show_app_in_dock: normalizedValue.show_app_in_dock,
@@ -127,6 +130,7 @@ function useSettingsForm(storedSettings: StoredSettingValues) {
           normalizedValue.auto_join_scheduled_meetings,
         auto_start_scheduled_meetings:
           normalizedValue.auto_start_scheduled_meetings,
+        auto_start_slack_huddles: normalizedValue.auto_start_slack_huddles,
         auto_stop_meetings: normalizedValue.auto_stop_meetings,
         floating_bar_enabled: normalizedValue.floating_bar_enabled,
         show_app_in_dock: normalizedValue.show_app_in_dock,
@@ -327,6 +331,11 @@ function SettingsSectionContent({
                   value: values.auto_start_scheduled_meetings,
                   onChange: (value) =>
                     submitFieldValue("auto_start_scheduled_meetings", value),
+                }}
+                autoStartSlackHuddles={{
+                  value: values.auto_start_slack_huddles,
+                  onChange: (value) =>
+                    submitFieldValue("auto_start_slack_huddles", value),
                 }}
                 autoStopMeetings={{
                   value: values.auto_stop_meetings,

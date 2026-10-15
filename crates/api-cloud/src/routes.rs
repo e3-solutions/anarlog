@@ -60,6 +60,31 @@ pub struct SnapshotReceipt {
     pub published_at: String,
 }
 
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ShareSnapshotBody {
+    pub workspace_id: Uuid,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SharedSnapshotReceipt {
+    pub share_id: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SharedMeetingListItem {
+    pub share_id: String,
+    pub owner_user_id: String,
+    pub workspace_id: String,
+    pub calendar_event_key: Option<String>,
+    pub meeting: access::MeetingListItem,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SharedMeetingPage {
+    pub meetings: Vec<SharedMeetingListItem>,
+    pub pagination: access::Pagination,
+}
+
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct ListMeetingsQuery {
     pub(crate) query: Option<String>,
@@ -97,6 +122,10 @@ pub fn management_router(state: AppState) -> Router {
             "/v1/sync-snapshots/{session_id}",
             put(publish_snapshot).delete(delete_snapshot),
         )
+        .route(
+            "/v1/sync-snapshots/{session_id}/workspace",
+            put(share_snapshot).delete(unshare_snapshot),
+        )
         .layer(DefaultBodyLimit::max(MAX_SNAPSHOT_REQUEST_BYTES))
         .with_state(state)
 }
@@ -109,6 +138,13 @@ pub fn connector_router(state: AppState) -> Router {
         .route("/meetings/{meeting_id}/transcript", get(get_transcript))
         .route("/meetings/{meeting_id}/history", get(get_history))
         .route("/meetings/{meeting_id}/export", get(export_meeting));
+    let v1 = v1
+        .route("/shared-meetings", get(list_shared_meetings))
+        .route("/shared-meetings/{share_id}", get(get_shared_meeting))
+        .route(
+            "/shared-meetings/{share_id}/transcript",
+            get(get_shared_transcript),
+        );
 
     Router::new()
         .nest("/v1", v1)
@@ -301,6 +337,145 @@ pub(crate) async fn delete_snapshot(
         .await
         .map_err(map_store_error)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    put,
+    path = "/v1/sync-snapshots/{session_id}/workspace",
+    tag = "cloud-api",
+    params(("session_id" = String, Path)),
+    request_body = ShareSnapshotBody,
+    responses((status = 200, body = SharedSnapshotReceipt))
+)]
+pub(crate) async fn share_snapshot(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    Path(session_id): Path<String>,
+    Json(body): Json<ShareSnapshotBody>,
+) -> Result<Json<SharedSnapshotReceipt>, CloudApiError> {
+    let share_id = state
+        .share_snapshot(
+            &auth.claims.sub,
+            &session_id,
+            &body.workspace_id.to_string(),
+        )
+        .await
+        .map_err(map_store_error)?;
+    Ok(Json(SharedSnapshotReceipt { share_id }))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/v1/sync-snapshots/{session_id}/workspace",
+    tag = "cloud-api",
+    params(("session_id" = String, Path)),
+    responses((status = 204))
+)]
+pub(crate) async fn unshare_snapshot(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    Path(session_id): Path<String>,
+) -> Result<StatusCode, CloudApiError> {
+    state
+        .unshare_snapshot(&auth.claims.sub, &session_id)
+        .await
+        .map_err(map_store_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/shared-meetings",
+    tag = "cloud-api",
+    responses((status = 200, body = SharedMeetingPage))
+)]
+pub(crate) async fn list_shared_meetings(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    Query(params): Query<ListMeetingsQuery>,
+) -> Result<Json<SharedMeetingPage>, CloudApiError> {
+    let limit = params
+        .limit
+        .unwrap_or(access::DEFAULT_LIST_LIMIT)
+        .clamp(1, access::MAX_LIST_LIMIT);
+    let offset = params.offset.unwrap_or(0);
+    let mut rows = state
+        .list_shared_snapshots(&auth.claims.sub, limit + 1, offset)
+        .await
+        .map_err(map_store_error)?;
+    let has_more = rows.len() > limit as usize;
+    rows.truncate(limit as usize);
+    let meetings = rows
+        .into_iter()
+        .map(|row| SharedMeetingListItem {
+            share_id: row.share_id,
+            owner_user_id: row.owner_user_id,
+            workspace_id: row.workspace_id,
+            calendar_event_key: row.content_json.calendar_event_key.clone(),
+            meeting: access::MeetingListItem::from(&row.content_json.meeting),
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(SharedMeetingPage {
+        pagination: access::Pagination {
+            offset,
+            limit,
+            returned: meetings.len(),
+            total: None,
+            next_offset: has_more.then_some(offset.saturating_add(limit)),
+        },
+        meetings,
+    }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/shared-meetings/{share_id}",
+    tag = "cloud-api",
+    params(("share_id" = Uuid, Path)),
+    responses((status = 200, body = access::MeetingExport))
+)]
+pub(crate) async fn get_shared_meeting(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    Path(share_id): Path<Uuid>,
+) -> Result<Json<access::MeetingExport>, CloudApiError> {
+    read_shared_export(&state, &auth.claims.sub, &share_id.to_string())
+        .await
+        .map(Json)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/shared-meetings/{share_id}/transcript",
+    tag = "cloud-api",
+    params(("share_id" = Uuid, Path)),
+    responses((status = 200, body = access::TranscriptPage))
+)]
+pub(crate) async fn get_shared_transcript(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    Path(share_id): Path<Uuid>,
+    Query(params): Query<TranscriptQuery>,
+) -> Result<Json<access::TranscriptPage>, CloudApiError> {
+    let export = read_shared_export(&state, &auth.claims.sub, &share_id.to_string()).await?;
+    Ok(Json(access::paginate_transcripts(
+        &export.meeting.id,
+        &export.transcripts,
+        params.offset.unwrap_or(0),
+        params.limit.unwrap_or(access::DEFAULT_TRANSCRIPT_LIMIT),
+    )))
+}
+
+async fn read_shared_export(
+    state: &AppState,
+    user_id: &str,
+    share_id: &str,
+) -> Result<access::MeetingExport, CloudApiError> {
+    state
+        .read_shared_snapshot(user_id, share_id)
+        .await
+        .map_err(map_store_error)?
+        .ok_or_else(|| CloudApiError::NotFound(format!("shared meeting '{share_id}' not found")))
 }
 
 #[utoipa::path(
@@ -581,6 +756,22 @@ fn sanitize_value(value: &mut serde_json::Value) {
 
 fn map_store_error(error: StoreError) -> CloudApiError {
     match &error {
+        StoreError::Response { body, .. }
+            if body.contains("cloud snapshot not found")
+                || body.contains("workspace access denied") =>
+        {
+            CloudApiError::NotFound("meeting or workspace not found".to_string())
+        }
+        StoreError::Response { body, .. } if body.contains("calendar event already shared") => {
+            CloudApiError::Conflict(
+                "this calendar meeting already has a shared transcript".to_string(),
+            )
+        }
+        StoreError::Response { body, .. } if body.contains("calendar event key required") => {
+            CloudApiError::InvalidRequest(
+                "a calendar event key is required to share".to_string(),
+            )
+        }
         StoreError::Response { body, .. } if body.contains("hyprnote pro entitlement required") => {
             CloudApiError::SubscriptionRequired
         }
@@ -703,14 +894,21 @@ kHmPRiazukxPLb6ilpRAewjW8nihRANCAATDskChT+Altkm9X7MI69T3IUmrQU0L\n\
             }],
             speakers: Vec::new(),
             speaker_context: None,
+            calendar_event_key: None,
         }
     }
 
     #[test]
     fn snapshot_sanitizer_removes_control_characters_and_local_paths() {
-        let export = sanitize_export(export()).unwrap();
+        let mut input = export();
+        input.calendar_event_key = Some("event-1|2026-10-15T15:00:00.000Z".to_string());
+        let export = sanitize_export(input).unwrap();
 
         assert_eq!(export.meeting.title, "Planning");
+        assert_eq!(
+            export.calendar_event_key.as_deref(),
+            Some("event-1|2026-10-15T15:00:00.000Z")
+        );
         assert!(export.transcripts[0].words[0].get("audio_path").is_none());
     }
 

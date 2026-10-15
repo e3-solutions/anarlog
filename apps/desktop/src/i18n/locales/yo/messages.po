@@ -5740,12 +5740,20 @@ msgstr ""
 msgid "Start Anarlog at login"
 msgstr "Bẹrẹ Anarlog ni wiwọle"
 
+#: src/settings/general/meeting-settings.tsx
+msgid "Start for Slack huddles"
+msgstr ""
+
 #: src/settings/general/billing.tsx
 msgid "Start free trial"
 msgstr ""
 
 #: src/settings/general/meeting-settings.tsx
 msgid "Start listening when a scheduled meeting begins."
+msgstr ""
+
+#: src/settings/general/meeting-settings.tsx
+msgid "Start listening when Slack is using your microphone and an active huddle is confirmed through Accessibility."
 msgstr ""
 
 #: src/settings/team/index.tsx

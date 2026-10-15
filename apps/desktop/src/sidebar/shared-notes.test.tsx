@@ -26,6 +26,10 @@ vi.mock("~/session/queries", () => ({
   useSessionSummaries: () => mocks.sessions,
 }));
 
+vi.mock("./shared-transcripts", () => ({
+  SharedTranscriptsNav: () => null,
+}));
+
 vi.mock("~/store/zustand/tabs", () => ({
   useTabs: (
     selector: (state: {

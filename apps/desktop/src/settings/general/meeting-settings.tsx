@@ -14,6 +14,7 @@ interface SettingItem {
 export function MeetingSettingsView({
   autoJoinScheduledMeetings,
   autoStartScheduledMeetings,
+  autoStartSlackHuddles,
   autoStopMeetings,
   floatingBar,
   meetingDisclosureAutoPost,
@@ -22,6 +23,7 @@ export function MeetingSettingsView({
 }: {
   autoJoinScheduledMeetings: SettingItem;
   autoStartScheduledMeetings: SettingItem;
+  autoStartSlackHuddles: SettingItem;
   autoStopMeetings: SettingItem;
   floatingBar: SettingItem;
   meetingDisclosureAutoPost: SettingItem;
@@ -47,6 +49,19 @@ export function MeetingSettingsView({
         checked={autoStartScheduledMeetings.value}
         onChange={autoStartScheduledMeetings.onChange}
       />
+      {supportsMeetingAx && supportsMicDetection && (
+        <SettingSwitchRow
+          title={<Trans>Start for Slack huddles</Trans>}
+          description={
+            <Trans>
+              Start listening when Slack is using your microphone and an active
+              huddle is confirmed through Accessibility.
+            </Trans>
+          }
+          checked={autoStartSlackHuddles.value}
+          onChange={autoStartSlackHuddles.onChange}
+        />
+      )}
       <SettingSwitchRow
         title={<Trans>Join scheduled meetings</Trans>}
         description={

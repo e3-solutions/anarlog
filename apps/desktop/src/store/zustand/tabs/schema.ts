@@ -32,6 +32,7 @@ export type TabInput =
   | { type: "automations" }
   | { type: "folders" }
   | { type: "shared_sessions"; id: string }
+  | { type: "shared_transcripts"; id: string }
   | { type: "shared_note_preview"; id: string };
 
 export const isTabInputSupported = (
@@ -128,6 +129,7 @@ export type Tab =
       state: SessionsState;
     })
   | (BaseTab & { type: "shared_sessions"; id: string })
+  | (BaseTab & { type: "shared_transcripts"; id: string })
   | (BaseTab & { type: "shared_note_preview"; id: string })
   | (BaseTab & {
       type: "contacts";
@@ -190,6 +192,8 @@ export const getDefaultState = (tab: TabInput): Tab => {
       };
     case "shared_sessions":
       return { ...base, type: "shared_sessions", id: tab.id };
+    case "shared_transcripts":
+      return { ...base, type: "shared_transcripts", id: tab.id };
     case "shared_note_preview":
       return { ...base, type: "shared_note_preview", id: tab.id };
     case "contacts":
@@ -264,6 +268,8 @@ export const uniqueIdfromTab = (tab: Tab): string => {
       return `sessions-${tab.id}`;
     case "shared_sessions":
       return `shared-sessions-${tab.id}`;
+    case "shared_transcripts":
+      return `shared-transcripts-${tab.id}`;
     case "shared_note_preview":
       return `shared-note-preview-${tab.id}`;
     case "humans":

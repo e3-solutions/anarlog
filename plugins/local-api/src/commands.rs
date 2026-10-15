@@ -464,10 +464,85 @@ pub async fn get_cloud_snapshot<R: tauri::Runtime>(
     meeting_id: String,
 ) -> Result<serde_json::Value, String> {
     let pool = pool(&app)?;
-    let export = anlg_agent_access::get_meeting_export(&pool, meeting_id)
+    let export = anlg_agent_access::get_meeting_export(&pool, meeting_id.clone())
         .await
         .map_err(|error| error.to_string())?;
-    prepare_cloud_snapshot(export)
+    let mut snapshot = prepare_cloud_snapshot(export)?;
+    let event: Option<(String, String)> = sqlx::query_as(
+        "SELECT event.tracking_id_event, event.started_at
+         FROM sessions AS session
+         JOIN events AS event ON event.id = (
+           SELECT candidate.id FROM events AS candidate
+           WHERE candidate.deleted_at IS NULL
+             AND (
+               candidate.id = session.event_id
+               OR (
+                 candidate.tracking_id_event <> ''
+                 AND candidate.tracking_id_event = CASE
+                   WHEN json_valid(session.event_json)
+                   THEN json_extract(session.event_json, '$.tracking_id')
+                   ELSE '' END
+                 AND candidate.calendar_id = CASE
+                   WHEN json_valid(session.event_json)
+                   THEN json_extract(session.event_json, '$.calendar_id')
+                   ELSE '' END
+               )
+             )
+           ORDER BY CASE WHEN candidate.id = session.event_id THEN 0 ELSE 1 END,
+             candidate.started_at, candidate.id
+           LIMIT 1
+         )
+         WHERE session.id = ? AND session.deleted_at IS NULL
+         LIMIT 1",
+    )
+    .bind(&meeting_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|error| error.to_string())?;
+    if let Some((tracking_id, started_at)) = event
+        && let Some(key) = cloud_calendar_event_key(&tracking_id, &started_at)
+    {
+        snapshot["calendar_event_key"] = serde_json::Value::String(key);
+        if cloud_snapshot_jsonb_len(&snapshot)? > MAX_CLOUD_SNAPSHOT_BYTES {
+            return Err("meeting snapshot exceeds the cloud size limit".to_string());
+        }
+    }
+    Ok(snapshot)
+}
+
+fn cloud_calendar_event_key(tracking_id: &str, started_at: &str) -> Option<String> {
+    let tracking_id = tracking_id.trim();
+    if tracking_id.is_empty() {
+        return None;
+    }
+    let started_at = chrono::DateTime::parse_from_rfc3339(started_at).ok()?;
+    let key = format!(
+        "{}|{}",
+        tracking_id,
+        started_at
+            .with_timezone(&chrono::Utc)
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    );
+    (key.len() <= 512).then_some(key)
+}
+
+#[cfg(test)]
+mod cloud_calendar_event_key_tests {
+    use super::cloud_calendar_event_key;
+
+    #[test]
+    fn same_occurrence_has_one_key_across_timezones() {
+        let eastern = cloud_calendar_event_key(" event-1 ", "2026-10-15T11:00:00-04:00");
+        let utc = cloud_calendar_event_key("event-1", "2026-10-15T15:00:00Z");
+        assert_eq!(eastern, utc);
+        assert_eq!(utc.as_deref(), Some("event-1|2026-10-15T15:00:00.000Z"));
+    }
+
+    #[test]
+    fn missing_event_identity_is_not_shareable() {
+        assert_eq!(cloud_calendar_event_key("", "2026-10-15T15:00:00Z"), None);
+        assert_eq!(cloud_calendar_event_key("event-1", "invalid"), None);
+    }
 }
 
 pub(crate) fn prepare_cloud_snapshot(

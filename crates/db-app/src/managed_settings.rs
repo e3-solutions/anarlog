@@ -26,10 +26,17 @@ fn validate(bytes: &[u8]) -> Result<ManagedSettings, sqlx::Error> {
         let valid = match key.as_str() {
             "telemetry_consent"
             | "crash_reporting_consent"
-            | "cloud_sync_enabled"
-            | "automatic_updates" => value == &Value::Bool(false),
+            | "cloud_sync_enabled" => value == &Value::Bool(false),
             "intelligence_disabled" => value == &Value::Bool(true),
-            "auto_start_scheduled_meetings" | "save_recordings" => value.is_boolean(),
+            "auto_start_scheduled_meetings"
+            | "auto_start_slack_huddles"
+            | "autostart"
+            | "automatic_updates"
+            | "save_recordings" => value.is_boolean(),
+            "shared_transcript_workspace_id" => value.as_str().is_some_and(|id| {
+                uuid::Uuid::parse_str(id)
+                    .is_ok_and(|parsed| parsed.to_string() == id)
+            }),
             "current_llm_provider" | "current_llm_model" => value.as_str() == Some(""),
             "audio_retention" => value.as_str() == Some("forever"),
             "current_stt_provider" => value.as_str() == Some("custom"),
@@ -107,10 +114,13 @@ mod tests {
     #[test]
     fn secrets_and_unsafe_values_are_rejected() {
         assert!(validate(br#"{"schema_version":1,"settings":{"intelligence_disabled":true,"telemetry_consent":false}}"#).is_ok());
+        assert!(validate(br#"{"schema_version":1,"settings":{"autostart":true,"automatic_updates":true,"auto_start_scheduled_meetings":true,"auto_start_slack_huddles":true}}"#).is_ok());
+        assert!(validate(br#"{"schema_version":1,"settings":{"shared_transcript_workspace_id":"00000000-0000-4000-8000-000000000001"}}"#).is_ok());
         for text in [
             r#"{"schema_version":1,"settings":{"telemetry_consent":true}}"#,
             r#"{"schema_version":1,"settings":{"api_key":"secret"}}"#,
             r#"{"schema_version":2,"settings":{}}"#,
+            r#"{"schema_version":1,"settings":{"shared_transcript_workspace_id":"not-a-uuid"}}"#,
         ] {
             assert!(validate(text.as_bytes()).is_err());
         }

@@ -159,6 +159,7 @@ fn apply_bearer_auth_to_protected_paths(doc: &mut utoipa::openapi::OpenApi) {
             || path.starts_with("/sync")
             || path.starts_with("/v1/cloud-api")
             || path.starts_with("/v1/sync-snapshots")
+            || path.starts_with("/v1/shared-meetings")
         {
             set_operation_security(item);
         } else if path.starts_with("/v1/meetings") {
