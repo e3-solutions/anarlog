@@ -739,10 +739,10 @@ mod tests {
             .and(path("/proxy/v2/conferenceRecords/record1/participants"))
             .and(query_param("filter", "latest_end_time IS NULL"))
             .and(query_param("pageToken", "next"))
-            .with_priority(1)
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "participants":[{"signedinUser":{"user":"users/12345"}}]
             })))
+            .with_priority(1)
             .mount(&server)
             .await;
         Mock::given(method("GET"))
@@ -865,8 +865,8 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/proxy/v2/conferenceRecords/record1/participants"))
             .and(query_param("pageToken", "next"))
-            .with_priority(1)
             .respond_with(ResponseTemplate::new(503))
+            .with_priority(1)
             .mount(&server)
             .await;
         Mock::given(method("GET"))
@@ -889,11 +889,11 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/proxy/v2/conferenceRecords/record1/participants"))
             .and(query_param("pageToken", "next"))
-            .with_priority(1)
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "participants":[{"name":"conferenceRecords/record1/participants/self",
                     "signedinUser":{"user":"users/12345"}}]
             })))
+            .with_priority(1)
             .mount(&server)
             .await;
         Mock::given(method("GET"))
@@ -910,11 +910,11 @@ mod tests {
                 "/proxy/v2/conferenceRecords/record1/participants/self/participantSessions",
             ))
             .and(query_param("pageToken", "more"))
-            .with_priority(1)
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "participantSessions":[{"startTime":"2026-10-15T10:20:00Z",
                     "endTime":"2026-10-15T10:50:00Z"}]
             })))
+            .with_priority(1)
             .mount(&server)
             .await;
         Mock::given(method("GET"))
@@ -976,8 +976,8 @@ mod tests {
                 "/proxy/v2/conferenceRecords/record1/participants/self/participantSessions",
             ))
             .and(query_param("pageToken", "more"))
-            .with_priority(1)
             .respond_with(ResponseTemplate::new(503))
+            .with_priority(1)
             .mount(&server)
             .await;
         Mock::given(method("GET"))

@@ -323,6 +323,13 @@ expression: "canonicalize_json(serde_json::json!({\n    \"protocol_version\": in
             },
             "type": "array"
           },
+          "calendar_event_key": {
+            "description": "Google Calendar iCalUID plus original start for recurring instances;\nused to group workspace shares by calendar occurrence.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "created_at": {
             "type": "string"
           },
@@ -364,6 +371,9 @@ expression: "canonicalize_json(serde_json::json!({\n    \"protocol_version\": in
           },
           "series_id": {
             "type": "string"
+          },
+          "shared_transcript_choice": {
+            "description": "Private candidate signals used to choose one workspace transcript."
           },
           "speaker_context": {
             "description": "Recorded microphone/call context intervals (`sessions.metadata_json`\n`speaker_context`) used to label speakers the same way the desktop\ntranscript view does."

@@ -300,8 +300,8 @@ pub struct MeetingExport {
     /// transcript view does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker_context: Option<Value>,
-    /// Provider event identifier plus occurrence start; used only to prevent
-    /// duplicate workspace shares for the same calendar occurrence.
+    /// Google Calendar iCalUID plus original start for recurring instances;
+    /// used to group workspace shares by calendar occurrence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calendar_event_key: Option<String>,
     /// Private candidate signals used to choose one workspace transcript.
