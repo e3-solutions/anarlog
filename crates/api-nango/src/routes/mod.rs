@@ -49,6 +49,10 @@ pub fn session_router(config: NangoConfig) -> Router {
             "/google-meet/presence",
             post(google_meet_presence::presence),
         )
+        .route(
+            "/google-meet/attendance",
+            post(google_meet_presence::attendance),
+        )
         .with_state(state)
 }
 

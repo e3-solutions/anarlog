@@ -118,10 +118,45 @@ function normalizeCalendarEvent(
       meeting_link: calendarEvent.meeting_link ?? undefined,
       description: calendarEvent.description ?? undefined,
       recurrence_series_id: calendarEvent.recurring_event_id ?? undefined,
+      shared_occurrence_key: googleSharedOccurrenceKey(calendarEvent),
       has_recurrence_rules: calendarEvent.has_recurrence_rules,
       is_all_day: calendarEvent.is_all_day,
       attendance,
     },
     eventParticipants,
   };
+}
+
+export function googleSharedOccurrenceKey(
+  event: CalendarEvent,
+): string | undefined {
+  if (event.provider !== "google") return undefined;
+  const uid = event.external_id.trim();
+  if (!uid) return undefined;
+  let occurrence = "";
+  if (event.recurring_event_id || event.has_recurrence_rules) {
+    let original: { date?: unknown; dateTime?: unknown } | undefined;
+    try {
+      const raw = JSON.parse(event.raw) as {
+        originalStartTime?: typeof original;
+      };
+      original = raw.originalStartTime;
+    } catch {
+      return undefined;
+    }
+    if (typeof original?.dateTime === "string") {
+      const timestamp = Date.parse(original.dateTime);
+      if (!Number.isFinite(timestamp)) return undefined;
+      occurrence = `:T${new Date(timestamp).toISOString()}`;
+    } else if (
+      typeof original?.date === "string" &&
+      /^\d{4}-\d{2}-\d{2}$/.test(original.date)
+    ) {
+      occurrence = `:D${original.date}`;
+    } else {
+      return undefined;
+    }
+  }
+  const key = `google:${uid.length}:${uid}${occurrence}`;
+  return new TextEncoder().encode(key).length <= 512 ? key : undefined;
 }

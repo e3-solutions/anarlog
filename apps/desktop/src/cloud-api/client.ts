@@ -400,26 +400,50 @@ async function performCloudApiSnapshotSync(
   }
 }
 
+async function savedMeetAttendance(sessionId: string): Promise<{
+  connection_id: string;
+  conference_record: string;
+} | null> {
+  const rows = await liveQueryClient.execute<{ evidence: string | null }>(
+    "SELECT json_extract(metadata_json, '$.verified_meet') AS evidence FROM sessions WHERE id = ? AND deleted_at IS NULL",
+    [sessionId],
+  );
+  let saved: unknown;
+  try {
+    saved = JSON.parse(rows[0]?.evidence ?? "null");
+  } catch {
+    return null;
+  }
+  if (!saved || typeof saved !== "object") return null;
+  const { connection_id, conference_record } = saved as Record<string, unknown>;
+  if (
+    typeof connection_id !== "string" ||
+    typeof conference_record !== "string" ||
+    !/^conferenceRecords\/[A-Za-z0-9_-]+$/.test(conference_record)
+  )
+    return null;
+  return { connection_id, conference_record };
+}
+
 async function publishCompletedCalendarSnapshot(
   sessionId: string,
   workspaceId: string,
   userId: string,
 ): Promise<void> {
-  try {
-    await request(
-      `/v1/sync-snapshots/${encodeURIComponent(sessionId)}/workspace`,
-      { method: "PUT", body: JSON.stringify({ workspace_id: workspaceId }) },
-      true,
-      true,
-      userId,
-    );
-  } catch (error) {
-    // Another attendee may have published the same calendar occurrence first.
-    if (error instanceof CloudApiClientError && error.code === "conflict") {
-      return;
-    }
-    throw error;
-  }
+  const meetAttendance = await savedMeetAttendance(sessionId).catch(() => null);
+  await request(
+    `/v1/sync-snapshots/${encodeURIComponent(sessionId)}/workspace`,
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        workspace_id: workspaceId,
+        ...(meetAttendance ? { meet_attendance: meetAttendance } : {}),
+      }),
+    },
+    true,
+    true,
+    userId,
+  );
 }
 
 function isCompletedCalendarSnapshot(snapshot: unknown): boolean {

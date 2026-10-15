@@ -141,6 +141,7 @@ function toIncomingCalendarEvent(event: IncomingEvent): IncomingCalendarEvent {
     meeting_link: event.meeting_link ?? null,
     description: event.description ?? null,
     recurrence_series_id: event.recurrence_series_id ?? null,
+    shared_occurrence_key: event.shared_occurrence_key ?? null,
     has_recurrence_rules: event.has_recurrence_rules,
     is_all_day: event.is_all_day,
     attendance_json: encodeAttendanceSnapshot(event.attendance),

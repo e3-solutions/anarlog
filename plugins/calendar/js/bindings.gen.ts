@@ -311,7 +311,7 @@ email: string | null;
 is_current_user: boolean }
 export type EventStatus = "confirmed" | "tentative" | "cancelled"
 export type IgnoredCalendarItemKind = "events" | "series"
-export type IncomingCalendarEvent = { tracking_id_event: string; tracking_id_calendar: string; legacy_tracking_ids?: string[]; is_cancelled?: boolean; title: string | null; started_at: string | null; ended_at: string | null; location: string | null; meeting_link: string | null; description: string | null; recurrence_series_id: string | null; has_recurrence_rules: boolean; is_all_day: boolean; attendance_json?: string | null }
+export type IncomingCalendarEvent = { tracking_id_event: string; tracking_id_calendar: string; legacy_tracking_ids?: string[]; is_cancelled?: boolean; title: string | null; started_at: string | null; ended_at: string | null; location: string | null; meeting_link: string | null; description: string | null; recurrence_series_id: string | null; shared_occurrence_key?: string | null; has_recurrence_rules: boolean; is_all_day: boolean; attendance_json?: string | null }
 export type IncomingEventParticipant = { name?: string | null; email?: string | null; is_organizer?: boolean; is_current_user?: boolean }
 export type IncomingEventParticipants = { tracking_id_event: string; participants: IncomingEventParticipant[] }
 export type MergeHumansRequest = { selected_human_id: string; duplicate_human_id: string }

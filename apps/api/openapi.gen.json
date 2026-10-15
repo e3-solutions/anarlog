@@ -1034,6 +1034,41 @@
         ]
       }
     },
+    "/nango/google-meet/attendance": {
+      "post": {
+        "tags": [
+          "nango"
+        ],
+        "operationId": "google_meet_attendance",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MeetAttendanceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeetAttendanceResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/nango/google-meet/presence": {
       "post": {
         "tags": [
@@ -5373,6 +5408,103 @@
         ]
       }
     },
+    "/v1/shared-meetings": {
+      "get": {
+        "tags": [
+          "cloud-api"
+        ],
+        "operationId": "list_shared_meetings",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SharedMeetingPage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/shared-meetings/{share_id}": {
+      "get": {
+        "tags": [
+          "cloud-api"
+        ],
+        "operationId": "get_shared_meeting",
+        "parameters": [
+          {
+            "name": "share_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeetingExport"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/shared-meetings/{share_id}/transcript": {
+      "get": {
+        "tags": [
+          "cloud-api"
+        ],
+        "operationId": "get_shared_transcript",
+        "parameters": [
+          {
+            "name": "share_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TranscriptPage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/v1/sync-snapshots/{session_id}": {
       "put": {
         "tags": [
@@ -5448,6 +5580,77 @@
             "name": "session_id",
             "in": "path",
             "description": "Anarlog meeting id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/sync-snapshots/{session_id}/workspace": {
+      "put": {
+        "tags": [
+          "cloud-api"
+        ],
+        "operationId": "share_snapshot",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShareSnapshotBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SharedSnapshotReceipt"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "cloud-api"
+        ],
+        "operationId": "unshare_snapshot",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
             "required": true,
             "schema": {
               "type": "string"
@@ -10064,6 +10267,85 @@
           }
         }
       },
+      "MeetAttendanceEvidence": {
+        "type": "object",
+        "required": [
+          "connection_id",
+          "conference_record"
+        ],
+        "properties": {
+          "conference_record": {
+            "type": "string"
+          },
+          "connection_id": {
+            "type": "string"
+          }
+        }
+      },
+      "MeetAttendanceRequest": {
+        "type": "object",
+        "required": [
+          "connection_id",
+          "conference_record"
+        ],
+        "properties": {
+          "conference_record": {
+            "type": "string"
+          },
+          "connection_id": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MeetAttendanceResponse": {
+        "type": "object",
+        "required": [
+          "account_email",
+          "conference_start_time"
+        ],
+        "properties": {
+          "account_email": {
+            "type": "string"
+          },
+          "conference_end_time": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "conference_start_time": {
+            "type": "string"
+          },
+          "sessions": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/MeetParticipantSession"
+            },
+            "description": "None means the connected user's sessions could not be verified."
+          }
+        }
+      },
+      "MeetParticipantSession": {
+        "type": "object",
+        "required": [
+          "start_time"
+        ],
+        "properties": {
+          "end_time": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "start_time": {
+            "type": "string"
+          }
+        }
+      },
       "MeetPresenceRequest": {
         "type": "object",
         "required": [
@@ -10090,6 +10372,12 @@
         "properties": {
           "account_email": {
             "type": "string"
+          },
+          "conference_record": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "conference_start_time": {
             "type": [
@@ -10260,6 +10548,16 @@
               "transcripts"
             ],
             "properties": {
+              "calendar_event_key": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Google Calendar iCalUID plus original start for recurring instances;\nused to group workspace shares by calendar occurrence."
+              },
+              "shared_transcript_choice": {
+                "description": "Private candidate signals used to choose one workspace transcript."
+              },
               "speaker_context": {
                 "description": "Recorded microphone/call context intervals (`sessions.metadata_json`\n`speaker_context`) used to label speakers the same way the desktop\ntranscript view does."
               },
@@ -11983,6 +12281,28 @@
           }
         }
       },
+      "ShareSnapshotBody": {
+        "type": "object",
+        "required": [
+          "workspace_id"
+        ],
+        "properties": {
+          "meet_attendance": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MeetAttendanceEvidence"
+              }
+            ]
+          },
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "SharedAttachmentDownload": {
         "type": "object",
         "required": [
@@ -12078,6 +12398,53 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "SharedMeetingListItem": {
+        "type": "object",
+        "required": [
+          "share_id",
+          "owner_user_id",
+          "workspace_id",
+          "meeting"
+        ],
+        "properties": {
+          "calendar_event_key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "meeting": {
+            "$ref": "#/components/schemas/MeetingListItem"
+          },
+          "owner_user_id": {
+            "type": "string"
+          },
+          "share_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          }
+        }
+      },
+      "SharedMeetingPage": {
+        "type": "object",
+        "required": [
+          "meetings",
+          "pagination"
+        ],
+        "properties": {
+          "meetings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SharedMeetingListItem"
+            }
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/Pagination"
           }
         }
       },
@@ -12297,6 +12664,17 @@
             "type": "string"
           },
           "title": {
+            "type": "string"
+          }
+        }
+      },
+      "SharedSnapshotReceipt": {
+        "type": "object",
+        "required": [
+          "share_id"
+        ],
+        "properties": {
+          "share_id": {
             "type": "string"
           }
         }

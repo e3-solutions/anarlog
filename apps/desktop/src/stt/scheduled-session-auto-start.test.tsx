@@ -11,7 +11,8 @@ const mocks = vi.hoisted(() => ({
   canStart: true,
   liveStatus: "inactive",
   readDueScheduledSessionMeeting: vi.fn(),
-  hasJoinedScheduledMeet: vi.fn(),
+  getJoinedScheduledMeet: vi.fn(),
+  saveJoinedScheduledMeet: vi.fn(),
   finishScheduledAutoStart: vi.fn(),
   inFlight: false,
   connectionReady: true,
@@ -64,7 +65,11 @@ vi.mock("~/auth", () => ({
 
 vi.mock("~/stt/scheduled-meet-presence", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./scheduled-meet-presence")>()),
-  hasJoinedScheduledMeet: mocks.hasJoinedScheduledMeet,
+  getJoinedScheduledMeet: mocks.getJoinedScheduledMeet,
+}));
+
+vi.mock("~/stt/scheduled-meet-evidence", () => ({
+  saveJoinedScheduledMeet: mocks.saveJoinedScheduledMeet,
 }));
 
 vi.mock("~/stt/contexts", () => ({
@@ -102,7 +107,11 @@ beforeEach(() => {
   mocks.readDueScheduledSessionMeeting.mockReset().mockResolvedValue({
     id: "event-1",
   });
-  mocks.hasJoinedScheduledMeet.mockReset().mockResolvedValue(true);
+  mocks.getJoinedScheduledMeet.mockReset().mockResolvedValue({
+    connectionId: "meet-1",
+    conferenceRecord: "conferenceRecords/record-1",
+  });
+  mocks.saveJoinedScheduledMeet.mockReset().mockResolvedValue(undefined);
   mocks.inFlight = false;
   mocks.session = {
     id: "session-1",
@@ -142,15 +151,63 @@ test("does not start scheduled Meet capture after presence is lost", async () =>
     id: "event-1",
     meeting_link: "https://meet.google.com/abc-defg-hij",
   });
-  mocks.hasJoinedScheduledMeet.mockResolvedValue(false);
+  mocks.getJoinedScheduledMeet.mockResolvedValue(null);
 
   render(<ScheduledSessionAutoStart sessionId="session-1" />);
 
   await vi.waitFor(() =>
     expect(mocks.updateSessionTabState).toHaveBeenCalled(),
   );
-  expect(mocks.hasJoinedScheduledMeet).toHaveBeenCalledTimes(1);
+  expect(mocks.getJoinedScheduledMeet).toHaveBeenCalledTimes(1);
   expect(mocks.startListening).not.toHaveBeenCalled();
+});
+
+test("saves the verified conference before starting Meet recording", async () => {
+  mocks.readDueScheduledSessionMeeting.mockResolvedValue({
+    id: "event-1",
+    meeting_link: "https://meet.google.com/abc-defg-hij",
+  });
+  let releaseSave!: () => void;
+  mocks.saveJoinedScheduledMeet.mockImplementation(
+    () =>
+      new Promise<void>((resolve) => {
+        releaseSave = resolve;
+      }),
+  );
+  render(<ScheduledSessionAutoStart sessionId="session-1" />);
+  await vi.waitFor(() =>
+    expect(mocks.saveJoinedScheduledMeet).toHaveBeenCalledTimes(1),
+  );
+  expect(mocks.startListening).not.toHaveBeenCalled();
+  expect(mocks.saveJoinedScheduledMeet).toHaveBeenCalledWith("session-1", {
+    connectionId: "meet-1",
+    conferenceRecord: "conferenceRecords/record-1",
+  });
+  releaseSave();
+  await vi.waitFor(() => expect(mocks.startListening).toHaveBeenCalledTimes(1));
+});
+
+test("keeps recording when saving Meet evidence fails", async () => {
+  mocks.readDueScheduledSessionMeeting.mockResolvedValue({
+    id: "event-1",
+    meeting_link: "https://meet.google.com/abc-defg-hij",
+  });
+  mocks.saveJoinedScheduledMeet.mockRejectedValue(
+    new Error("database unavailable"),
+  );
+  const log = vi.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    render(<ScheduledSessionAutoStart sessionId="session-1" />);
+    await vi.waitFor(() =>
+      expect(mocks.startListening).toHaveBeenCalledTimes(1),
+    );
+    expect(log).toHaveBeenCalledWith(
+      "[listener] could not save Meet evidence",
+      expect.any(Error),
+    );
+  } finally {
+    log.mockRestore();
+  }
 });
 
 test("starts manual recording without calendar eligibility", async () => {

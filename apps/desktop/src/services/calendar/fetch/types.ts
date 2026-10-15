@@ -16,6 +16,7 @@ export type IncomingEvent = {
   meeting_link?: string;
   description?: string;
   recurrence_series_id?: string;
+  shared_occurrence_key?: string;
   has_recurrence_rules: boolean;
   is_all_day: boolean;
   attendance?: EventAttendanceSnapshotV1 | null;

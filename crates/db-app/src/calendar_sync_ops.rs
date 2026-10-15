@@ -549,6 +549,7 @@ pub async fn update_synced_event(
     id: &str,
     tracking_id_event: &str,
     calendar_id: &str,
+    shared_occurrence_key: &str,
     title: &str,
     started_at: &str,
     ended_at: &str,
@@ -568,6 +569,7 @@ pub async fn update_synced_event(
         SET
           tracking_id_event = ?,
           calendar_id = ?,
+          shared_occurrence_key = ?,
           title = ?,
           started_at = ?,
           ended_at = ?,
@@ -586,6 +588,7 @@ pub async fn update_synced_event(
     )
     .bind(tracking_id_event)
     .bind(calendar_id)
+    .bind(shared_occurrence_key)
     .bind(title)
     .bind(started_at)
     .bind(ended_at)
@@ -611,6 +614,7 @@ pub async fn insert_synced_event(
     id: &str,
     tracking_id_event: &str,
     calendar_id: &str,
+    shared_occurrence_key: &str,
     title: &str,
     started_at: &str,
     ended_at: &str,
@@ -630,6 +634,7 @@ pub async fn insert_synced_event(
           id,
           tracking_id_event,
           calendar_id,
+          shared_occurrence_key,
           title,
           started_at,
           ended_at,
@@ -646,11 +651,12 @@ pub async fn insert_synced_event(
           updated_at,
           deleted_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
     )
     .bind(id)
     .bind(tracking_id_event)
     .bind(calendar_id)
+    .bind(shared_occurrence_key)
     .bind(title)
     .bind(started_at)
     .bind(ended_at)

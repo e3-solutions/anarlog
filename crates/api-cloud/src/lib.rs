@@ -43,6 +43,7 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
             routes::CreateApiKeyBody,
             routes::SnapshotReceipt,
             routes::ShareSnapshotBody,
+            routes::MeetAttendanceEvidence,
             routes::SharedSnapshotReceipt,
             routes::SharedMeetingListItem,
             routes::SharedMeetingPage,

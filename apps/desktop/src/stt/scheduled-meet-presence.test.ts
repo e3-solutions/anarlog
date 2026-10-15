@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import {
+  getJoinedScheduledMeet,
   googleMeetCode,
   hasJoinedScheduledMeet,
   isE3CalendarId,
@@ -83,6 +84,7 @@ test("requires active presence for the matching Calendar and Meet account", asyn
     ok: true,
     json: async () => ({
       present: true,
+      conference_record: "conferenceRecords/conference-1",
       account_email: "PRIYAL@E3GROUP.AI",
       conference_start_time: new Date(start - 2 * 60_000).toISOString(),
       meeting_uri: row.meeting_link,
@@ -91,6 +93,10 @@ test("requires active presence for the matching Calendar and Meet account", asyn
   vi.stubGlobal("fetch", fetch);
 
   await expect(hasJoinedScheduledMeet(row, headers)).resolves.toBe(true);
+  await expect(getJoinedScheduledMeet(row, headers)).resolves.toEqual({
+    connectionId: "meet-1",
+    conferenceRecord: "conferenceRecords/conference-1",
+  });
   expect(fetch).toHaveBeenCalledWith(
     expect.stringContaining("/nango/google-meet/presence"),
     expect.objectContaining({
@@ -107,6 +113,7 @@ test("does not accept another account or an earlier conference", async () => {
     ok: true,
     json: async () => ({
       present: true,
+      conference_record: "conferenceRecords/conference-1",
       account_email: "other@e3group.ai",
       conference_start_time: new Date(start - 2 * 60_000).toISOString(),
       meeting_uri: row.meeting_link,
@@ -119,6 +126,7 @@ test("does not accept another account or an earlier conference", async () => {
     ok: true,
     json: async () => ({
       present: true,
+      conference_record: "conferenceRecords/conference-1",
       account_email: "priyal@e3group.ai",
       conference_start_time: new Date(start - 30 * 60_000).toISOString(),
       meeting_uri: row.meeting_link,

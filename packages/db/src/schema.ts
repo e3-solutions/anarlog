@@ -82,6 +82,7 @@ export const events = sqliteTable(
     id: text("id").primaryKey().notNull(),
     trackingIdEvent: text("tracking_id_event").notNull().default(""),
     calendarId: text("calendar_id").notNull().default(""),
+    sharedOccurrenceKey: text("shared_occurrence_key").notNull().default(""),
     title: text("title").notNull().default(""),
     startedAt: text("started_at").notNull().default(""),
     endedAt: text("ended_at").notNull().default(""),

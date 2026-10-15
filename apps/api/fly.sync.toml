@@ -13,6 +13,7 @@ processes = ["app"]
 [env]
 ANARLOG_SERVICE = "sync"
 ANARLOG_ATTACHMENT_BACKUP_GC_ENABLED = "false"
+ANARLOG_MEET_ATTENDANCE_ORIGIN = "https://anarlog-core.fly.dev"
 PORT = "3001"
 
 [http_service]
