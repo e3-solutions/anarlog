@@ -18,8 +18,7 @@ pub const FATHOM_OAUTH_SCOPES: &str = "public_api";
 pub const WEBEX_OAUTH_SCOPES: &str =
     "spark:people_read meeting:schedules_read meeting:transcripts_read";
 
-pub const GOOGLE_MEET_OAUTH_SCOPES: &str =
-    "https://www.googleapis.com/auth/meetings.space.readonly";
+pub const GOOGLE_MEET_OAUTH_SCOPES: &str = "https://www.googleapis.com/auth/meetings.space.readonly https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email";
 
 pub const MICROSOFT_TEAMS_OAUTH_SCOPES: &str =
     "offline_access User.Read Calendars.Read OnlineMeetings.Read OnlineMeetingTranscript.Read.All";
