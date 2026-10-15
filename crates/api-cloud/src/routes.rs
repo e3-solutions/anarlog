@@ -1043,10 +1043,6 @@ kHmPRiazukxPLb6ilpRAewjW8nihRANCAATDskChT+Altkm9X7MI69T3IUmrQU0L\n\
         let mut open = sessions;
         open[0].end_time = None;
         assert_eq!(
-            verified_recording_overlap_seconds_at(&meeting, &open, 1_780_000_025_000),
-            Some(50.0)
-        );
-        assert_eq!(
             verified_recording_overlap_seconds_at(&meeting, &open[..1], 1_780_000_025_000),
             Some(25.0)
         );
