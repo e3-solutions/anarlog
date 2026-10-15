@@ -89,11 +89,24 @@ export async function hasJoinedScheduledMeet(
   headers: Record<string, string> | null,
   resolvedConnection?: { connectionId: string; email: string },
 ): Promise<boolean> {
+  return (await getJoinedScheduledMeet(row, headers, resolvedConnection)) !== null;
+}
+
+export type JoinedScheduledMeet = {
+  connectionId: string;
+  conferenceRecord: string;
+};
+
+export async function getJoinedScheduledMeet(
+  row: ScheduledMeetingRow,
+  headers: Record<string, string> | null,
+  resolvedConnection?: { connectionId: string; email: string },
+): Promise<JoinedScheduledMeet | null> {
   const meetingCode = googleMeetCode(row.meeting_link);
-  if (!meetingCode || !headers) return false;
+  if (!meetingCode || !headers) return null;
   const connection =
     resolvedConnection ?? (await resolveScheduledMeetConnection(row, headers));
-  if (!connection) return false;
+  if (!connection) return null;
 
   const response = await fetch(
     `${env.VITE_API_URL.replace(/\/$/, "")}/nango/google-meet/presence`,
@@ -111,7 +124,7 @@ export async function hasJoinedScheduledMeet(
     throw new Error(`Meet presence check failed: ${response.status}`);
 
   const result: unknown = await response.json();
-  if (!result || typeof result !== "object") return false;
+  if (!result || typeof result !== "object") return null;
   const presence = result as Record<string, unknown>;
   if (
     presence.present !== true ||
@@ -119,16 +132,18 @@ export async function hasJoinedScheduledMeet(
     presence.account_email.trim().toLowerCase() !== connection.email ||
     typeof presence.conference_start_time !== "string" ||
     typeof presence.meeting_uri !== "string" ||
+    typeof presence.conference_record !== "string" ||
+    !/^conferenceRecords\/[A-Za-z0-9_-]+$/.test(presence.conference_record) ||
     googleMeetCode(presence.meeting_uri) !== meetingCode
   ) {
-    return false;
+    return null;
   }
 
   const conferenceStart = Date.parse(presence.conference_start_time);
   const eventStart = parseEventInstant(row.started_at)?.getTime();
   const eventEnd = parseEventInstant(row.ended_at)?.getTime();
   const now = Date.now();
-  return (
+  const valid = (
     Number.isFinite(conferenceStart) &&
     eventStart !== undefined &&
     eventEnd !== undefined &&
@@ -136,4 +151,10 @@ export async function hasJoinedScheduledMeet(
     conferenceStart <= now + 30_000 &&
     conferenceStart < eventEnd
   );
+  return valid
+    ? {
+        connectionId: connection.connectionId,
+        conferenceRecord: presence.conference_record,
+      }
+    : null;
 }

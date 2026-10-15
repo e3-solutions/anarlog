@@ -609,6 +609,11 @@ pub const APP_MIGRATION_STEPS: &[anlg_db_migrate::MigrationStep] = &[
         scope: anlg_db_migrate::MigrationScope::Plain,
         sql: include_str!("../migrations/20261011120100_local_meeting_purges.sql"),
     },
+    anlg_db_migrate::MigrationStep {
+        id: "20261015130000_shared_occurrence_key",
+        scope: anlg_db_migrate::MigrationScope::Plain,
+        sql: include_str!("../migrations/20261015130000_shared_occurrence_key.sql"),
+    },
 ];
 
 pub fn schema() -> anlg_db_migrate::DbSchema {

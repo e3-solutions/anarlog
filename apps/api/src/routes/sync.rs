@@ -170,6 +170,9 @@ pub(crate) fn router(env: &RuntimeConfig) -> Router {
             &env.supabase.supabase_url,
             &env.supabase.supabase_service_role_key,
         )
+        .and_then(|config| config.with_meet_attendance_origin(
+            env.anarlog_meet_attendance_origin.as_deref(),
+        ))
         .unwrap_or_else(|error| panic!("Failed to load environment: {error}")),
     );
 

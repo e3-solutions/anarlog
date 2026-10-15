@@ -9,6 +9,7 @@ anlg-api-auth = { workspace = true }
 anlg-mcp = { workspace = true }
 
 axum = { workspace = true }
+chrono = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
 rmcp = { workspace = true, features = ["server"] }
 serde = { workspace = true, features = ["derive"] }

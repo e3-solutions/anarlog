@@ -16,6 +16,7 @@ use crate::routes::{
         crate::routes::google_drive::prepare_export,
         crate::routes::google_drive::export_markdown,
         crate::routes::google_meet_presence::presence,
+        crate::routes::google_meet_presence::attendance,
         crate::routes::disconnect::delete_connection,
         crate::routes::status::list_connections,
         crate::routes::webhook::nango_webhook,
@@ -35,6 +36,9 @@ use crate::routes::{
             WhoAmIResponse,
             crate::routes::google_meet_presence::MeetPresenceRequest,
             crate::routes::google_meet_presence::MeetPresenceResponse,
+            crate::routes::google_meet_presence::MeetAttendanceRequest,
+            crate::routes::google_meet_presence::MeetAttendanceResponse,
+            crate::routes::google_meet_presence::MeetParticipantSession,
         )
     ),
     tags(

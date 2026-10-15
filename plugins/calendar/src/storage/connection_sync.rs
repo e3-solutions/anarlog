@@ -38,6 +38,8 @@ pub struct IncomingCalendarEvent {
     pub meeting_link: Option<String>,
     pub description: Option<String>,
     pub recurrence_series_id: Option<String>,
+    #[serde(default)]
+    pub shared_occurrence_key: Option<String>,
     pub has_recurrence_rules: bool,
     pub is_all_day: bool,
     #[serde(default)]
@@ -255,6 +257,7 @@ async fn run(
             &event.id,
             &event.tracking_id_event,
             &event.calendar_id,
+            event.shared_occurrence_key.as_deref().unwrap_or(""),
             event.title.as_deref().unwrap_or(""),
             event.started_at.as_deref().unwrap_or(""),
             event.ended_at.as_deref().unwrap_or(""),
@@ -287,6 +290,7 @@ async fn run(
             &event_id,
             &event.tracking_id_event,
             calendar_id,
+            event.shared_occurrence_key.as_deref().unwrap_or(""),
             event.title.as_deref().unwrap_or(""),
             event.started_at.as_deref().unwrap_or(""),
             event.ended_at.as_deref().unwrap_or(""),
@@ -533,6 +537,7 @@ struct EventToUpdate {
     meeting_link: Option<String>,
     description: Option<String>,
     recurrence_series_id: Option<String>,
+    shared_occurrence_key: Option<String>,
     has_recurrence_rules: bool,
     is_all_day: bool,
     attendance_json: Option<String>,
@@ -551,6 +556,7 @@ struct EventToAdd {
     meeting_link: Option<String>,
     description: Option<String>,
     recurrence_series_id: Option<String>,
+    shared_occurrence_key: Option<String>,
     has_recurrence_rules: bool,
     is_all_day: bool,
     attendance_json: Option<String>,
@@ -598,6 +604,7 @@ fn sync_events(
                 id: store_event.id.clone(),
                 tracking_id_event: matching.tracking_id_event.clone(),
                 calendar_id: store_event.calendar_id.clone(),
+                shared_occurrence_key: matching.shared_occurrence_key.clone(),
                 title: matching
                     .title
                     .clone()
@@ -659,6 +666,7 @@ fn sync_events(
             out.to_add.push(EventToAdd {
                 tracking_id_event: incoming_event.tracking_id_event.clone(),
                 tracking_id_calendar: incoming_event.tracking_id_calendar.clone(),
+                shared_occurrence_key: incoming_event.shared_occurrence_key.clone(),
                 title: incoming_event.title.clone(),
                 started_at: incoming_event.started_at.clone(),
                 ended_at: incoming_event.ended_at.clone(),

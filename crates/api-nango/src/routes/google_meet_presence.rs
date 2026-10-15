@@ -16,6 +16,7 @@ use crate::{
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 const PRESENCE_DEADLINE: Duration = Duration::from_secs(10);
+const ATTENDANCE_DEADLINE: Duration = Duration::from_secs(20);
 const MAX_PARTICIPANT_PAGES: usize = 20;
 
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -31,6 +32,31 @@ pub struct MeetPresenceResponse {
     pub account_email: String,
     pub conference_start_time: Option<String>,
     pub meeting_uri: String,
+    pub conference_record: Option<String>,
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MeetAttendanceRequest {
+    pub connection_id: String,
+    pub conference_record: String,
+}
+
+#[derive(Serialize, Deserialize, utoipa::ToSchema)]
+pub struct MeetParticipantSession {
+    #[serde(alias = "startTime")]
+    pub start_time: String,
+    #[serde(alias = "endTime")]
+    pub end_time: Option<String>,
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct MeetAttendanceResponse {
+    pub account_email: String,
+    pub conference_start_time: String,
+    pub conference_end_time: Option<String>,
+    /// None means the connected user's sessions could not be verified.
+    pub sessions: Option<Vec<MeetParticipantSession>>,
 }
 
 pub enum PresenceError {
@@ -187,7 +213,16 @@ struct ParticipantsPage {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Participant {
+    name: Option<String>,
     signedin_user: Option<SignedinUser>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ParticipantSessionsPage {
+    #[serde(default)]
+    participant_sessions: Vec<MeetParticipantSession>,
+    next_page_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -217,10 +252,7 @@ async fn get<T: DeserializeOwned>(proxy: &OwnedNangoProxy, path: &str) -> Result
     response.json().await.map_err(|_| provider_error())
 }
 
-async fn check_presence(
-    proxy: OwnedNangoProxy,
-    meeting_code: &str,
-) -> Result<MeetPresenceResponse, PresenceError> {
+async fn connected_identity(proxy: &OwnedNangoProxy) -> Result<(String, String), PresenceError> {
     let person: Person = get(
         &proxy
             .clone()
@@ -235,6 +267,14 @@ async fn check_presence(
     )
     .await?;
     let account_email = userinfo.account_email()?;
+    Ok((self_id, account_email))
+}
+
+async fn check_presence(
+    proxy: OwnedNangoProxy,
+    meeting_code: &str,
+) -> Result<MeetPresenceResponse, PresenceError> {
+    let (self_id, account_email) = connected_identity(&proxy).await?;
 
     let meet = proxy.base_url_override("https://meet.googleapis.com");
     let space: Space = get(&meet, &format!("/v2/spaces/{meeting_code}")).await?;
@@ -250,6 +290,7 @@ async fn check_presence(
         account_email,
         conference_start_time: None,
         meeting_uri: space.meeting_uri,
+        conference_record: None,
     };
     let Some(active) = space.active_conference else {
         return Ok(result);
@@ -287,6 +328,7 @@ async fn check_presence(
                 .is_some_and(|user| user.user == self_name)
         }) {
             result.present = true;
+            result.conference_record = Some(active.conference_record);
             return Ok(result);
         }
         match page.next_page_token {
@@ -303,12 +345,147 @@ async fn check_presence(
 }
 
 fn valid_resource(value: &str, prefix: &str) -> bool {
-    value.strip_prefix(prefix).is_some_and(|id| {
+    value.len() <= 512 && value.strip_prefix(prefix).is_some_and(|id| {
         !id.is_empty()
             && id
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
     })
+}
+
+async fn read_attendance(
+    proxy: OwnedNangoProxy,
+    conference_record: &str,
+) -> Result<MeetAttendanceResponse, PresenceError> {
+    let (self_id, account_email) = connected_identity(&proxy).await?;
+    let meet = proxy.base_url_override("https://meet.googleapis.com");
+    let record: ConferenceRecord = get(&meet, &format!("/v2/{conference_record}")).await?;
+    if record.name != conference_record || record.start_time.is_empty() {
+        return Err(provider_error());
+    }
+    let self_name = format!("users/{self_id}");
+    let mut page_token: Option<String> = None;
+    let mut seen_tokens = HashSet::new();
+    let mut participant_name = None;
+    let mut participants_complete = false;
+    for _ in 0..MAX_PARTICIPANT_PAGES {
+        let mut path = format!("/v2/{conference_record}/participants?pageSize=250");
+        if let Some(token) = &page_token {
+            path.push_str("&pageToken=");
+            path.push_str(&urlencoding::encode(token));
+        }
+        let page: ParticipantsPage = get(&meet, &path).await?;
+        for participant in page.participants {
+            if participant
+                .signedin_user
+                .as_ref()
+                .is_some_and(|user| user.user == self_name)
+            {
+                let name = participant.name.ok_or_else(provider_error)?;
+                if !valid_resource(&name, &format!("{conference_record}/participants/")) {
+                    return Err(provider_error());
+                }
+                participant_name = Some(name);
+                break;
+            }
+        }
+        if participant_name.is_some() {
+            break;
+        }
+        match page.next_page_token {
+            Some(token) if !token.is_empty() => {
+                if !seen_tokens.insert(token.clone()) {
+                    return Err(provider_error());
+                }
+                page_token = Some(token);
+            }
+            _ => {
+                participants_complete = true;
+                break;
+            }
+        }
+    }
+    let Some(participant_name) = participant_name else {
+        if !participants_complete {
+            return Err(provider_error());
+        }
+        return Ok(MeetAttendanceResponse {
+            account_email,
+            conference_start_time: record.start_time,
+            conference_end_time: record.end_time,
+            sessions: None,
+        });
+    };
+    let mut sessions = Vec::new();
+    let mut page_token: Option<String> = None;
+    let mut seen_tokens = HashSet::new();
+    for _ in 0..MAX_PARTICIPANT_PAGES {
+        let mut path = format!("/v2/{participant_name}/participantSessions?pageSize=250");
+        if let Some(token) = &page_token {
+            path.push_str("&pageToken=");
+            path.push_str(&urlencoding::encode(token));
+        }
+        let page: ParticipantSessionsPage = get(&meet, &path).await?;
+        for session in page.participant_sessions {
+            let start = chrono::DateTime::parse_from_rfc3339(&session.start_time)
+                .map_err(|_| provider_error())?;
+            if let Some(end_time) = &session.end_time {
+                let end = chrono::DateTime::parse_from_rfc3339(end_time)
+                    .map_err(|_| provider_error())?;
+                if end < start {
+                    return Err(provider_error());
+                }
+            }
+            sessions.push(session);
+        }
+        match page.next_page_token {
+            Some(token) if !token.is_empty() => {
+                if !seen_tokens.insert(token.clone()) {
+                    return Err(provider_error());
+                }
+                page_token = Some(token);
+            }
+            _ => {
+                return Ok(MeetAttendanceResponse {
+                    account_email,
+                    conference_start_time: record.start_time,
+                    conference_end_time: record.end_time,
+                    sessions: (!sessions.is_empty()).then_some(sessions),
+                });
+            }
+        }
+    }
+    Err(provider_error())
+}
+
+#[utoipa::path(post, path = "/google-meet/attendance", operation_id = "google_meet_attendance", request_body = MeetAttendanceRequest, responses((status = 200, body = MeetAttendanceResponse)), tag = "nango")]
+pub async fn attendance(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    Json(request): Json<MeetAttendanceRequest>,
+) -> Result<Json<MeetAttendanceResponse>, PresenceError> {
+    validate_connection_id(&request.connection_id)?;
+    if !valid_resource(&request.conference_record, "conferenceRecords/") {
+        return Err(invalid("Invalid Google Meet conference record."));
+    }
+    let proxy = NangoConnectionState::from_config(&state.config)
+        .build_http_client(
+            &auth.token,
+            &auth.claims.sub,
+            GoogleMeet::ID,
+            &request.connection_id,
+        )
+        .await?
+        .into_proxy()
+        .retries(0);
+    Ok(Json(
+        tokio::time::timeout(
+            ATTENDANCE_DEADLINE,
+            read_attendance(proxy, &request.conference_record),
+        )
+        .await
+        .map_err(|_| provider_error())??,
+    ))
 }
 
 #[utoipa::path(post, path = "/google-meet/presence", operation_id = "google_meet_presence", request_body = MeetPresenceRequest, responses((status = 200, body = MeetPresenceResponse)), tag = "nango")]
@@ -389,6 +566,32 @@ mod tests {
             .await
             .unwrap();
         (status, serde_json::from_slice(&body).unwrap())
+    }
+
+    async fn post_attendance(app: Router, record: &str) -> (StatusCode, Value) {
+        let response = app
+            .oneshot(
+                Request::post("/google-meet/attendance")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({"connection_id":"connection","conference_record":record})
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), 100_000)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&body).unwrap())
+    }
+
+    async fn mock_identity(server: &MockServer) {
+        mock_person(server, person()).await;
+        mock_userinfo(server, json!({"email":"E3@example.com","verified_email":true})).await;
+        mock_record(server).await;
     }
 
     async fn mock_person(server: &MockServer, body: Value) {
@@ -634,5 +837,156 @@ mod tests {
         let (status, value) = post(app, "abc-defg-hij").await;
         assert_eq!(status, StatusCode::BAD_GATEWAY);
         assert!(value.get("present").is_none());
+    }
+
+    #[tokio::test]
+    async fn attendance_uses_only_connected_users_participant_and_all_session_pages() {
+        let (server, app) = setup(true).await;
+        mock_identity(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/proxy/v2/conferenceRecords/record1/participants"))
+            .and(query_param("pageToken", "next"))
+            .with_priority(1)
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "participants":[{"name":"conferenceRecords/record1/participants/self",
+                    "signedinUser":{"user":"users/12345"}}]
+            })))
+            .mount(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/proxy/v2/conferenceRecords/record1/participants"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "participants":[{"name":"conferenceRecords/record1/participants/other",
+                    "signedinUser":{"user":"users/other"}}],
+                "nextPageToken":"next"
+            })))
+            .mount(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/proxy/v2/conferenceRecords/record1/participants/self/participantSessions"))
+            .and(query_param("pageToken", "more"))
+            .with_priority(1)
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "participantSessions":[{"startTime":"2026-10-15T10:20:00Z",
+                    "endTime":"2026-10-15T10:50:00Z"}]
+            })))
+            .mount(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/proxy/v2/conferenceRecords/record1/participants/self/participantSessions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "participantSessions":[{"startTime":"2026-10-15T10:00:00Z",
+                    "endTime":"2026-10-15T10:10:00Z"}],
+                "nextPageToken":"more"
+            })))
+            .mount(&server).await;
+        let (status, value) = post_attendance(app, "conferenceRecords/record1").await;
+        assert_eq!(status, StatusCode::OK, "{value}");
+        assert_eq!(value["account_email"], "e3@example.com");
+        assert_eq!(value["sessions"].as_array().unwrap().len(), 2);
+        assert_eq!(value["sessions"][0]["start_time"], "2026-10-15T10:00:00Z");
+        assert_eq!(value["sessions"][1]["end_time"], "2026-10-15T10:50:00Z");
+        let requests = server.received_requests().await.unwrap();
+        assert!(requests.iter().all(|request| !request.url.path().contains("/other/participantSessions")));
+    }
+
+    #[tokio::test]
+    async fn attendance_returns_unknown_when_connected_user_is_absent() {
+        let (server, app) = setup(true).await;
+        mock_identity(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/proxy/v2/conferenceRecords/record1/participants"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "participants":[{"name":"conferenceRecords/record1/participants/other",
+                    "signedinUser":{"user":"users/other"}}]
+            })))
+            .mount(&server).await;
+        let (status, value) = post_attendance(app, "conferenceRecords/record1").await;
+        assert_eq!(status, StatusCode::OK, "{value}");
+        assert!(value["sessions"].is_null());
+    }
+
+    #[tokio::test]
+    async fn attendance_does_not_return_partial_sessions_after_page_error() {
+        let (server, app) = setup(true).await;
+        mock_identity(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/proxy/v2/conferenceRecords/record1/participants"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "participants":[{"name":"conferenceRecords/record1/participants/self",
+                    "signedinUser":{"user":"users/12345"}}]
+            })))
+            .mount(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/proxy/v2/conferenceRecords/record1/participants/self/participantSessions"))
+            .and(query_param("pageToken", "more"))
+            .with_priority(1)
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/proxy/v2/conferenceRecords/record1/participants/self/participantSessions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "participantSessions":[{"startTime":"2026-10-15T10:00:00Z"}],
+                "nextPageToken":"more"
+            })))
+            .mount(&server).await;
+        let (status, value) = post_attendance(app, "conferenceRecords/record1").await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "{value}");
+        assert!(value.get("sessions").is_none());
+    }
+
+    #[tokio::test]
+    async fn attendance_rejects_invalid_session_time() {
+        let (server, app) = setup(true).await;
+        mock_identity(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/proxy/v2/conferenceRecords/record1/participants"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "participants":[{"name":"conferenceRecords/record1/participants/self",
+                    "signedinUser":{"user":"users/12345"}}]
+            })))
+            .mount(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/proxy/v2/conferenceRecords/record1/participants/self/participantSessions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "participantSessions":[{"startTime":"2026-10-15T10:20:00Z",
+                    "endTime":"2026-10-15T10:10:00Z"}]
+            })))
+            .mount(&server).await;
+        let (status, value) = post_attendance(app, "conferenceRecords/record1").await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "{value}");
+        assert!(value.get("sessions").is_none());
+    }
+
+    #[tokio::test]
+    async fn attendance_preserves_open_session_without_inventing_leave_time() {
+        let (server, app) = setup(true).await;
+        mock_identity(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/proxy/v2/conferenceRecords/record1/participants"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "participants":[{"name":"conferenceRecords/record1/participants/self",
+                    "signedinUser":{"user":"users/12345"}}]
+            })))
+            .mount(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/proxy/v2/conferenceRecords/record1/participants/self/participantSessions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "participantSessions":[{"startTime":"2026-10-15T10:20:00Z"}]
+            })))
+            .mount(&server).await;
+        let (status, value) = post_attendance(app, "conferenceRecords/record1").await;
+        assert_eq!(status, StatusCode::OK, "{value}");
+        assert!(value["sessions"][0]["end_time"].is_null());
+    }
+
+    #[tokio::test]
+    async fn attendance_rejects_unowned_connection_and_bad_record() {
+        let (server, app) = setup(false).await;
+        let (status, _) = post_attendance(app, "conferenceRecords/record1").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+
+        let (server, app) = setup(true).await;
+        let (status, _) = post_attendance(app, "conferenceRecords/../other").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(server.received_requests().await.unwrap().is_empty());
     }
 }

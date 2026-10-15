@@ -62,6 +62,8 @@ pub struct Env {
     pub anarlog_attachment_backup_gc_enabled: bool,
     #[serde(default, deserialize_with = "anlg_api_env::filter_empty")]
     pub sqlitecloud_cloudsync_management_api_key: Option<String>,
+    #[serde(default, deserialize_with = "anlg_api_env::filter_empty")]
+    pub anarlog_meet_attendance_origin: Option<String>,
 
     #[serde(flatten)]
     pub observability: crate::observability::Env,

@@ -63,6 +63,13 @@ pub struct SnapshotReceipt {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct ShareSnapshotBody {
     pub workspace_id: Uuid,
+    pub meet_attendance: Option<MeetAttendanceEvidence>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct MeetAttendanceEvidence {
+    pub connection_id: String,
+    pub conference_record: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -353,15 +360,77 @@ pub(crate) async fn share_snapshot(
     Path(session_id): Path<String>,
     Json(body): Json<ShareSnapshotBody>,
 ) -> Result<Json<SharedSnapshotReceipt>, CloudApiError> {
+    let verified_overlap_seconds = if let Some(evidence) = &body.meet_attendance {
+        match state.meet_attendance(
+            &auth.token,
+            &evidence.connection_id,
+            &evidence.conference_record,
+        ).await {
+            Some(sessions) => state.read_snapshot(&auth.claims.sub, &session_id)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|snapshot| verified_recording_overlap_seconds(&snapshot, &sessions)),
+            None => None,
+        }
+    } else {
+        None
+    };
     let share_id = state
         .share_snapshot(
             &auth.claims.sub,
             &session_id,
             &body.workspace_id.to_string(),
+            verified_overlap_seconds,
         )
         .await
         .map_err(map_store_error)?;
     Ok(Json(SharedSnapshotReceipt { share_id }))
+}
+
+fn verified_recording_overlap_seconds(
+    snapshot: &access::MeetingExport,
+    sessions: &[crate::state::MeetAttendanceSession],
+) -> Option<f64> {
+    fn merged(mut intervals: Vec<(i64, i64)>) -> Vec<(i64, i64)> {
+        intervals.sort_unstable();
+        let mut out: Vec<(i64, i64)> = Vec::new();
+        for (start, end) in intervals {
+            if let Some(last) = out.last_mut() && start <= last.1 {
+                last.1 = last.1.max(end);
+            } else {
+                out.push((start, end));
+            }
+        }
+        out
+    }
+    if sessions.is_empty() || snapshot.transcripts.is_empty() { return None; }
+    let mut recording = Vec::new();
+    for transcript in &snapshot.transcripts {
+        let end = transcript.ended_at_ms?;
+        if end <= transcript.started_at_ms { return None; }
+        recording.push((transcript.started_at_ms, end));
+    }
+    let mut attendance = Vec::new();
+    for session in sessions {
+        let end = session.end_time.as_deref()?;
+        let start = chrono::DateTime::parse_from_rfc3339(&session.start_time).ok()?.timestamp_millis();
+        let end = chrono::DateTime::parse_from_rfc3339(end).ok()?.timestamp_millis();
+        if end <= start { return None; }
+        attendance.push((start, end));
+    }
+    let recording = merged(recording);
+    let attendance = merged(attendance);
+    let (mut i, mut j, mut overlap_ms) = (0, 0, 0_i64);
+    while i < recording.len() && j < attendance.len() {
+        overlap_ms = overlap_ms.saturating_add(
+            recording[i].1.min(attendance[j].1)
+                .saturating_sub(recording[i].0.max(attendance[j].0))
+                .max(0),
+        );
+        if recording[i].1 < attendance[j].1 { i += 1; } else { j += 1; }
+    }
+    (overlap_ms > 0).then_some(overlap_ms as f64 / 1000.0)
 }
 
 #[utoipa::path(
@@ -802,7 +871,7 @@ mod tests {
     use tower::ServiceExt;
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
-        matchers::{body_json, method, path},
+        matchers::{body_json, header, method, path},
     };
 
     const TEST_KEY_ID: &str = "cloud-oauth-test";
@@ -895,7 +964,71 @@ kHmPRiazukxPLb6ilpRAewjW8nihRANCAATDskChT+Altkm9X7MI69T3IUmrQU0L\n\
             speakers: Vec::new(),
             speaker_context: None,
             calendar_event_key: None,
+            shared_transcript_choice: None,
         }
+    }
+
+    #[test]
+    fn verified_overlap_unions_rejoins_and_rejects_open_sessions() {
+        let mut meeting = export();
+        meeting.transcripts = vec![access::Transcript {
+            id: "transcript-1".into(),
+            source: "test".into(),
+            provider: "test".into(),
+            model: "test".into(),
+            language: "en".into(),
+            started_at_ms: 1_780_000_000_000,
+            ended_at_ms: Some(1_780_000_060_000),
+            memo: String::new(),
+            text: "meeting".into(),
+            words: Vec::new(),
+            speaker_hints: Vec::new(),
+        }];
+        let time = |offset: i64| chrono::DateTime::<chrono::Utc>::from_timestamp_millis(1_780_000_000_000 + offset)
+            .unwrap().to_rfc3339();
+        let sessions = vec![
+            crate::state::MeetAttendanceSession { start_time: time(0), end_time: Some(time(20_000)) },
+            crate::state::MeetAttendanceSession { start_time: time(10_000), end_time: Some(time(30_000)) },
+            crate::state::MeetAttendanceSession { start_time: time(40_000), end_time: Some(time(70_000)) },
+        ];
+        assert_eq!(verified_recording_overlap_seconds(&meeting, &sessions), Some(50.0));
+        let mut open = sessions;
+        open[0].end_time = None;
+        assert_eq!(verified_recording_overlap_seconds(&meeting, &open), None);
+    }
+
+    #[tokio::test]
+    async fn meet_attendance_calls_trusted_core_with_user_token() {
+        let core = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/nango/google-meet/attendance"))
+            .and(header("authorization", "Bearer caller-token"))
+            .and(body_json(serde_json::json!({
+                "connection_id": "connection-1",
+                "conference_record": "conferenceRecords/record-1"
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "account_email": "person@example.com",
+                "conference_start_time": "2026-10-15T14:00:00Z",
+                "sessions": [{
+                    "start_time": "2026-10-15T14:00:00Z",
+                    "end_time": "2026-10-15T14:30:00Z"
+                }]
+            })))
+            .expect(1)
+            .mount(&core)
+            .await;
+        let config = crate::CloudApiConfig::new(core.uri(), "service-role-key")
+            .unwrap()
+            .with_meet_attendance_origin(Some(&core.uri()))
+            .unwrap();
+        let state = AppState::new(config);
+        let sessions = state.meet_attendance("caller-token", "connection-1", "conferenceRecords/record-1")
+            .await.unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].end_time.as_deref(), Some("2026-10-15T14:30:00Z"));
+        assert!(state.meet_attendance("caller-token", "bad/path", "conferenceRecords/record-1")
+            .await.is_none());
     }
 
     #[test]

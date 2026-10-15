@@ -468,8 +468,8 @@ pub async fn get_cloud_snapshot<R: tauri::Runtime>(
         .await
         .map_err(|error| error.to_string())?;
     let mut snapshot = prepare_cloud_snapshot(export)?;
-    let event: Option<(String, String)> = sqlx::query_as(
-        "SELECT event.tracking_id_event, event.started_at
+    let event: Option<String> = sqlx::query_scalar(
+        "SELECT event.shared_occurrence_key
          FROM sessions AS session
          JOIN events AS event ON event.id = (
            SELECT candidate.id FROM events AS candidate
@@ -499,9 +499,7 @@ pub async fn get_cloud_snapshot<R: tauri::Runtime>(
     .fetch_optional(&pool)
     .await
     .map_err(|error| error.to_string())?;
-    if let Some((tracking_id, started_at)) = event
-        && let Some(key) = cloud_calendar_event_key(&tracking_id, &started_at)
-    {
+    if let Some(key) = event.filter(|key| !key.is_empty() && key.len() <= 512) {
         snapshot["calendar_event_key"] = serde_json::Value::String(key);
         if cloud_snapshot_jsonb_len(&snapshot)? > MAX_CLOUD_SNAPSHOT_BYTES {
             return Err("meeting snapshot exceeds the cloud size limit".to_string());
@@ -510,44 +508,38 @@ pub async fn get_cloud_snapshot<R: tauri::Runtime>(
     Ok(snapshot)
 }
 
-fn cloud_calendar_event_key(tracking_id: &str, started_at: &str) -> Option<String> {
-    let tracking_id = tracking_id.trim();
-    if tracking_id.is_empty() {
-        return None;
-    }
-    let started_at = chrono::DateTime::parse_from_rfc3339(started_at).ok()?;
-    let key = format!(
-        "{}|{}",
-        tracking_id,
-        started_at
-            .with_timezone(&chrono::Utc)
-            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-    );
-    (key.len() <= 512).then_some(key)
-}
-
-#[cfg(test)]
-mod cloud_calendar_event_key_tests {
-    use super::cloud_calendar_event_key;
-
-    #[test]
-    fn same_occurrence_has_one_key_across_timezones() {
-        let eastern = cloud_calendar_event_key(" event-1 ", "2026-10-15T11:00:00-04:00");
-        let utc = cloud_calendar_event_key("event-1", "2026-10-15T15:00:00Z");
-        assert_eq!(eastern, utc);
-        assert_eq!(utc.as_deref(), Some("event-1|2026-10-15T15:00:00.000Z"));
-    }
-
-    #[test]
-    fn missing_event_identity_is_not_shareable() {
-        assert_eq!(cloud_calendar_event_key("", "2026-10-15T15:00:00Z"), None);
-        assert_eq!(cloud_calendar_event_key("event-1", "invalid"), None);
-    }
-}
-
 pub(crate) fn prepare_cloud_snapshot(
     mut export: anlg_agent_access::MeetingExport,
 ) -> Result<serde_json::Value, String> {
+    let recording_intervals: Vec<_> = export
+        .transcripts
+        .iter()
+        .filter_map(|transcript| {
+            let end = transcript.ended_at_ms?;
+            (end > transcript.started_at_ms).then_some((transcript.started_at_ms, end))
+        })
+        .collect();
+    let word_intervals: Vec<_> = export
+        .transcripts
+        .iter()
+        .flat_map(|transcript| {
+            transcript.words.iter().filter_map(|word| {
+                let start = word.get("start_ms")?.as_i64()?;
+                let end = word.get("end_ms")?.as_i64()?;
+                let start = transcript.started_at_ms.checked_add(start)?;
+                let end = transcript.started_at_ms.checked_add(end)?;
+                (end > start).then_some((start, end))
+            })
+        })
+        .collect();
+    export.shared_transcript_choice = Some(serde_json::json!({
+        "conference_record": null,
+        "meet_attendance_status": "unknown",
+        "recorded_seconds": merged_duration_ms(recording_intervals) as f64 / 1000.0,
+        "verified_overlap_seconds": null,
+        "transcript_characters": export.transcripts.iter().map(|t| t.text.chars().count()).sum::<usize>(),
+        "transcript_coverage_seconds": merged_duration_ms(word_intervals) as f64 / 1000.0,
+    }));
     let snapshot = serde_json::to_value(&export).map_err(|error| error.to_string())?;
     if cloud_snapshot_jsonb_len(&snapshot)? <= MAX_CLOUD_SNAPSHOT_BYTES {
         return Ok(snapshot);
@@ -564,6 +556,17 @@ pub(crate) fn prepare_cloud_snapshot(
         ));
     }
     Ok(snapshot)
+}
+
+fn merged_duration_ms(mut intervals: Vec<(i64, i64)>) -> i64 {
+    intervals.sort_unstable();
+    let mut duration = 0_i64;
+    let mut previous_end = i64::MIN;
+    for (start, end) in intervals {
+        duration = duration.saturating_add(end.saturating_sub(start.max(previous_end)).max(0));
+        previous_end = previous_end.max(end);
+    }
+    duration
 }
 
 // The hosted constraint measures jsonb::text, which includes separator spaces

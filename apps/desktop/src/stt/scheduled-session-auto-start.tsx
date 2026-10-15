@@ -16,9 +16,10 @@ import {
   isScheduledAutoStartInFlight,
 } from "~/stt/scheduled-auto-start-state";
 import {
-  hasJoinedScheduledMeet,
+  getJoinedScheduledMeet,
   isGoogleMeetLink,
 } from "~/stt/scheduled-meet-presence";
+import { saveJoinedScheduledMeet } from "~/stt/scheduled-meet-evidence";
 import { useStartListeningState } from "~/stt/useStartListening";
 
 export function ScheduledSessionAutoStart({
@@ -136,14 +137,16 @@ function StartScheduledSessionAutoStart({
 
     const eligibility = requiresCalendarEligibility
       ? readDueScheduledSessionMeeting(sessionId).then(async (row) => {
-          if (!row) return false;
-          if (!isGoogleMeetLink(row.meeting_link)) return true;
-          return hasJoinedScheduledMeet(row, getHeadersRef.current());
+          if (!row) return { eligible: false, joined: null };
+          if (!isGoogleMeetLink(row.meeting_link))
+            return { eligible: true, joined: null };
+          const joined = await getJoinedScheduledMeet(row, getHeadersRef.current());
+          return { eligible: joined !== null, joined };
         })
-      : Promise.resolve(true);
+      : Promise.resolve({ eligible: true, joined: null });
 
     void eligibility
-      .then((eligible) => {
+      .then(async ({ eligible, joined }) => {
         if (cancelled) return;
         clearPendingAutoStart(sessionId);
         if (
@@ -153,6 +156,15 @@ function StartScheduledSessionAutoStart({
         ) {
           return;
         }
+
+        if (joined) {
+          try {
+            await saveJoinedScheduledMeet(sessionId, joined);
+          } catch (error) {
+            console.error("[listener] could not save Meet evidence", error);
+          }
+        }
+        if (cancelled) return;
 
         captureStarted = true;
         if (!requiresCalendarEligibility) {

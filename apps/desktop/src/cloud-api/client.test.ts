@@ -148,7 +148,63 @@ describe("cloud API client", () => {
     ).toBe(false);
   });
 
-  it("treats an already shared calendar occurrence as deduplicated", async () => {
+  it("sends private Meet lookup inputs only when registering the workspace candidate", async () => {
+    mocks.getSession.mockResolvedValue(authSession("user-overlap"));
+    mocks.execute.mockImplementation(async (sql: string) =>
+      sql.includes("managed_app_settings")
+        ? [{ value_json: '"workspace-1"' }]
+        : [{ evidence: JSON.stringify({
+            connection_id: "meet-secret",
+            conference_record: "conferenceRecords/record-1",
+          }) }],
+    );
+    mocks.getCloudSnapshot.mockResolvedValue({
+      status: "ok",
+      data: {
+        id: "meeting-1",
+        calendar_event_key: "google:9:meeting-1",
+        ended_at: "2026-10-15T15:30:00.000Z",
+        transcripts: [{
+          started_at_ms: 10_000,
+          ended_at_ms: 30_000,
+          text: "A useful transcript.",
+        }],
+        shared_transcript_choice: {
+          conference_record: null,
+          meet_attendance_status: "unknown",
+          recorded_seconds: 20,
+          verified_overlap_seconds: null,
+          transcript_characters: 20,
+          transcript_coverage_seconds: 18,
+        },
+      },
+    });
+    mocks.fetch.mockResolvedValue(new Response(JSON.stringify({ enabled: true, updated_at: null }), { status: 200 }));
+
+    await syncCloudApiSnapshot("meeting-1");
+    const upload = mocks.fetch.mock.calls.find(([url]) =>
+      String(url).endsWith("/v1/sync-snapshots/meeting-1"),
+    );
+    const body = JSON.parse(String(upload?.[1]?.body));
+    expect(body.shared_transcript_choice).toMatchObject({
+      conference_record: null,
+      meet_attendance_status: "unknown",
+      verified_overlap_seconds: null,
+    });
+    expect(JSON.stringify(body)).not.toContain("meet-secret");
+    const share = mocks.fetch.mock.calls.find(([url]) =>
+      String(url).endsWith("/v1/sync-snapshots/meeting-1/workspace"),
+    );
+    expect(JSON.parse(String(share?.[1]?.body))).toEqual({
+      workspace_id: "workspace-1",
+      meet_attendance: {
+        connection_id: "meet-secret",
+        conference_record: "conferenceRecords/record-1",
+      },
+    });
+  });
+
+  it("retries a failed candidate registration instead of marking it uploaded", async () => {
     mocks.getSession.mockResolvedValue(authSession("user-dedupe"));
     mocks.execute.mockResolvedValue([{ value_json: '"workspace-1"' }]);
     mocks.getCloudSnapshot.mockResolvedValue({
@@ -174,7 +230,9 @@ describe("cloud API client", () => {
       });
     });
 
-    await expect(syncCloudApiSnapshot("meeting-1")).resolves.toBeUndefined();
+    await expect(syncCloudApiSnapshot("meeting-1")).rejects.toMatchObject({
+      code: "conflict",
+    });
     expect(
       mocks.fetch.mock.calls.some(([url]) =>
         String(url).endsWith("/workspace"),

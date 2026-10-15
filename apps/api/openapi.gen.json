@@ -1034,6 +1034,41 @@
         ]
       }
     },
+    "/nango/google-meet/attendance": {
+      "post": {
+        "tags": [
+          "nango"
+        ],
+        "operationId": "google_meet_attendance",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MeetAttendanceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeetAttendanceResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/nango/google-meet/presence": {
       "post": {
         "tags": [
@@ -10064,6 +10099,85 @@
           }
         }
       },
+      "MeetAttendanceEvidence": {
+        "type": "object",
+        "required": [
+          "connection_id",
+          "conference_record"
+        ],
+        "properties": {
+          "conference_record": {
+            "type": "string"
+          },
+          "connection_id": {
+            "type": "string"
+          }
+        }
+      },
+      "MeetAttendanceRequest": {
+        "type": "object",
+        "required": [
+          "connection_id",
+          "conference_record"
+        ],
+        "properties": {
+          "conference_record": {
+            "type": "string"
+          },
+          "connection_id": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MeetAttendanceResponse": {
+        "type": "object",
+        "required": [
+          "account_email",
+          "conference_start_time"
+        ],
+        "properties": {
+          "account_email": {
+            "type": "string"
+          },
+          "conference_end_time": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "conference_start_time": {
+            "type": "string"
+          },
+          "sessions": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/MeetParticipantSession"
+            },
+            "description": "None means the connected user's sessions could not be verified."
+          }
+        }
+      },
+      "MeetParticipantSession": {
+        "type": "object",
+        "required": [
+          "start_time"
+        ],
+        "properties": {
+          "end_time": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "start_time": {
+            "type": "string"
+          }
+        }
+      },
       "MeetPresenceRequest": {
         "type": "object",
         "required": [
@@ -10090,6 +10204,12 @@
         "properties": {
           "account_email": {
             "type": "string"
+          },
+          "conference_record": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "conference_start_time": {
             "type": [
@@ -10260,6 +10380,16 @@
               "transcripts"
             ],
             "properties": {
+              "calendar_event_key": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Google Calendar occurrence identity used to group workspace transcripts."
+              },
+              "shared_transcript_choice": {
+                "description": "Private candidate signals used to choose one workspace transcript."
+              },
               "speaker_context": {
                 "description": "Recorded microphone/call context intervals (`sessions.metadata_json`\n`speaker_context`) used to label speakers the same way the desktop\ntranscript view does."
               },
@@ -11980,6 +12110,24 @@
           },
           "keyId": {
             "type": "string"
+          }
+        }
+      },
+      "ShareSnapshotBody": {
+        "type": "object",
+        "required": [
+          "workspace_id"
+        ],
+        "properties": {
+          "meet_attendance": {
+            "oneOf": [
+              { "type": "null" },
+              { "$ref": "#/components/schemas/MeetAttendanceEvidence" }
+            ]
+          },
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },

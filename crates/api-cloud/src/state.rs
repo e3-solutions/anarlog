@@ -1,6 +1,7 @@
 use anlg_agent_access::MeetingExport;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use std::time::Duration;
 
 use crate::{
     oauth::OAuthResourceConfig,
@@ -15,6 +16,7 @@ pub struct CloudApiConfig {
     supabase_url: String,
     supabase_service_role_key: String,
     oauth: OAuthResourceConfig,
+    meet_attendance_origin: Option<String>,
 }
 
 impl CloudApiConfig {
@@ -35,7 +37,26 @@ impl CloudApiConfig {
             supabase_url,
             supabase_service_role_key,
             oauth,
+            meet_attendance_origin: None,
         })
+    }
+
+    pub fn with_meet_attendance_origin(mut self, origin: Option<&str>) -> Result<Self, String> {
+        if let Some(origin) = origin {
+            let url = reqwest::Url::parse(origin).map_err(|_| "Invalid Meet attendance origin")?;
+            if !matches!(url.scheme(), "http" | "https")
+                || url.host_str().is_none()
+                || !url.username().is_empty()
+                || url.password().is_some()
+                || url.path() != "/"
+                || url.query().is_some()
+                || url.fragment().is_some()
+            {
+                return Err("Meet attendance origin must be an HTTP(S) origin".into());
+            }
+            self.meet_attendance_origin = Some(url.origin().ascii_serialization());
+        }
+        Ok(self)
     }
 }
 
@@ -77,6 +98,17 @@ struct ShareIdRow {
 }
 
 #[derive(Deserialize)]
+struct MeetAttendanceResponse {
+    sessions: Option<Vec<MeetAttendanceSession>>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct MeetAttendanceSession {
+    pub start_time: String,
+    pub end_time: Option<String>,
+}
+
+#[derive(Deserialize)]
 pub(crate) struct VerifiedKey {
     pub user_id: String,
     pub status: String,
@@ -95,6 +127,36 @@ impl AppState {
             auth,
             config,
         }
+    }
+
+    pub(crate) async fn meet_attendance(
+        &self,
+        token: &str,
+        connection_id: &str,
+        conference_record: &str,
+    ) -> Option<Vec<MeetAttendanceSession>> {
+        let origin = self.config.meet_attendance_origin.as_ref()?;
+        if connection_id.is_empty()
+            || connection_id.len() > 256
+            || !connection_id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+            || conference_record.len() > 512
+            || !conference_record.strip_prefix("conferenceRecords/").is_some_and(|id| {
+                !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+            })
+        {
+            return None;
+        }
+        let response = self.client
+            .post(format!("{origin}/nango/google-meet/attendance"))
+            .bearer_auth(token)
+            .timeout(Duration::from_secs(25))
+            .json(&serde_json::json!({
+                "connection_id": connection_id,
+                "conference_record": conference_record,
+            }))
+            .send().await.ok()?;
+        if !response.status().is_success() { return None; }
+        response.json::<MeetAttendanceResponse>().await.ok()?.sessions
     }
 
     pub(crate) fn oauth(&self) -> &OAuthResourceConfig {
@@ -267,6 +329,7 @@ impl AppState {
         user_id: &str,
         session_id: &str,
         workspace_id: &str,
+        verified_overlap_seconds: Option<f64>,
     ) -> Result<String, StoreError> {
         let mut rows: Vec<ShareIdRow> = self
             .rpc(
@@ -275,6 +338,7 @@ impl AppState {
                     "p_actor_user_id": user_id,
                     "p_session_id": session_id,
                     "p_workspace_id": workspace_id,
+                    "p_verified_overlap_seconds": verified_overlap_seconds,
                 }),
             )
             .await?;
