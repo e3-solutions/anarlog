@@ -72,7 +72,7 @@ AS $$
   -- one-word recording cannot win by claiming hours of word coverage.
   ORDER BY least(candidate.transcript_coverage_seconds,
       candidate.transcript_characters::numeric / 5) DESC,
-    candidate.verified_overlap_seconds DESC NULLS LAST,
+    nullif(candidate.verified_overlap_seconds, 0) DESC NULLS LAST,
     candidate.transcript_characters DESC,
     (candidate.owner_user_id = share.owner_user_id
       AND candidate.session_id = share.session_id) DESC,
@@ -165,8 +165,8 @@ BEGIN
     v_coverage_seconds := (v_choice ->> 'transcript_coverage_seconds')::numeric;
   END IF;
   -- Only the Cloud API may supply the independently verified overlap.
-  -- A zero or invalid duration is unknown rather than evidence of presence.
-  IF p_verified_overlap_seconds > 0
+  -- Zero is a completed measurement with no overlap; NULL is unavailable.
+  IF p_verified_overlap_seconds >= 0
     AND p_verified_overlap_seconds <= 604800 THEN
     v_overlap_seconds := p_verified_overlap_seconds;
   END IF;

@@ -235,7 +235,7 @@ select is(
   (select verified_overlap_seconds from public.api_shared_session_candidates
     where owner_user_id = tests.get_supabase_uid('cloud_share_member')
       and session_id = 'adjacent'),
-  null::numeric, 'zero overlap is stored as unknown evidence'
+  0::numeric, 'a measured zero overlap replaces stale positive evidence'
 );
 select is(
   (select count(*) from public.read_shared_cloud_api_snapshot(

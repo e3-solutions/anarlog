@@ -465,7 +465,7 @@ fn verified_recording_overlap_seconds_at(
             j += 1;
         }
     }
-    (overlap_ms > 0).then_some(overlap_ms as f64 / 1000.0)
+    Some(overlap_ms as f64 / 1000.0)
 }
 
 #[utoipa::path(
@@ -1045,6 +1045,14 @@ kHmPRiazukxPLb6ilpRAewjW8nihRANCAATDskChT+Altkm9X7MI69T3IUmrQU0L\n\
         assert_eq!(
             verified_recording_overlap_seconds_at(&meeting, &open[..1], 1_780_000_025_000),
             Some(25.0)
+        );
+        let disjoint = [crate::state::MeetAttendanceSession {
+            start_time: time(70_000),
+            end_time: Some(time(80_000)),
+        }];
+        assert_eq!(
+            verified_recording_overlap_seconds(&meeting, &disjoint),
+            Some(0.0)
         );
     }
 
