@@ -130,7 +130,9 @@ select is(
   15::numeric, 'an unavailable Meet recheck retains verified evidence for unchanged recording'
 );
 update public.api_session_snapshots
-set content_json = jsonb_set(content_json, '{shared_transcript_choice,transcript_coverage_seconds}', '1'::jsonb)
+set content_json = jsonb_set(
+  jsonb_set(content_json, '{shared_transcript_choice,transcript_coverage_seconds}', '604800'::jsonb),
+  '{transcripts}', '[{"text":"x"}]'::jsonb)
 where user_id = tests.get_supabase_uid('cloud_share_owner') and session_id = 'meeting-1';
 select is(
   (select share_id from public.set_cloud_api_snapshot_workspace(
@@ -143,7 +145,7 @@ select is(
   (select owner_user_id from public.list_shared_cloud_api_snapshots(
     tests.get_supabase_uid('cloud_share_owner'), 20, 0)),
   tests.get_supabase_uid('cloud_share_member'),
-  'a mostly silent long recording cannot outrank fuller speech coverage'
+  'a one-character recording cannot win by claiming a week of speech coverage'
 );
 select ok(
   (select content_json ? 'shared_transcript_choice' from public.read_shared_cloud_api_snapshot(
@@ -159,8 +161,8 @@ select ok(
 
 update public.api_session_snapshots
 set content_json = jsonb_set(
-  content_json || '{"title":"Improved owner recording","calendar_event_key":"google:moved-metadata","shared_transcript_choice":{"conference_record":"conferenceRecords/abc-123","meet_attendance_status":"verified","recorded_seconds":40,"verified_overlap_seconds":30,"transcript_coverage_seconds":35,"transcript_characters":16}}'::jsonb,
-  '{transcripts}', '[{"text":"Improved owner transcript"}]'::jsonb)
+  content_json || '{"title":"Improved owner recording","calendar_event_key":"google:uid-1","shared_transcript_choice":{"conference_record":"conferenceRecords/abc-123","meet_attendance_status":"verified","recorded_seconds":40,"verified_overlap_seconds":30,"transcript_coverage_seconds":35,"transcript_characters":16}}'::jsonb,
+  '{transcripts}', '[{"text":"Better owner transcript!"}]'::jsonb)
 where user_id = tests.get_supabase_uid('cloud_share_owner') and session_id = 'meeting-1';
 select is(
   (select share_id from public.set_cloud_api_snapshot_workspace(
@@ -185,6 +187,33 @@ select is(
   (select content_json ->> 'calendar_event_key' from public.list_shared_cloud_api_snapshots(
     tests.get_supabase_uid('cloud_share_member'), 20, 0)),
   'google:uid-1', 'shared lists retain the canonical occurrence key'
+);
+
+update public.api_session_snapshots
+set content_json = jsonb_set(content_json, '{calendar_event_key}', '"google:uid-3"'::jsonb)
+where user_id = tests.get_supabase_uid('cloud_share_owner') and session_id = 'meeting-1';
+select isnt(
+  (select share_id from public.set_cloud_api_snapshot_workspace(
+    tests.get_supabase_uid('cloud_share_owner'), 'meeting-1',
+    (select workspace_id from cloud_share_test_state), 30)),
+  (select share_id from cloud_share_test_state),
+  'reassociated session moves to its new calendar occurrence'
+);
+select is(
+  (select content_json ->> 'title' from public.read_shared_cloud_api_snapshot(
+    tests.get_supabase_uid('cloud_share_member'),
+    (select share_id from cloud_share_test_state))),
+  'Member recording', 'old occurrence no longer exposes reassociated transcript'
+);
+update public.api_session_snapshots
+set content_json = jsonb_set(content_json, '{calendar_event_key}', '"google:uid-1"'::jsonb)
+where user_id = tests.get_supabase_uid('cloud_share_owner') and session_id = 'meeting-1';
+select is(
+  (select share_id from public.set_cloud_api_snapshot_workspace(
+    tests.get_supabase_uid('cloud_share_owner'), 'meeting-1',
+    (select workspace_id from cloud_share_test_state), 30)),
+  (select share_id from cloud_share_test_state),
+  'returning to the original occurrence restores its stable share ID'
 );
 
 select is(

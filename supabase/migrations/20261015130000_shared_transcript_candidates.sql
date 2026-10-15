@@ -68,7 +68,10 @@ AS $$
           THEN snapshot.content_json -> 'transcripts' ELSE '[]'::jsonb END
       ) AS segment WHERE length(segment ->> 'text') > 0
     )
-  ORDER BY candidate.transcript_coverage_seconds DESC,
+  -- Speech timing is a client hint, capped by the text actually stored. A
+  -- one-word recording cannot win by claiming hours of word coverage.
+  ORDER BY least(candidate.transcript_coverage_seconds,
+      candidate.transcript_characters::numeric / 5) DESC,
     candidate.verified_overlap_seconds DESC NULLS LAST,
     candidate.transcript_characters DESC,
     (candidate.owner_user_id = share.owner_user_id
@@ -126,15 +129,11 @@ BEGIN
     RAISE EXCEPTION 'workspace access denied' USING ERRCODE = '42501';
   END IF;
 
-  SELECT candidate.share_id, share.calendar_event_key
-    INTO v_existing_share_id, v_event_key
+  SELECT candidate.share_id INTO v_existing_share_id
   FROM public.api_shared_session_candidates AS candidate
-  JOIN public.api_shared_session_snapshots AS share ON share.id = candidate.share_id
   WHERE candidate.owner_user_id = p_actor_user_id
     AND candidate.session_id = p_session_id;
-  IF v_event_key IS NULL THEN
-    v_event_key := v_content ->> 'calendar_event_key';
-  END IF;
+  v_event_key := v_content ->> 'calendar_event_key';
   IF v_event_key IS NULL OR v_event_key NOT LIKE 'google:%'
     OR v_event_key <> btrim(v_event_key)
     OR octet_length(v_event_key) NOT BETWEEN 1 AND 512 THEN
