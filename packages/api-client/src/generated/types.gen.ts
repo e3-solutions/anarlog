@@ -1185,6 +1185,18 @@ export type MediaResponse = {
     url: string;
 };
 
+export type MeetPresenceRequest = {
+    connection_id: string;
+    meeting_code: string;
+};
+
+export type MeetPresenceResponse = {
+    account_email: string;
+    conference_start_time?: string | null;
+    meeting_uri: string;
+    present: boolean;
+};
+
 export type Meeting = {
     action_items: Array<ActionItem>;
     created_at: string;
@@ -2991,6 +3003,19 @@ export type GoogleDrivePrepareExportResponses = {
 };
 
 export type GoogleDrivePrepareExportResponse = GoogleDrivePrepareExportResponses[keyof GoogleDrivePrepareExportResponses];
+
+export type GoogleMeetPresenceData = {
+    body: MeetPresenceRequest;
+    path?: never;
+    query?: never;
+    url: '/nango/google-meet/presence';
+};
+
+export type GoogleMeetPresenceResponses = {
+    200: MeetPresenceResponse;
+};
+
+export type GoogleMeetPresenceResponse = GoogleMeetPresenceResponses[keyof GoogleMeetPresenceResponses];
 
 export type CreateSessionData = {
     body: CreateSessionRequest;

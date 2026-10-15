@@ -1034,6 +1034,41 @@
         ]
       }
     },
+    "/nango/google-meet/presence": {
+      "post": {
+        "tags": [
+          "nango"
+        ],
+        "operationId": "google_meet_presence",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MeetPresenceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeetPresenceResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/nango/session": {
       "post": {
         "tags": [
@@ -10026,6 +10061,47 @@
         "properties": {
           "url": {
             "type": "string"
+          }
+        }
+      },
+      "MeetPresenceRequest": {
+        "type": "object",
+        "required": [
+          "connection_id",
+          "meeting_code"
+        ],
+        "properties": {
+          "connection_id": {
+            "type": "string"
+          },
+          "meeting_code": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MeetPresenceResponse": {
+        "type": "object",
+        "required": [
+          "present",
+          "account_email",
+          "meeting_uri"
+        ],
+        "properties": {
+          "account_email": {
+            "type": "string"
+          },
+          "conference_start_time": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "meeting_uri": {
+            "type": "string"
+          },
+          "present": {
+            "type": "boolean"
           }
         }
       },

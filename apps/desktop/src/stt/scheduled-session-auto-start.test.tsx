@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   canStart: true,
   liveStatus: "inactive",
   readDueScheduledSessionMeeting: vi.fn(),
+  hasJoinedScheduledMeet: vi.fn(),
   finishScheduledAutoStart: vi.fn(),
   inFlight: false,
   connectionReady: true,
@@ -57,6 +58,15 @@ vi.mock("~/store/zustand/tabs", () => ({
   },
 }));
 
+vi.mock("~/auth", () => ({
+  useAuth: () => ({ getHeaders: () => ({ Authorization: "Bearer test" }) }),
+}));
+
+vi.mock("~/stt/scheduled-meet-presence", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./scheduled-meet-presence")>()),
+  hasJoinedScheduledMeet: mocks.hasJoinedScheduledMeet,
+}));
+
 vi.mock("~/stt/contexts", () => ({
   useListener: (selector: (state: any) => unknown) =>
     selector({
@@ -92,6 +102,7 @@ beforeEach(() => {
   mocks.readDueScheduledSessionMeeting.mockReset().mockResolvedValue({
     id: "event-1",
   });
+  mocks.hasJoinedScheduledMeet.mockReset().mockResolvedValue(true);
   mocks.inFlight = false;
   mocks.session = {
     id: "session-1",
@@ -124,6 +135,22 @@ test("starts scheduled recording when its connection state is ready", async () =
   await vi.waitFor(() =>
     expect(mocks.finishScheduledAutoStart).toHaveBeenCalledWith("session-1"),
   );
+});
+
+test("does not start scheduled Meet capture after presence is lost", async () => {
+  mocks.readDueScheduledSessionMeeting.mockResolvedValue({
+    id: "event-1",
+    meeting_link: "https://meet.google.com/abc-defg-hij",
+  });
+  mocks.hasJoinedScheduledMeet.mockResolvedValue(false);
+
+  render(<ScheduledSessionAutoStart sessionId="session-1" />);
+
+  await vi.waitFor(() =>
+    expect(mocks.updateSessionTabState).toHaveBeenCalled(),
+  );
+  expect(mocks.hasJoinedScheduledMeet).toHaveBeenCalledTimes(1);
+  expect(mocks.startListening).not.toHaveBeenCalled();
 });
 
 test("starts manual recording without calendar eligibility", async () => {
