@@ -386,6 +386,9 @@ pub(crate) async fn share_snapshot(
             &session_id,
             &body.workspace_id.to_string(),
             verified_overlap_seconds,
+            body.meet_attendance
+                .as_ref()
+                .map(|evidence| evidence.conference_record.as_str()),
         )
         .await
         .map_err(map_store_error)?;
@@ -395,6 +398,14 @@ pub(crate) async fn share_snapshot(
 fn verified_recording_overlap_seconds(
     snapshot: &access::MeetingExport,
     sessions: &[crate::state::MeetAttendanceSession],
+) -> Option<f64> {
+    verified_recording_overlap_seconds_at(snapshot, sessions, chrono::Utc::now().timestamp_millis())
+}
+
+fn verified_recording_overlap_seconds_at(
+    snapshot: &access::MeetingExport,
+    sessions: &[crate::state::MeetAttendanceSession],
+    checked_at_ms: i64,
 ) -> Option<f64> {
     fn merged(mut intervals: Vec<(i64, i64)>) -> Vec<(i64, i64)> {
         intervals.sort_unstable();
@@ -423,13 +434,15 @@ fn verified_recording_overlap_seconds(
     }
     let mut attendance = Vec::new();
     for session in sessions {
-        let end = session.end_time.as_deref()?;
         let start = chrono::DateTime::parse_from_rfc3339(&session.start_time)
             .ok()?
             .timestamp_millis();
-        let end = chrono::DateTime::parse_from_rfc3339(end)
-            .ok()?
-            .timestamp_millis();
+        let end = match session.end_time.as_deref() {
+            Some(end) => chrono::DateTime::parse_from_rfc3339(end)
+                .ok()?
+                .timestamp_millis(),
+            None => checked_at_ms,
+        };
         if end <= start {
             return None;
         }
@@ -989,7 +1002,7 @@ kHmPRiazukxPLb6ilpRAewjW8nihRANCAATDskChT+Altkm9X7MI69T3IUmrQU0L\n\
     }
 
     #[test]
-    fn verified_overlap_unions_rejoins_and_rejects_open_sessions() {
+    fn verified_overlap_unions_rejoins_and_bounds_open_sessions() {
         let mut meeting = export();
         meeting.transcripts = vec![access::Transcript {
             id: "transcript-1".into(),
@@ -1029,7 +1042,14 @@ kHmPRiazukxPLb6ilpRAewjW8nihRANCAATDskChT+Altkm9X7MI69T3IUmrQU0L\n\
         );
         let mut open = sessions;
         open[0].end_time = None;
-        assert_eq!(verified_recording_overlap_seconds(&meeting, &open), None);
+        assert_eq!(
+            verified_recording_overlap_seconds_at(&meeting, &open, 1_780_000_025_000),
+            Some(50.0)
+        );
+        assert_eq!(
+            verified_recording_overlap_seconds_at(&meeting, &open[..1], 1_780_000_025_000),
+            Some(25.0)
+        );
     }
 
     #[tokio::test]

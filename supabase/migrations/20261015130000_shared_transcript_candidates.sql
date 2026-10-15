@@ -1,5 +1,16 @@
 -- A calendar occurrence has one stable share ID, but every recorder keeps a private
 -- candidate. The selected snapshot can change without changing links to the share.
+-- The preceding sharing migration is part of the same E3 rollout. If it was
+-- deployed earlier and has data, its attendee-specific keys cannot be mapped
+-- to Google occurrence IDs without the clients. Stop instead of duplicating
+-- groups or invalidating old links; migrate that workspace explicitly first.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM public.api_shared_session_snapshots) THEN
+    RAISE EXCEPTION 'legacy shared snapshots require occurrence migration before candidate rollout';
+  END IF;
+END;
+$$;
 ALTER TABLE public.api_shared_session_snapshots
   DROP CONSTRAINT IF EXISTS api_shared_session_snapshots_owner_user_id_session_id_fkey;
 ALTER TABLE public.api_shared_session_snapshots
@@ -17,6 +28,7 @@ CREATE TABLE public.api_shared_session_candidates (
   verified_overlap_seconds numeric CHECK (verified_overlap_seconds >= 0),
   transcript_coverage_seconds numeric NOT NULL DEFAULT 0 CHECK (transcript_coverage_seconds >= 0),
   transcript_characters integer NOT NULL DEFAULT 0 CHECK (transcript_characters >= 0),
+  snapshot_fingerprint text NOT NULL DEFAULT '',
   created_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (owner_user_id, session_id),
   FOREIGN KEY (owner_user_id, session_id)
@@ -30,21 +42,6 @@ GRANT ALL ON public.api_shared_session_candidates TO service_role;
 CREATE POLICY api_shared_session_candidates_service_all
   ON public.api_shared_session_candidates
   FOR ALL TO service_role USING (true) WITH CHECK (true);
-
--- Preserve existing nonempty shares when applying the migration to an E3 workspace.
-INSERT INTO public.api_shared_session_candidates
-  (share_id, owner_user_id, session_id, transcript_characters)
-SELECT share.id, share.owner_user_id, share.session_id,
-  (SELECT coalesce(sum(length(segment ->> 'text')), 0)::integer
-   FROM jsonb_array_elements(
-     CASE WHEN jsonb_typeof(snapshot.content_json -> 'transcripts') = 'array'
-       THEN snapshot.content_json -> 'transcripts' ELSE '[]'::jsonb END
-   ) AS segment)
-FROM public.api_shared_session_snapshots AS share
-JOIN public.api_session_snapshots AS snapshot
-  ON snapshot.user_id = share.owner_user_id
- AND snapshot.session_id = share.session_id
-ON CONFLICT (owner_user_id, session_id) DO NOTHING;
 
 -- The ordering is deterministic, and an exact quality tie keeps the current owner.
 -- Membership is checked at read time, so revocation and snapshot deletion fail over
@@ -71,8 +68,8 @@ AS $$
           THEN snapshot.content_json -> 'transcripts' ELSE '[]'::jsonb END
       ) AS segment WHERE length(segment ->> 'text') > 0
     )
-  ORDER BY candidate.verified_overlap_seconds DESC NULLS LAST,
-    candidate.transcript_coverage_seconds DESC,
+  ORDER BY candidate.transcript_coverage_seconds DESC,
+    candidate.verified_overlap_seconds DESC NULLS LAST,
     candidate.transcript_characters DESC,
     (candidate.owner_user_id = share.owner_user_id
       AND candidate.session_id = share.session_id) DESC,
@@ -89,7 +86,8 @@ CREATE FUNCTION public.set_cloud_api_snapshot_workspace(
   p_actor_user_id uuid,
   p_session_id text,
   p_workspace_id uuid,
-  p_verified_overlap_seconds numeric DEFAULT NULL
+  p_verified_overlap_seconds numeric DEFAULT NULL,
+  p_conference_record text DEFAULT NULL
 )
 RETURNS TABLE (share_id uuid)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = ''
@@ -103,6 +101,7 @@ DECLARE
   v_overlap_seconds numeric;
   v_coverage_seconds numeric := 0;
   v_characters integer := 0;
+  v_snapshot_fingerprint text;
   v_actual_characters bigint;
   v_owner uuid;
   v_session text;
@@ -136,7 +135,8 @@ BEGIN
   IF v_event_key IS NULL THEN
     v_event_key := v_content ->> 'calendar_event_key';
   END IF;
-  IF v_event_key IS NULL OR v_event_key <> btrim(v_event_key)
+  IF v_event_key IS NULL OR v_event_key NOT LIKE 'google:%'
+    OR v_event_key <> btrim(v_event_key)
     OR octet_length(v_event_key) NOT BETWEEN 1 AND 512 THEN
     RAISE EXCEPTION 'calendar event key required' USING ERRCODE = '22023';
   END IF;
@@ -152,6 +152,10 @@ BEGIN
   END IF;
   -- Count the text we actually store, rather than a client-claimed size.
   v_characters := least(v_actual_characters, 100000000)::integer;
+  v_snapshot_fingerprint := md5(
+    coalesce(v_content -> 'transcripts', '[]'::jsonb)::text ||
+    coalesce(p_conference_record, '')
+  );
   IF v_characters <= 0 THEN
     RAISE EXCEPTION 'nonempty transcript required' USING ERRCODE = '22023';
   END IF;
@@ -189,14 +193,20 @@ BEGIN
 
   INSERT INTO public.api_shared_session_candidates
     (share_id, owner_user_id, session_id, verified_overlap_seconds,
-     transcript_coverage_seconds, transcript_characters)
+     transcript_coverage_seconds, transcript_characters, snapshot_fingerprint)
   VALUES (v_share_id, p_actor_user_id, p_session_id, v_overlap_seconds,
-    v_coverage_seconds, v_characters)
+    v_coverage_seconds, v_characters, v_snapshot_fingerprint)
   ON CONFLICT (owner_user_id, session_id) DO UPDATE SET
     share_id = excluded.share_id,
-    verified_overlap_seconds = excluded.verified_overlap_seconds,
+    verified_overlap_seconds = CASE
+      WHEN excluded.verified_overlap_seconds IS NOT NULL
+        THEN excluded.verified_overlap_seconds
+      WHEN public.api_shared_session_candidates.snapshot_fingerprint = excluded.snapshot_fingerprint
+        THEN public.api_shared_session_candidates.verified_overlap_seconds
+      ELSE NULL END,
     transcript_coverage_seconds = excluded.transcript_coverage_seconds,
-    transcript_characters = excluded.transcript_characters;
+    transcript_characters = excluded.transcript_characters,
+    snapshot_fingerprint = excluded.snapshot_fingerprint;
 
   SELECT chosen.owner_user_id, chosen.session_id INTO v_owner, v_session
   FROM public.choose_shared_cloud_api_candidate(v_share_id) AS chosen;
@@ -319,7 +329,7 @@ AS $$
   WHERE share.id = p_share_id;
 $$;
 
-REVOKE ALL ON FUNCTION public.set_cloud_api_snapshot_workspace(uuid, text, uuid, numeric)
+REVOKE ALL ON FUNCTION public.set_cloud_api_snapshot_workspace(uuid, text, uuid, numeric, text)
   FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.set_cloud_api_snapshot_workspace(uuid, text, uuid, numeric)
+GRANT EXECUTE ON FUNCTION public.set_cloud_api_snapshot_workspace(uuid, text, uuid, numeric, text)
   TO service_role;

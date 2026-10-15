@@ -346,6 +346,7 @@ impl AppState {
         session_id: &str,
         workspace_id: &str,
         verified_overlap_seconds: Option<f64>,
+        conference_record: Option<&str>,
     ) -> Result<String, StoreError> {
         let mut rows: Vec<ShareIdRow> = self
             .rpc(
@@ -355,6 +356,7 @@ impl AppState {
                     "p_session_id": session_id,
                     "p_workspace_id": workspace_id,
                     "p_verified_overlap_seconds": verified_overlap_seconds,
+                    "p_conference_record": conference_record,
                 }),
             )
             .await?;

@@ -94,7 +94,8 @@ select is(
 select is(
   (select share_id from public.set_cloud_api_snapshot_workspace(
     tests.get_supabase_uid('cloud_share_member'), 'meeting-2',
-    (select workspace_id from cloud_share_test_state), 15)),
+    (select workspace_id from cloud_share_test_state), 15,
+    'conferenceRecords/abc-123')),
   (select share_id from cloud_share_test_state),
   'second recorder registers under the same stable share ID'
 );
@@ -113,6 +114,36 @@ select is(
     tests.get_supabase_uid('cloud_share_owner'),
     (select share_id from cloud_share_test_state))),
   'Member recording', 'read returns the chosen recording'
+);
+select is(
+  (select share_id from public.set_cloud_api_snapshot_workspace(
+    tests.get_supabase_uid('cloud_share_member'), 'meeting-2',
+    (select workspace_id from cloud_share_test_state), null,
+    'conferenceRecords/abc-123')),
+  (select share_id from cloud_share_test_state),
+  'an unavailable Meet recheck keeps the same share'
+);
+select is(
+  (select verified_overlap_seconds from public.api_shared_session_candidates
+    where owner_user_id = tests.get_supabase_uid('cloud_share_member')
+      and session_id = 'meeting-2'),
+  15::numeric, 'an unavailable Meet recheck retains verified evidence for unchanged recording'
+);
+update public.api_session_snapshots
+set content_json = jsonb_set(content_json, '{shared_transcript_choice,transcript_coverage_seconds}', '1'::jsonb)
+where user_id = tests.get_supabase_uid('cloud_share_owner') and session_id = 'meeting-1';
+select is(
+  (select share_id from public.set_cloud_api_snapshot_workspace(
+    tests.get_supabase_uid('cloud_share_owner'), 'meeting-1',
+    (select workspace_id from cloud_share_test_state), 1000)),
+  (select share_id from cloud_share_test_state),
+  'long recording still joins the same group'
+);
+select is(
+  (select owner_user_id from public.list_shared_cloud_api_snapshots(
+    tests.get_supabase_uid('cloud_share_owner'), 20, 0)),
+  tests.get_supabase_uid('cloud_share_member'),
+  'a mostly silent long recording cannot outrank fuller speech coverage'
 );
 select ok(
   (select content_json ? 'shared_transcript_choice' from public.read_shared_cloud_api_snapshot(
