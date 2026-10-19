@@ -60,6 +60,8 @@ For a local development build, install Node 22 or later, pnpm 11.1.1, Rust 1.94,
 
 The dedicated pilot workflow below builds with an isolated identifier, disabled updater, and ad-hoc signing. A signed/notarized pilot is preferable for a wider team rollout.
 
+The isolated pilot disables native analytics at compile time and uses a localhost API URL; it requires no production telemetry key or backend for local capture.
+
 Native compilation and packaging require the Rust/Xcode toolchains and sufficient disk space. Frontend tests alone do not verify a distributable build.
 
 ## Signed E3 distribution

@@ -112,6 +112,7 @@ tracing = { workspace = true }
 
 [features]
 default = []
+disable-analytics = ["tauri-plugin-analytics/disable-analytics"]
 direct-distribution = [
   "tauri-plugin-permissions/private-tcc",
   "tauri-plugin-windows/macos-private-api",

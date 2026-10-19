@@ -7,6 +7,9 @@ exclude = ["/js", "/node_modules"]
 links = "tauri-plugin-analytics"
 description = ""
 
+[features]
+disable-analytics = []
+
 [build-dependencies]
 tauri-plugin = { workspace = true, features = ["build"] }
 

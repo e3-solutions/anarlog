@@ -4,7 +4,8 @@
   "mainBinaryName": "e3-meeting-capture-pilot",
   "identifier": "ai.e3group.meeting-capture-pilot",
   "build": {
-    "runner": "cargo"
+    "runner": "cargo",
+    "features": ["direct-distribution", "disable-analytics"]
   },
   "bundle": {
     "createUpdaterArtifacts": false,
