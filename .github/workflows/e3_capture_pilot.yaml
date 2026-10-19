@@ -50,9 +50,13 @@ jobs:
       - name: Cache native desktop build dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          prefix-key: e3-pilot-native
+          # Separate full workspace caches from the old registry-only entry.
+          # Match the pilot optimization below; Rust-cache hashes Cargo.lock/toolchain.
+          # PR caches are scoped to this PR merge ref, not shared between PRs.
+          prefix-key: e3-pilot-native-v2-opt1
           workspaces: . -> apps/desktop/src-tauri/target
-          cache-on-failure: true
+          # Avoid sealing a registry-only cache when compilation is cancelled.
+          cache-on-failure: false
           cache-workspace-crates: true
       - uses: ./.github/actions/pnpm_install # zizmor: ignore[self-repository] -- Use the checked-out candidate's workspace setup.
       - run: echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
