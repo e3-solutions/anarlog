@@ -1,3 +1,4 @@
+import { platform } from "@tauri-apps/plugin-os";
 import { useRef } from "react";
 
 import { commands as detectCommands } from "@anlg/plugin-detect";
@@ -112,10 +113,26 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
             live.sessionId === capture.sessionId
           ) {
             capture.seenActive = true;
-            const observation = automaticMeetingObservation(
+            let observation = automaticMeetingObservation(
               capture.meeting,
               inspection.data,
             );
+            const macMeet =
+              capture.meeting.platform === "googleMeet" &&
+              platform() === "macos";
+            if (
+              observation === "unknown" &&
+              macMeet &&
+              !inspection.data.some(
+                (entry) =>
+                  entry.app.id === capture!.meeting.app.id &&
+                  entry.pid === capture!.meeting.pid,
+              )
+            ) {
+              // macOS returns a row for every recognized running process,
+              // including unreadable ones. Missing that process is a departure.
+              observation = "inactive";
+            }
             const micActive =
               microphones.status !== "ok" ||
               microphones.data.some(
@@ -125,8 +142,11 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
               capture.networkHoldUntil ??= now + AUTO_STOP_NETWORK_HOLD_MS;
             if (
               observation === "active" ||
-              (observation === "unknown" && micActive)
+              (observation === "unknown" && (macMeet || micActive))
             ) {
+              // A hidden browser tab can lose AX evidence and microphone
+              // ownership while its muted call continues. Only confirmed
+              // departure can end an established Meet capture.
               capture.missingSince = null;
               capture.missingObservation = null;
               if (observation === "active") capture.networkHoldUntil = null;

@@ -14,7 +14,10 @@ const mocks = vi.hoisted(() => ({
   remove: vi.fn(),
   open: vi.fn(),
   config: vi.fn(),
+  platform: vi.fn(),
 }));
+
+vi.mock("@tauri-apps/plugin-os", () => ({ platform: mocks.platform }));
 
 vi.mock("@anlg/plugin-detect", () => ({
   commands: {
@@ -90,6 +93,7 @@ function setup() {
 beforeEach(() => {
   vi.useFakeTimers();
   vi.resetAllMocks();
+  mocks.platform.mockReturnValue("macos");
   mocks.config.mockImplementation((key: string) => {
     if (key === "ignored_platforms") return [];
     return (
@@ -224,12 +228,13 @@ describe("automatic local meeting recording", () => {
   });
 
   it("preserves a muted listening call while far-end speech continues despite unreadable Accessibility", async () => {
+    snapshot([slack]);
     const { store, active, stop } = setup();
     await tick(0);
     active();
     snapshot([
       {
-        ...meet,
+        ...slack,
         activeCall: false,
         warnings: ["no uniquely scoped meeting AXWindow"],
       },
@@ -244,18 +249,77 @@ describe("automatic local meeting recording", () => {
     expect(mocks.open).toHaveBeenCalledOnce();
   });
 
+  it("keeps a quiet muted Meet recording across hidden-tab evidence loss until departure is confirmed", async () => {
+    const { active, stop } = setup();
+    await tick(0);
+    active();
+    snapshot([
+      {
+        ...meet,
+        platform: "unknown",
+        activeCall: false,
+        warnings: ["no uniquely scoped meeting AXWindow"],
+      },
+    ]);
+    await tick(90_000);
+    await tick(9 * 60_000);
+    expect(stop).not.toHaveBeenCalled();
+    expect(mocks.open).toHaveBeenCalledOnce();
+    snapshot([meet]);
+    await tick();
+    expect(mocks.open).toHaveBeenCalledOnce();
+    snapshot([{ ...meet, activeCall: false }]);
+    await tick(14_000);
+    expect(stop).not.toHaveBeenCalled();
+    await tick(4_000);
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it.each(["macos", "linux", "windows"])(
+    "treats a missing browser process as confirmed departure only on macOS: %s",
+    async (os) => {
+      mocks.platform.mockReturnValue(os);
+      const { active, stop } = setup();
+      await tick(0);
+      active();
+      snapshot([{ ...meet, pid: meet.pid + 1, activeCall: false }]);
+      await tick(14_000);
+      expect(stop).not.toHaveBeenCalled();
+      await tick(4_000);
+      if (os === "macos") expect(stop).toHaveBeenCalledOnce();
+      else {
+        expect(stop).not.toHaveBeenCalled();
+        await tick(90_000);
+        expect(stop).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
+  it("retains the Slack fallback stop when call evidence and microphone ownership remain unavailable", async () => {
+    snapshot([slack]);
+    const { active, stop } = setup();
+    await tick(0);
+    active();
+    snapshot([]);
+    await tick(58_000);
+    expect(stop).not.toHaveBeenCalled();
+    await tick(6_000);
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
   it("holds unknown call evidence during a network interruption and stops on reliable leave after reconnect", async () => {
     const online = vi
       .spyOn(window.navigator, "onLine", "get")
       .mockReturnValue(true);
     try {
+      snapshot([slack]);
       const { active, stop } = setup();
       await tick(0);
       active();
       online.mockReturnValue(false);
       window.dispatchEvent(new Event("offline"));
       snapshot([]);
-      mocks.microphones.mockResolvedValue({ status: "ok", data: [meet.app] });
+      mocks.microphones.mockResolvedValue({ status: "ok", data: [slack.app] });
       await tick(90_000);
       expect(stop).not.toHaveBeenCalled();
 
@@ -266,7 +330,7 @@ describe("automatic local meeting recording", () => {
       await tick(70_000);
       expect(stop).not.toHaveBeenCalled();
 
-      snapshot([{ ...meet, activeCall: false }]);
+      snapshot([{ ...slack, activeCall: false }]);
       await tick(14_000);
       expect(stop).not.toHaveBeenCalled();
       await tick(4_000);
