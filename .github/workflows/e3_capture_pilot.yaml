@@ -1,0 +1,86 @@
+name: E3 Meeting Capture Pilot
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/e3_capture_pilot.yaml
+      - .github/actions/install_desktop_deps/**
+      - .github/actions/pnpm_install/**
+      - .github/actions/rust_install/**
+      - apps/desktop/**
+      - apps/cli/**
+      - crates/**
+      - plugins/**
+      - packages/**
+      - Cargo.toml
+      - Cargo.lock
+      - pnpm-lock.yaml
+      - rust-toolchain.toml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e3-capture-pilot-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: github.repository == 'e3-solutions/anarlog'
+    runs-on: macos-26
+    timeout-minutes: 120
+    env:
+      TAURI_ENV_TARGET_TRIPLE: aarch64-apple-darwin
+      NODE_OPTIONS: --max-old-space-size=4096
+      VITE_API_URL: http://localhost:3001
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          lfs: true
+          submodules: recursive
+          persist-credentials: false
+      - uses: ./.github/actions/install_desktop_deps # zizmor: ignore[self-repository] -- Build helpers must match the checked-out candidate, including PR merge commits.
+        with:
+          target: macos
+      - uses: ./.github/actions/rust_install # zizmor: ignore[self-repository] -- Use the checked-out candidate's toolchain setup.
+        with:
+          platform: macos
+      - name: Cache native desktop build dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          prefix-key: e3-pilot-native
+          workspaces: . -> apps/desktop/src-tauri/target
+          cache-on-failure: true
+      - uses: ./.github/actions/pnpm_install # zizmor: ignore[self-repository] -- Use the checked-out candidate's workspace setup.
+      - run: echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
+      - run: pnpm -F ui build
+      - run: cargo test --locked -p storage
+      - run: cargo xtask prepare-binaries
+      - name: Build isolated pilot app without publishing or updater signing
+        run: >-
+          pnpm -F desktop tauri build
+          --target aarch64-apple-darwin
+          --config src-tauri/tauri.e3-pilot.json
+          --bundles app
+      - name: Verify and archive app
+        shell: bash
+        env:
+          BUILD_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          app="apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/E3 Meeting Capture Pilot.app"
+          test -d "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          mkdir -p pilot-artifact
+          ditto -c -k --sequesterRsrc --keepParent "$app" pilot-artifact/E3-Meeting-Capture-Pilot-arm64.zip
+          shasum -a 256 pilot-artifact/E3-Meeting-Capture-Pilot-arm64.zip > pilot-artifact/SHA256SUMS
+          printf 'Commit: %s\nTarget: aarch64-apple-darwin\nRequires: macOS 15 or later on Apple Silicon\nSigning: ad-hoc; not Apple-notarized\nAutomatic updates: disabled\n' "$BUILD_COMMIT" > pilot-artifact/BUILD.txt
+          printf '%s\n' 'Download the Actions artifact and unzip E3-Meeting-Capture-Pilot-arm64.zip. Move the app to Applications. This private pilot is ad-hoc signed and not notarized; macOS may require System Settings > Privacy & Security > Open Anyway. Enable meeting capture explicitly in app settings. See apps/desktop/E3_RELEASE.md at the recorded commit for setup and manual tests. Google account connectors require a separately configured API; this artifact does not provision a backend.' > pilot-artifact/INSTALL.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: e3-meeting-capture-pilot-arm64-${{ github.sha }}
+          path: pilot-artifact/
+          if-no-files-found: error
+          retention-days: 14

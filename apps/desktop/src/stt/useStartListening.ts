@@ -30,6 +30,7 @@ import { useShell } from "~/contexts/shell";
 import { normalizeAudioRetention } from "~/services/audio-retention";
 import { getSessionEvent } from "~/session/utils";
 import { getBaseLanguageDisplayName } from "~/settings/general/language";
+import { useSettingsReady } from "~/settings/queries";
 import { useConfigValue } from "~/shared/config";
 import { useTabs } from "~/store/zustand/tabs";
 import {
@@ -75,6 +76,7 @@ export function useStartListeningState(
   const spokenLanguages = useConfigValue("spoken_languages");
   const dictionaryTerms = useConfigValue("personalization_dictionary_terms");
   const microphoneDevice = useConfigValue("microphone_device");
+  const settingsReady = useSettingsReady();
   const retainAudio =
     normalizeAudioRetention(useConfigValue("audio_retention")) !== "none" ||
     requiresRetainedBatchAudio(conn?.provider, conn?.model);
@@ -360,5 +362,9 @@ export function useStartListeningState(
     stopMeetingChatTasks,
   ]);
 
-  return { connectionReady, startListening };
+  return {
+    connectionReady:
+      connectionReady || (automatic && !conn && retainAudio && settingsReady),
+    startListening,
+  };
 }

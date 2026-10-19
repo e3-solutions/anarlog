@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "E3 Meeting Capture Pilot",
+  "mainBinaryName": "e3-meeting-capture-pilot",
+  "identifier": "ai.e3group.meeting-capture-pilot",
+  "build": {
+    "runner": "cargo",
+    "features": ["direct-distribution", "disable-analytics"]
+  },
+  "bundle": {
+    "createUpdaterArtifacts": false,
+    "externalBin": [
+      "binaries/char-chrome-native-host",
+      "binaries/check-permissions",
+      "resources/cli/anarlog-cli"
+    ],
+    "macOS": {
+      "signingIdentity": "-"
+    }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["e3-meeting-capture-pilot"]
+      }
+    },
+    "updater": {
+      "active": false,
+      "endpoints": []
+    }
+  }
+}

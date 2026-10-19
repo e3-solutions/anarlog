@@ -21,6 +21,7 @@ describe("getScheme", () => {
   });
 
   it.each([
+    ["ai.e3group.meeting-capture-pilot", "e3-meeting-capture-pilot"],
     ["com.hyprnote.stable", "anarlog"],
     ["com.hyprnote.Hyprnote", "anarlog"],
     ["com.hyprnote.staging", "anarlog-staging"],

@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 pub const VAULT_CONFIG_FILENAME: &str = "global.json";
 const STAGING_BUNDLE_ID: &str = "com.hyprnote.staging";
 const NIGHTLY_BUNDLE_ID: &str = "com.hyprnote.nightly";
+const E3_PILOT_BUNDLE_ID: &str = "ai.e3group.meeting-capture-pilot";
 const RELEASE_APP_FOLDER: &str = "anarlog";
 const LEGACY_RELEASE_APP_FOLDER: &str = "hyprnote";
 
@@ -19,7 +20,12 @@ pub fn compute_default_base(bundle_id: &str) -> Option<PathBuf> {
 // This base holds settings, the store, and the vault config. Nightly keeps its
 // own; the desktop app maps only the database itself onto stable's folder.
 fn resolve_app_folder<'a>(data_dir: &Path, bundle_id: &'a str, is_debug: bool) -> &'a str {
-    if is_debug || matches!(bundle_id, STAGING_BUNDLE_ID | NIGHTLY_BUNDLE_ID) {
+    if is_debug
+        || matches!(
+            bundle_id,
+            STAGING_BUNDLE_ID | NIGHTLY_BUNDLE_ID | E3_PILOT_BUNDLE_ID
+        )
+    {
         bundle_id
     } else if has_app_data(&data_dir.join(LEGACY_RELEASE_APP_FOLDER))
         && !has_app_data(&data_dir.join(RELEASE_APP_FOLDER))
@@ -102,6 +108,19 @@ mod tests {
             resolve_app_folder(temp.path(), NIGHTLY_BUNDLE_ID, false),
             NIGHTLY_BUNDLE_ID
         );
+    }
+
+    #[test]
+    fn e3_pilot_never_reuses_existing_stable_data() {
+        let temp = tempdir().unwrap();
+        for folder in [LEGACY_RELEASE_APP_FOLDER, RELEASE_APP_FOLDER] {
+            std::fs::create_dir(temp.path().join(folder)).unwrap();
+            std::fs::write(temp.path().join(folder).join("app.db"), "stable data").unwrap();
+            assert_eq!(
+                resolve_app_folder(temp.path(), E3_PILOT_BUNDLE_ID, false),
+                E3_PILOT_BUNDLE_ID
+            );
+        }
     }
 
     #[test]

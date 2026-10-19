@@ -2,6 +2,7 @@ pub(crate) mod connect;
 pub(crate) mod disconnect;
 pub(crate) mod google_drive;
 pub(crate) mod google_drive_oauth;
+pub(crate) mod google_meet_presence;
 pub(crate) mod identity;
 pub(crate) mod status;
 pub(crate) mod webhook;
@@ -44,6 +45,10 @@ pub fn session_router(config: NangoConfig) -> Router {
             post(google_drive::prepare_export),
         )
         .route("/google-drive/export", post(google_drive::export_markdown))
+        .route(
+            "/google-meet/presence",
+            post(google_meet_presence::presence),
+        )
         .with_state(state)
 }
 

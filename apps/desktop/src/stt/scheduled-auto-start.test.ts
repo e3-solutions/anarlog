@@ -18,6 +18,7 @@ import type { Tab } from "~/store/zustand/tabs";
 const mocks = vi.hoisted(() => ({
   canStart: true,
   liveStatus: "inactive",
+  liveSessionId: null as string | null,
   getIgnoredEventSets: vi.fn(),
   getOrCreateSessionForEventId: vi.fn(),
   openNew: vi.fn(),
@@ -28,12 +29,26 @@ const mocks = vi.hoisted(() => ({
   subscribeTabs: vi.fn(),
   listMicUsingApplications: vi.fn(),
   listenDetectEvent: vi.fn(),
+  hasJoinedScheduledMeet: vi.fn(),
+  hasLocalScheduledMeet: vi.fn(),
+  resolveScheduledMeetConnection: vi.fn(),
   tabs: [] as Tab[],
 }));
 
 vi.mock("@anlg/plugin-detect", () => ({
   commands: { listMicUsingApplications: mocks.listMicUsingApplications },
   events: { detectEvent: { listen: mocks.listenDetectEvent } },
+}));
+
+vi.mock("~/auth", () => ({
+  useAuth: () => ({ getHeaders: () => ({ Authorization: "Bearer test" }) }),
+}));
+
+vi.mock("~/stt/scheduled-meet-presence", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./scheduled-meet-presence")>()),
+  hasJoinedScheduledMeet: mocks.hasJoinedScheduledMeet,
+  hasLocalScheduledMeet: mocks.hasLocalScheduledMeet,
+  resolveScheduledMeetConnection: mocks.resolveScheduledMeetConnection,
 }));
 
 vi.mock("@anlg/plugin-windows", () => ({
@@ -70,7 +85,7 @@ vi.mock("~/store/zustand/listener/instance", () => ({
   listenerStore: {
     getState: () => ({
       canStartLiveSession: () => mocks.canStart,
-      live: { status: mocks.liveStatus },
+      live: { status: mocks.liveStatus, sessionId: mocks.liveSessionId },
     }),
     subscribe: mocks.subscribeListener,
   },
@@ -287,6 +302,7 @@ describe("startScheduledMeeting", () => {
   beforeEach(() => {
     mocks.canStart = true;
     mocks.liveStatus = "inactive";
+    mocks.liveSessionId = null;
     mocks.getIgnoredEventSets.mockReset().mockResolvedValue({
       ignoredIds: new Set<string>(),
       ignoredSeriesIds: new Set<string>(),
@@ -308,7 +324,106 @@ describe("startScheduledMeeting", () => {
       .mockReset()
       .mockResolvedValue({ status: "ok", data: [] });
     mocks.listenDetectEvent.mockReset().mockResolvedValue(() => {});
+    mocks.hasJoinedScheduledMeet.mockReset().mockResolvedValue(true);
+    mocks.hasLocalScheduledMeet.mockReset().mockResolvedValue(true);
+    mocks.resolveScheduledMeetConnection.mockReset().mockResolvedValue({
+      connectionId: "meet-1",
+      email: "priyal@e3group.ai",
+    });
     mocks.tabs = [];
+  });
+
+  test("managed capture does not record from a non-Meet calendar link alone", async () => {
+    await expect(
+      startScheduledMeeting(
+        meeting("a", 0),
+        false,
+        null,
+        undefined,
+        undefined,
+        undefined,
+        true,
+      ),
+    ).resolves.toBe("ineligible");
+    expect(mocks.openNew).not.toHaveBeenCalled();
+  });
+
+  test("detected mode never restarts a calendar Meet after manual stop", async () => {
+    const meet = currentMeeting("a", {
+      meeting_link: "https://meet.google.com/abc-defg-hij",
+      ended_at: new Date(Date.now() + 30 * 60_000).toISOString(),
+      calendar_provider: "google",
+      calendar_enabled: true,
+      calendar_tracking_id: "priyal@e3group.ai",
+    });
+    mocks.executeMeeting.mockResolvedValue([meet]);
+    mocks.liveStatus = "active";
+    await expect(
+      startScheduledMeeting(
+        meet,
+        false,
+        null,
+        undefined,
+        undefined,
+        undefined,
+        true,
+      ),
+    ).resolves.toBe("ignored");
+    mocks.liveStatus = "inactive";
+    await expect(
+      startScheduledMeeting(
+        meet,
+        false,
+        null,
+        undefined,
+        undefined,
+        undefined,
+        true,
+      ),
+    ).resolves.toBe("ignored");
+    expect(mocks.getOrCreateSessionForEventId).not.toHaveBeenCalled();
+    expect(mocks.openNew).not.toHaveBeenCalled();
+    expect(mocks.hasJoinedScheduledMeet).not.toHaveBeenCalled();
+  });
+
+  test("detected mode preserves explicit validated Meet auto-join without arming capture", async () => {
+    const meet = currentMeeting("a", {
+      meeting_link: "https://meet.google.com/abc-defg-hij",
+      ended_at: new Date(Date.now() + 30 * 60_000).toISOString(),
+      calendar_provider: "google",
+      calendar_enabled: true,
+      calendar_tracking_id: "priyal@e3group.ai",
+    });
+    mocks.executeMeeting.mockResolvedValue([meet]);
+    await expect(
+      startScheduledMeeting(
+        meet,
+        true,
+        { Authorization: "Bearer test" },
+        undefined,
+        undefined,
+        undefined,
+        true,
+      ),
+    ).resolves.toBe("ignored");
+    expect(mocks.openUrl).toHaveBeenCalledWith(meet.meeting_link, null);
+    expect(mocks.getOrCreateSessionForEventId).not.toHaveBeenCalled();
+    expect(mocks.openNew).not.toHaveBeenCalled();
+    expect(mocks.hasJoinedScheduledMeet).not.toHaveBeenCalled();
+  });
+
+  test("scheduled Meet waits for a call on this device", async () => {
+    const meet = currentMeeting("a", {
+      meeting_link: "https://meet.google.com/abc-defg-hij",
+      ended_at: new Date(Date.now() + 30 * 60_000).toISOString(),
+      calendar_provider: "google",
+      calendar_enabled: true,
+      calendar_tracking_id: "priyal@e3group.ai",
+    });
+    mocks.executeMeeting.mockResolvedValue([meet]);
+    mocks.hasLocalScheduledMeet.mockResolvedValue(false);
+    await expect(startScheduledMeeting(meet, false)).resolves.toBe("waiting");
+    expect(mocks.openNew).not.toHaveBeenCalled();
   });
 
   test("opens the meeting link and arms the session when the meeting is due", async () => {
@@ -615,6 +730,101 @@ describe("startScheduledMeeting", () => {
 
     expect(mocks.getOrCreateSessionForEventId).toHaveBeenCalledWith("older");
     expect(mocks.openUrl).toHaveBeenCalledWith("https://zoom.us/j/older", null);
+    expect(mocks.openNew).toHaveBeenCalledTimes(1);
+  });
+
+  test("tries an older joined Meet while a newer overlapping Meet is absent", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const older = meeting("older", -60_000, {
+      meeting_link: "https://meet.google.com/old-code-room",
+      calendar_provider: "google",
+      calendar_enabled: 1,
+      calendar_tracking_id: "priyal@e3group.ai",
+    });
+    const newer = meeting("newer", 0, {
+      meeting_link: "https://meet.google.com/new-code-room",
+      calendar_provider: "google",
+      calendar_enabled: 1,
+      calendar_tracking_id: "priyal@e3group.ai",
+    });
+    mocks.executeMeeting.mockImplementation(async (_sql, params: string[]) => [
+      params[0] === "newer" ? newer : older,
+    ]);
+    mocks.hasJoinedScheduledMeet.mockImplementation(
+      async (row) => row.id === "older",
+    );
+    render(createElement(ScheduledMeetingAutoStart));
+    mocks.subscribeMeetings.mock.calls[0][2].onData([older, newer]);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(mocks.getOrCreateSessionForEventId).toHaveBeenCalledWith("older");
+    expect(mocks.getOrCreateSessionForEventId).not.toHaveBeenCalledWith(
+      "newer",
+    );
+    expect(mocks.openUrl).toHaveBeenCalledTimes(1);
+    expect(mocks.openUrl).toHaveBeenCalledWith(newer.meeting_link, null);
+    expect(mocks.openNew).toHaveBeenCalledTimes(1);
+  });
+
+  test("checks an older Meet when the newer presence request fails", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const older = meeting("older", -60_000, {
+      meeting_link: "https://meet.google.com/old-code-room",
+      calendar_provider: "google",
+      calendar_enabled: 1,
+      calendar_tracking_id: "priyal@e3group.ai",
+    });
+    const newer = meeting("newer", 0, {
+      meeting_link: "https://meet.google.com/new-code-room",
+      calendar_provider: "google",
+      calendar_enabled: 1,
+      calendar_tracking_id: "priyal@e3group.ai",
+    });
+    mocks.executeMeeting.mockImplementation(async (_sql, params: string[]) => [
+      params[0] === "newer" ? newer : older,
+    ]);
+    mocks.hasJoinedScheduledMeet.mockImplementation(async (row) => {
+      if (row.id === "newer") throw new Error("Meet API unavailable");
+      return true;
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      render(createElement(ScheduledMeetingAutoStart));
+      mocks.subscribeMeetings.mock.calls[0][2].onData([older, newer]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mocks.getOrCreateSessionForEventId).toHaveBeenCalledWith("older");
+      expect(mocks.openNew).toHaveBeenCalledTimes(1);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  test("keeps a Meet armed while another recording is active", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const scheduled = meeting("meet", 0, {
+      meeting_link: "https://meet.google.com/abc-defg-hij",
+      calendar_provider: "google",
+      calendar_enabled: 1,
+      calendar_tracking_id: "priyal@e3group.ai",
+    });
+    mocks.executeMeeting.mockResolvedValue([scheduled]);
+    mocks.liveStatus = "active";
+    mocks.liveSessionId = "other-session";
+    render(createElement(ScheduledMeetingAutoStart));
+    mocks.subscribeMeetings.mock.calls[0][2].onData([scheduled]);
+    expect(mocks.openNew).not.toHaveBeenCalled();
+
+    mocks.liveStatus = "inactive";
+    mocks.liveSessionId = null;
+    mocks.subscribeListener.mock.calls[0][0](
+      { live: { status: "inactive", sessionId: null } },
+      { live: { status: "active", sessionId: "other-session" } },
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
     expect(mocks.openNew).toHaveBeenCalledTimes(1);
   });
 
