@@ -3,6 +3,7 @@ import { useRef } from "react";
 import { commands as detectCommands } from "@anlg/plugin-detect";
 import { useMountEffect } from "@anlg/ui/hooks/use-mount-effect";
 
+import { AUTO_STOP_NETWORK_HOLD_MS } from "./auto-stop";
 import {
   AUTOMATIC_MEETING_POLL_MS,
   AUTOMATIC_MEETING_STOP_GRACE_MS,
@@ -36,7 +37,9 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
       startedAt: number;
       seenActive: boolean;
       missingSince: number | null;
+      missingObservation: "inactive" | "unknown" | null;
       lastAudibleAt: number;
+      networkHoldUntil: number | null;
     } | null = null;
     let suppressed: AutomaticMeeting | null = null;
     let retryAfter = 0;
@@ -123,14 +126,29 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
               microphones.data.some(
                 (app) => app.id === capture!.meeting.app.id,
               );
+            if (observation === "unknown" && !navigator.onLine)
+              capture.networkHoldUntil ??= now + AUTO_STOP_NETWORK_HOLD_MS;
             if (
               observation === "active" ||
               (observation === "unknown" && micActive)
             ) {
               capture.missingSince = null;
+              capture.missingObservation = null;
+              if (observation === "active") capture.networkHoldUntil = null;
               return;
             }
+            if (capture.missingObservation !== observation) {
+              capture.missingSince = now;
+              capture.missingObservation = observation;
+            }
             capture.missingSince ??= now;
+            if (observation === "unknown") {
+              if (
+                capture.networkHoldUntil !== null &&
+                now < capture.networkHoldUntil
+              )
+                return;
+            }
             if (
               observation === "unknown" &&
               now - capture.lastAudibleAt < AUTOMATIC_MEETING_UNKNOWN_GRACE_MS
@@ -184,7 +202,9 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
               startedAt: now,
               seenActive: true,
               missingSince: null,
+              missingObservation: null,
               lastAudibleAt: now,
+              networkHoldUntil: null,
             };
             ownedSession.current = live.sessionId;
           }
@@ -211,7 +231,9 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
             startedAt: Date.now(),
             seenActive: false,
             missingSince: null,
+            missingObservation: null,
             lastAudibleAt: Date.now(),
+            networkHoldUntil: null,
           };
           ownedSession.current = sessionId;
           store.getState().setTriggerAppIds([selected.app.id]);

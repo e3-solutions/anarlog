@@ -244,6 +244,38 @@ describe("automatic local meeting recording", () => {
     expect(mocks.open).toHaveBeenCalledOnce();
   });
 
+  it("holds unknown call evidence during a network interruption and stops on reliable leave after reconnect", async () => {
+    const online = vi
+      .spyOn(window.navigator, "onLine", "get")
+      .mockReturnValue(true);
+    try {
+      const { active, stop } = setup();
+      await tick(0);
+      active();
+      online.mockReturnValue(false);
+      window.dispatchEvent(new Event("offline"));
+      snapshot([]);
+      mocks.microphones.mockResolvedValue({ status: "ok", data: [meet.app] });
+      await tick(90_000);
+      expect(stop).not.toHaveBeenCalled();
+
+      online.mockReturnValue(true);
+      window.dispatchEvent(new Event("online"));
+      mocks.microphones.mockResolvedValue({ status: "ok", data: [] });
+      // Reconnection alone must not discard the interruption hold.
+      await tick(70_000);
+      expect(stop).not.toHaveBeenCalled();
+
+      snapshot([{ ...meet, activeCall: false }]);
+      await tick(14_000);
+      expect(stop).not.toHaveBeenCalled();
+      await tick(4_000);
+      expect(stop).toHaveBeenCalledOnce();
+    } finally {
+      online.mockRestore();
+    }
+  });
+
   it("does not restart a manually stopped call after unreadable local evidence", async () => {
     const { active, stop } = setup();
     await tick(0);

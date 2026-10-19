@@ -14,7 +14,7 @@ Review the final detection implementation for confirmation delays, transient-cal
 
 ## First-run setup
 
-1. Use macOS 15 or later. Install the pilot build matching Apple Silicon or Intel hardware. Do not substitute an upstream download: it does not contain these fork changes.
+1. Use macOS 15 or later on Apple Silicon. Install the isolated pilot build described below. Do not substitute an upstream download: it does not contain these fork changes.
 2. Launch the app once. Grant Microphone, Screen & System Audio Recording, and Accessibility permissions in macOS System Settings. Restart the app after granting permissions if detection does not become ready.
 3. Enable **Record detected meetings** and automatic stopping in General settings. Keep audio recordings enabled. The managed pilot policy below locks these values when installed.
 4. Configure the existing recording/transcription provider, or use the existing record-only mode where available. This milestone does not create provider credentials.
@@ -58,7 +58,7 @@ The repository currently has no published E3 release. Merging code does not crea
 
 For a local development build, install Node 22 or later, pnpm 11.1.1, Rust 1.94, and full Xcode with its Metal Toolchain. Command Line Tools alone are insufficient for native MLX dependencies. Run `pnpm install --frozen-lockfile`, then `pnpm dev:desktop` from the repository root. Local-first desktop development does not require production secrets; authenticated scheduled Meet verification still needs the API/integration configuration above.
 
-An installable pilot can be built from the base development configuration with updater artifacts disabled and unsigned output, then zipped for download. Keep a distinct pilot identifier and disabled updater so it cannot fetch an upstream binary. Verify the resulting `.app` launches and has the expected source revision before publishing a download. Unsigned builds require the user's explicit macOS Open approval. A signed/notarized pilot is preferable for a wider team rollout.
+The dedicated pilot workflow below builds with an isolated identifier, disabled updater, and ad-hoc signing. A signed/notarized pilot is preferable for a wider team rollout.
 
 Native compilation and packaging require the Rust/Xcode toolchains and sufficient disk space. Frontend tests alone do not verify a distributable build.
 
@@ -85,6 +85,6 @@ The isolated pilot can test local Slack and ad-hoc Meet capture without a calend
 
 ### Detection limits to verify before team rollout
 
-Automatic detection currently enables Meet and Slack only; other app microphone activity still does not prove an actual supported call. The shared inspection/controller can be extended with platform evidence later. Calls must have readable local Accessibility evidence to start. Allow about 2 seconds plus inspection time for detection. Confirmed local departure uses a 15-second grace period. Unreadable evidence combined with microphone release uses a conservative 60-second grace and recent far-end audio prevents stopping; notification/DND settings do not govern these checks. A brief evidence gap must not restart a manually stopped call.
+Automatic detection currently enables Meet and Slack only; other app microphone activity still does not prove an actual supported call. The shared inspection/controller can be extended with platform evidence later. Calls must have readable local Accessibility evidence to start. Allow about 2 seconds plus inspection time for detection. Confirmed local departure uses a 15-second grace period. Unreadable evidence combined with microphone release uses a conservative 60-second grace and recent far-end audio prevents stopping; Unknown call evidence during an offline interruption preserves an eight-minute reconnect hold; a confirmed departure still gets its full 15-second grace. Notification/DND settings do not govern these checks. A brief evidence gap must not restart a manually stopped call.
 
 Test switching browser tabs, minimizing the meeting window, muted listening, headset changes, and back-to-back calls carefully. If two calls switch within the same browser process without any observed departure, this version cannot reliably infer a new meeting boundary and may retain one session. Do not claim one session per actual call for that unverified case. Record the observed behavior before wider rollout. Original audio retention permits later session splitting, which is outside this milestone.
