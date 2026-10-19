@@ -244,7 +244,7 @@ describe("automatic local meeting recording", () => {
     expect(mocks.open).toHaveBeenCalledOnce();
   });
 
-  it("rearms a manually stopped call only after sustained empty local evidence", async () => {
+  it("does not restart a manually stopped call after unreadable local evidence", async () => {
     const { active, stop } = setup();
     await tick(0);
     active();
@@ -256,6 +256,11 @@ describe("automatic local meeting recording", () => {
     expect(mocks.open).toHaveBeenCalledOnce();
     snapshot([]);
     await tick(64_000);
+    snapshot([meet]);
+    await tick();
+    expect(mocks.open).toHaveBeenCalledOnce();
+    snapshot([{ ...meet, activeCall: false }]);
+    await tick();
     snapshot([meet]);
     await tick();
     expect(mocks.open).toHaveBeenCalledTimes(2);

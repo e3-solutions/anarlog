@@ -39,13 +39,11 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
       lastAudibleAt: number;
     } | null = null;
     let suppressed: AutomaticMeeting | null = null;
-    let suppressionEndedSince: number | null = null;
     let retryAfter = 0;
 
     reset.current = () => {
       capture = null;
       suppressed = null;
-      suppressionEndedSince = null;
       ownedSession.current = null;
     };
 
@@ -99,28 +97,13 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
         );
         const now = Date.now();
         if (suppressed) {
-          const observation = automaticMeetingObservation(
-            suppressed,
-            inspection.data,
-          );
-          const micReleased =
-            microphones.status === "ok" &&
-            !microphones.data.some((app) => app.id === suppressed!.app.id);
-          if (observation === "inactive") {
+          if (
+            automaticMeetingObservation(suppressed, inspection.data) ===
+            "inactive"
+          ) {
             suppressed = null;
-            suppressionEndedSince = null;
-          } else if (observation === "unknown" && micReleased) {
-            suppressionEndedSince ??= now;
-            if (
-              now - suppressionEndedSince >=
-              AUTOMATIC_MEETING_UNKNOWN_GRACE_MS
-            ) {
-              suppressed = null;
-              suppressionEndedSince = null;
-            } else if (!selected || selected.key === suppressed.key) return;
-          } else {
-            suppressionEndedSince = null;
-            if (!selected || selected.key === suppressed.key) return;
+          } else if (!selected || selected.key === suppressed.key) {
+            return;
           }
         }
 
