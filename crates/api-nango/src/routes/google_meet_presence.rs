@@ -602,11 +602,7 @@ mod tests {
     async fn missing_userinfo_email_fails_closed() {
         let (server, app) = setup(true).await;
         mock_person(&server, person()).await;
-        mock_userinfo(
-            &server,
-            json!({"name":"E3 employee"}),
-        )
-        .await;
+        mock_userinfo(&server, json!({"name":"E3 employee"})).await;
         let (status, value) = post(app, "abc-defg-hij").await;
         assert_eq!(status, StatusCode::BAD_GATEWAY);
         assert!(value.get("present").is_none());
