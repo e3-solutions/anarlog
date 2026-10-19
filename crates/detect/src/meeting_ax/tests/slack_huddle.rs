@@ -37,7 +37,10 @@ fn slack_recording_accepts_live_controls_without_relaxing_chat_addressing() {
             classify_bundle(bundle_id),
         );
         assert_eq!(platform, MeetingPlatform::Slack);
-        assert_eq!(classify_surface(bundle_id, &platform), MeetingSurface::Native);
+        assert_eq!(
+            classify_surface(bundle_id, &platform),
+            MeetingSurface::Native
+        );
         assert!(scoped_meeting_is_active(&platform, &nodes, true));
         assert!(!native_meeting_window_is_validated(&platform, &nodes));
         assert_eq!(slack_huddle_context(&nodes), None);
@@ -51,22 +54,38 @@ fn slack_recording_rejects_prejoin_disabled_hidden_and_cross_window_controls() {
         let mut incomplete = nodes.clone();
         incomplete.remove(missing);
         assert_eq!(slack_huddle_recording_label(&incomplete), None);
-        assert!(!scoped_meeting_is_active(&MeetingPlatform::Slack, &incomplete, true));
+        assert!(!scoped_meeting_is_active(
+            &MeetingPlatform::Slack,
+            &incomplete,
+            true
+        ));
     }
     for index in [2, 3] {
         let mut disabled = nodes.clone();
         disabled[index].enabled = Some(false);
         assert_eq!(slack_huddle_recording_label(&disabled), None);
-        assert!(!scoped_meeting_is_active(&MeetingPlatform::Slack, &disabled, true));
+        assert!(!scoped_meeting_is_active(
+            &MeetingPlatform::Slack,
+            &disabled,
+            true
+        ));
         let mut hidden = nodes.clone();
         hidden[index].bounds = None;
         assert_eq!(slack_huddle_recording_label(&hidden), None);
-        assert!(!scoped_meeting_is_active(&MeetingPlatform::Slack, &hidden, true));
+        assert!(!scoped_meeting_is_active(
+            &MeetingPlatform::Slack,
+            &hidden,
+            true
+        ));
     }
     let mut split = nodes.clone();
     split.insert(3, node(4, "AXWindow", "Another Slack window", None));
     assert_eq!(slack_huddle_recording_label(&split), None);
-    assert!(!scoped_meeting_is_active(&MeetingPlatform::Slack, &split, true));
+    assert!(!scoped_meeting_is_active(
+        &MeetingPlatform::Slack,
+        &split,
+        true
+    ));
     assert_eq!(slack_huddle_recording_label(&nodes[..1]), None);
 }
 
