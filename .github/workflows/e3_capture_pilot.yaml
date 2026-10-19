@@ -57,6 +57,7 @@ jobs:
       - run: echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
       - run: pnpm -F ui build
       - run: cargo test --locked -p storage
+      - run: cargo test --locked -p detect browser_activation
       - run: cargo xtask prepare-binaries
       - name: Build isolated pilot app without publishing or updater signing
         run: >-

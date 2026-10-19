@@ -1,6 +1,107 @@
 #[cfg(target_os = "macos")]
 use cidre::{arc, ax, cf, cg};
 
+#[cfg(any(test, target_os = "macos"))]
+use std::time::{Duration, Instant};
+
+#[cfg(any(test, target_os = "macos"))]
+#[derive(Clone, Copy)]
+struct BrowserAccessibilityRequest {
+    attempted_at: Instant,
+    succeeded: bool,
+}
+
+#[cfg(target_os = "macos")]
+type BrowserAccessibilityRequests =
+    std::sync::Mutex<std::collections::HashMap<i32, BrowserAccessibilityRequest>>;
+
+#[cfg(target_os = "macos")]
+fn browser_accessibility_requests() -> &'static BrowserAccessibilityRequests {
+    static REQUESTS: std::sync::OnceLock<BrowserAccessibilityRequests> = std::sync::OnceLock::new();
+    REQUESTS.get_or_init(Default::default)
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn should_request_browser_accessibility(
+    bundle_id: &str,
+    previous: Option<BrowserAccessibilityRequest>,
+    now: Instant,
+) -> bool {
+    // Chromium publishes toolbar AX without necessarily publishing webpage AX.
+    // Safari and Gecko do not use Chromium's activation attribute.
+    let chromium = matches!(
+        bundle_id,
+        "com.google.Chrome"
+            | "com.google.Chrome.canary"
+            | "org.chromium.Chromium"
+            | "com.microsoft.edgemac"
+            | "com.microsoft.edgemac.Beta"
+            | "com.microsoft.edgemac.Canary"
+            | "com.microsoft.edgemac.Dev"
+            | "com.brave.Browser"
+            | "com.brave.Browser.beta"
+            | "com.brave.Browser.nightly"
+            | "com.brave.Browser.origin"
+            | "com.vivaldi.Vivaldi"
+            | "com.operasoftware.Opera"
+            | "com.operasoftware.OperaDeveloper"
+            | "com.operasoftware.OperaGX"
+            | "com.operasoftware.OperaNext"
+            | "company.thebrowser.Browser"
+            | "company.thebrowser.dia"
+            | "com.browseros.BrowserOS"
+            | "ai.perplexity.comet"
+            | "net.imput.helium"
+    );
+    chromium
+        && previous.is_none_or(|request| {
+            !request.succeeded
+                && now.saturating_duration_since(request.attempted_at) >= Duration::from_secs(30)
+        })
+}
+
+#[cfg(target_os = "macos")]
+fn request_browser_accessibility(app: &MeetingApp, pid: i32, element: &ax::UiElement) {
+    let now = Instant::now();
+    {
+        let mut requests = browser_accessibility_requests()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if !should_request_browser_accessibility(&app.id, requests.get(&pid).copied(), now) {
+            return;
+        }
+        // Reserve before IPC: concurrent inspections must not keep resetting
+        // Chromium's two-second activation debounce. Never hold the lock over IPC.
+        requests.insert(
+            pid,
+            BrowserAccessibilityRequest {
+                attempted_at: now,
+                succeeded: false,
+            },
+        );
+    }
+    // Chromium's application handler enables full renderer AX asynchronously.
+    // The next normal inspection observes it; no sleep or browser navigation.
+    // https://chromium.googlesource.com/chromium/src/+/main/chrome/browser/chrome_browser_application_mac.mm
+    let attribute = cf::String::from_str("AXEnhancedUserInterface");
+    let attribute = ax::Attr::with_string(&attribute);
+    let result = if ax_bool_attr(element, attribute) == Some(true) {
+        Ok(())
+    } else {
+        ax_set_attr(element, attribute, cf::Boolean::value_true().as_type_ref())
+    };
+    let mut requests = browser_accessibility_requests()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if let Some(request) = requests.get_mut(&pid) {
+        request.succeeded = result.is_ok();
+    }
+    if let Err(status) = result {
+        // A failed optional activation never manufactures active-call evidence.
+        tracing::debug!(pid, status, "browser_accessibility_activation_failed");
+    }
+}
+
 #[cfg(target_os = "macos")]
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C-unwind" {
@@ -225,8 +326,12 @@ fn browser_meeting_root_from_snapshot(
 #[cfg(target_os = "macos")]
 pub fn inspect_meeting_accessibility() -> Vec<MeetingAccessibilityInspection> {
     let accessibility_trusted = macos_accessibility_client::accessibility::application_is_trusted();
-    running_meeting_apps()
-        .into_iter()
+    let apps = running_meeting_apps();
+    browser_accessibility_requests()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .retain(|pid, _| apps.iter().any(|(_, running_pid)| running_pid == pid));
+    apps.into_iter()
         .map(|(app, pid)| inspect_app(app, pid, accessibility_trusted))
         .collect()
 }
@@ -1833,6 +1938,7 @@ fn inspect_app(
     if accessibility_trusted {
         let ax_app = ax::UiElement::with_app_pid(pid);
         let _ = ax_app.set_messaging_timeout_secs(0.6);
+        request_browser_accessibility(&app, pid, &ax_app);
         if bundle_platform == MeetingPlatform::Slack {
             let mut roots = collect_slack_huddle_roots(&ax_app, &mut warnings);
             match roots.len() {

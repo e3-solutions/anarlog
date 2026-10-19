@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useRef } from "react";
 
 import { beginCloudsyncActivity } from "@anlg/plugin-db";
@@ -187,6 +188,7 @@ export function getPostCaptureAction(
 }
 
 export function useCaptureLifecycle(sessionId: string) {
+  const queryClient = useQueryClient();
   const session = useSession(sessionId);
   const auth = useAuth();
   const authRef = useRef(auth);
@@ -1264,6 +1266,9 @@ export function useCaptureLifecycle(sessionId: string) {
         details: Parameters<OnStoppedCallback>[1],
         requestRecoveryOnFailure: boolean,
       ) => {
+        void queryClient.invalidateQueries({
+          queryKey: ["audio", sessionId],
+        });
         try {
           await finalizeStoppedInner(details, requestRecoveryOnFailure);
         } catch (error) {
@@ -1275,6 +1280,9 @@ export function useCaptureLifecycle(sessionId: string) {
           }
           throw error;
         } finally {
+          void queryClient.invalidateQueries({
+            queryKey: ["audio", sessionId],
+          });
           if (!transcriptPersistence.hasPendingFailure())
             transcriptPersistence.dispose();
           updateBatchTranscriptionPending(false);
@@ -1512,6 +1520,7 @@ export function useCaptureLifecycle(sessionId: string) {
       conn?.model,
       conn?.provider,
       participantHumanIds,
+      queryClient,
       rememberSpeakers,
       session?.raw_md,
       session?.user_id,

@@ -75,6 +75,56 @@ mod inspection;
 mod message_parsing;
 mod slack_huddle;
 
+#[test]
+fn browser_activation_excludes_non_chromium_and_native_apps() {
+    let now = Instant::now();
+    for browser in [
+        "com.google.Chrome",
+        "com.microsoft.edgemac",
+        "com.brave.Browser",
+    ] {
+        assert!(should_request_browser_accessibility(browser, None, now));
+    }
+    for other in [
+        "com.apple.Safari",
+        "org.mozilla.firefox",
+        "app.zen-browser.zen",
+        "com.sigmaos.sigmaos.macos",
+        "com.tinyspeck.slackmacgap",
+        "unknown",
+    ] {
+        assert!(!should_request_browser_accessibility(other, None, now));
+    }
+}
+
+#[test]
+fn browser_activation_does_not_restart_debounce_and_can_recover_failed_requests() {
+    let now = Instant::now();
+    let failed = BrowserAccessibilityRequest {
+        attempted_at: now,
+        succeeded: false,
+    };
+    assert!(!should_request_browser_accessibility(
+        "com.google.Chrome",
+        Some(failed),
+        now + Duration::from_secs(2),
+    ));
+    assert!(should_request_browser_accessibility(
+        "com.google.Chrome",
+        Some(failed),
+        now + Duration::from_secs(30),
+    ));
+    let succeeded = BrowserAccessibilityRequest {
+        succeeded: true,
+        ..failed
+    };
+    assert!(!should_request_browser_accessibility(
+        "com.google.Chrome",
+        Some(succeeded),
+        now + Duration::from_secs(3600),
+    ));
+}
+
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 #[test]
 fn inspect_meeting_accessibility_is_empty_without_ax_backend() {
