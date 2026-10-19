@@ -53,6 +53,7 @@ jobs:
           prefix-key: e3-pilot-native
           workspaces: . -> apps/desktop/src-tauri/target
           cache-on-failure: true
+          cache-workspace-crates: true
       - uses: ./.github/actions/pnpm_install # zizmor: ignore[self-repository] -- Use the checked-out candidate's workspace setup.
       - run: echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
       - run: pnpm -F ui build
@@ -60,6 +61,8 @@ jobs:
       - run: cargo test --locked -p detect browser_activation
       - run: cargo xtask prepare-binaries
       - name: Build isolated pilot app without publishing or updater signing
+        env:
+          CARGO_PROFILE_RELEASE_OPT_LEVEL: "1"
         run: >-
           pnpm -F desktop tauri build
           --target aarch64-apple-darwin
@@ -77,7 +80,7 @@ jobs:
           mkdir -p pilot-artifact
           ditto -c -k --sequesterRsrc --keepParent "$app" pilot-artifact/E3-Meeting-Capture-Pilot-arm64.zip
           shasum -a 256 pilot-artifact/E3-Meeting-Capture-Pilot-arm64.zip > pilot-artifact/SHA256SUMS
-          printf 'Commit: %s\nTarget: aarch64-apple-darwin\nRequires: macOS 15 or later on Apple Silicon\nSigning: ad-hoc; not Apple-notarized\nAutomatic updates: disabled\n' "$BUILD_COMMIT" > pilot-artifact/BUILD.txt
+          printf 'Commit: %s\nTarget: aarch64-apple-darwin\nRequires: macOS 15 or later on Apple Silicon\nSigning: ad-hoc; not Apple-notarized\nRust optimization: level 1 for pilot iteration\nAutomatic updates: disabled\n' "$BUILD_COMMIT" > pilot-artifact/BUILD.txt
           printf '%s\n' 'Download the Actions artifact and unzip E3-Meeting-Capture-Pilot-arm64.zip. Move the app to Applications. This private pilot is ad-hoc signed and not notarized; macOS may require System Settings > Privacy & Security > Open Anyway. Enable meeting capture explicitly in app settings. See apps/desktop/E3_RELEASE.md at the recorded commit for setup and manual tests. Google account connectors require a separately configured API; this artifact does not provision a backend.' > pilot-artifact/INSTALL.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

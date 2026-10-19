@@ -62,6 +62,8 @@ The dedicated pilot workflow below builds with an isolated identifier, disabled 
 
 The isolated pilot disables native analytics at compile time and uses a localhost API URL; it requires no production telemetry key or backend for local capture.
 
+The pilot uses Rust release optimization level 1 to shorten native build iteration while preserving release checks. Production release profiles are unchanged; measure performance separately before a wider rollout.
+
 Native compilation and packaging require the Rust/Xcode toolchains and sufficient disk space. Frontend tests alone do not verify a distributable build.
 
 ## Signed E3 distribution
