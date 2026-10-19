@@ -1,5 +1,75 @@
 use super::*;
 
+fn current_slack_huddle_window() -> Vec<AxNode> {
+    let bounds = Some(AxRect {
+        x: 10.0,
+        y: 10.0,
+        width: 30.0,
+        height: 30.0,
+    });
+    vec![
+        node(
+            0,
+            "AXWindow",
+            "capture-pilot-test-priyal - E3 group - Slack",
+            None,
+        ),
+        node(1, "AXToolbar", "Huddles actions", None),
+        node(2, "AXButton", "Unmute microphone", bounds.clone()),
+        node(3, "AXButton", "Leave Huddle", bounds),
+    ]
+}
+
+#[test]
+fn slack_recording_accepts_live_controls_without_relaxing_chat_addressing() {
+    let mut nodes = current_slack_huddle_window();
+    for microphone in ["Unmute microphone", "Mute microphone"] {
+        nodes[2].title = Some(microphone.to_string());
+        assert_eq!(
+            slack_huddle_recording_label(&nodes),
+            Some("Slack huddle".to_string())
+        );
+        let bundle_id = "com.tinyspeck.slackmacgap";
+        let platform = classify_platform(
+            bundle_id,
+            Some("Slack huddle"),
+            &nodes,
+            classify_bundle(bundle_id),
+        );
+        assert_eq!(platform, MeetingPlatform::Slack);
+        assert_eq!(classify_surface(bundle_id, &platform), MeetingSurface::Native);
+        assert!(scoped_meeting_is_active(&platform, &nodes, true));
+        assert!(!native_meeting_window_is_validated(&platform, &nodes));
+        assert_eq!(slack_huddle_context(&nodes), None);
+    }
+}
+
+#[test]
+fn slack_recording_rejects_prejoin_disabled_hidden_and_cross_window_controls() {
+    let nodes = current_slack_huddle_window();
+    for missing in [1, 2, 3] {
+        let mut incomplete = nodes.clone();
+        incomplete.remove(missing);
+        assert_eq!(slack_huddle_recording_label(&incomplete), None);
+        assert!(!scoped_meeting_is_active(&MeetingPlatform::Slack, &incomplete, true));
+    }
+    for index in [2, 3] {
+        let mut disabled = nodes.clone();
+        disabled[index].enabled = Some(false);
+        assert_eq!(slack_huddle_recording_label(&disabled), None);
+        assert!(!scoped_meeting_is_active(&MeetingPlatform::Slack, &disabled, true));
+        let mut hidden = nodes.clone();
+        hidden[index].bounds = None;
+        assert_eq!(slack_huddle_recording_label(&hidden), None);
+        assert!(!scoped_meeting_is_active(&MeetingPlatform::Slack, &hidden, true));
+    }
+    let mut split = nodes.clone();
+    split.insert(3, node(4, "AXWindow", "Another Slack window", None));
+    assert_eq!(slack_huddle_recording_label(&split), None);
+    assert!(!scoped_meeting_is_active(&MeetingPlatform::Slack, &split, true));
+    assert_eq!(slack_huddle_recording_label(&nodes[..1]), None);
+}
+
 #[test]
 fn test_slack_huddle_requires_huddle_label_and_enabled_leave_control() {
     let mut composer = node(2, "AXTextArea", "Message to test", None);

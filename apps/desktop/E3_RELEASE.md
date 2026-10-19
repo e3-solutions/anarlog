@@ -38,6 +38,8 @@ Run two short calls per platform with a second person, using a headset for at le
 | Meet prejoin screen or Slack without a Huddle | No recording. |
 | Join scheduled Meet on this Mac | One local-detection recording starts; calendar automation does not arm a second capture. |
 | Start an ad hoc Meet or Huddle | Recording starts without any calendar event. |
+| Keep a second Meet home/prejoin window open while joining one call | The single joined call records; inactive provider pages do not make it ambiguous. |
+| Slack shows a channel-named Huddle window without “Huddle in …” | Its live Huddle controls start recording, including while muted; chat addressing stays separately validated. |
 | Join muted, then unmute | Capture starts from confirmed attendance and remains one recording. |
 | Mute during a call | Recording continues. |
 | Leave the call | Recording stops after the implementation's confirmation period; file remains playable. |
@@ -51,6 +53,8 @@ Run two short calls per platform with a second person, using a headset for at le
 | Sleep during capture | Capture stops/finalizes safely; retained audio can be opened. |
 
 Record start/stop delay, missed calls, duplicated sessions, and audio completeness against the number of supported calls actually attempted. Mocked tests do not establish real Slack/Meet Accessibility compatibility or audio capture quality.
+
+After replacing this ad-hoc signed pilot, verify Microphone, System audio, and Accessibility inside the app. macOS can retain enabled entries for an older binary. If the app still reports a missing grant, remove and re-add the current application in the corresponding System Settings list and use **Quit & Reopen** when prompted. Keep the pilot under **System Audio Recording Only**; full screen recording is unnecessary for this milestone.
 
 ## Local development and installable pilot
 

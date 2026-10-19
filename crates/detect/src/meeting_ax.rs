@@ -172,7 +172,7 @@ use node::{
     node_labels, node_needs_bounds, nodes_show_remote_screen_share, searchable_node_text,
     teams_has_active_call_evidence,
 };
-#[cfg(any(test, target_os = "linux", target_os = "windows"))]
+#[cfg(any(test, target_os = "macos", target_os = "linux", target_os = "windows"))]
 use platform::is_browser_active_call_control;
 #[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(unused_imports))]
 #[cfg(any(test, target_os = "macos", target_os = "linux", target_os = "windows"))]
@@ -223,6 +223,30 @@ fn unique_scope_for_search(count: usize, complete: bool) -> UniqueMatch {
         unique_scope_for_count(count)
     } else {
         UniqueMatch::Ambiguous
+    }
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn browser_inspection_root_match(
+    roots: &[BrowserMeetingRoot],
+    has_unscoped_meeting_window: bool,
+) -> UniqueMatch {
+    if has_unscoped_meeting_window {
+        return UniqueMatch::Ambiguous;
+    }
+    // Detection needs the one joined call, not uniqueness among every open
+    // provider page. Keep chat/mutation scoping's stricter selection unchanged.
+    let mut active = roots.iter().enumerate().filter(|(_, root)| {
+        root.nodes
+            .iter()
+            .any(|node| is_browser_active_call_control(&root.platform, node))
+    });
+    match (active.next(), active.next()) {
+        (Some((index, _)), None) => UniqueMatch::One(index),
+        (Some(_), Some(_)) => UniqueMatch::Ambiguous,
+        // A single ended/prejoin page still supplies inactive evidence. Several
+        // inactive pages or an incomplete scope must never manufacture a leave.
+        (None, _) => unique_scope_for_count(roots.len()),
     }
 }
 
@@ -1438,6 +1462,33 @@ fn collect_slack_huddle_roots(
 }
 
 #[cfg(target_os = "macos")]
+fn collect_slack_huddle_inspection_roots(
+    ax_app: &ax::UiElement,
+    warnings: &mut Vec<String>,
+) -> Vec<NativeMeetingRoot> {
+    let mut windows = Vec::new();
+    let mut visited = 0;
+    if !collect_window_elements(ax_app, 0, &mut visited, &mut windows) {
+        warnings.push("AX window discovery was incomplete; no Slack Huddle was scoped".to_string());
+        return Vec::new();
+    }
+    windows
+        .into_iter()
+        .filter_map(|element| {
+            let mut nodes = Vec::new();
+            if !collect_nodes(&element, 0, &mut nodes, warnings) {
+                return None;
+            }
+            let window_title = slack_huddle_recording_label(&nodes)?;
+            Some(NativeMeetingRoot {
+                window_title: Some(window_title),
+                nodes,
+            })
+        })
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
 fn collect_native_meeting_roots(
     ax_app: &ax::UiElement,
     platform: &MeetingPlatform,
@@ -1539,7 +1590,9 @@ fn scoped_meeting_is_active(
     nodes: &[AxNode],
     native_scope: bool,
 ) -> bool {
-    if native_scope {
+    if native_scope && *platform == MeetingPlatform::Slack {
+        slack_huddle_recording_label(nodes).is_some()
+    } else if native_scope {
         native_meeting_window_is_validated(platform, nodes)
     } else {
         nodes
@@ -1940,14 +1993,14 @@ fn inspect_app(
         let _ = ax_app.set_messaging_timeout_secs(0.6);
         request_browser_accessibility(&app, pid, &ax_app);
         if bundle_platform == MeetingPlatform::Slack {
-            let mut roots = collect_slack_huddle_roots(&ax_app, &mut warnings);
+            let mut roots = collect_slack_huddle_inspection_roots(&ax_app, &mut warnings);
             match roots.len() {
                 0 => warnings.push(
                     "Slack is running without a uniquely validated active Huddle".to_string(),
                 ),
                 1 => {
                     let root = roots.remove(0);
-                    window_title = Some(root.label);
+                    window_title = root.window_title;
                     nodes = root.nodes;
                     native_scope = true;
                 }
@@ -1958,11 +2011,7 @@ fn inspect_app(
         } else if is_browser_bundle(&app.id) {
             let (mut roots, has_unscoped_meeting_window) =
                 collect_browser_meeting_roots(&ax_app, &mut warnings);
-            let root_match = if has_unscoped_meeting_window {
-                UniqueMatch::Ambiguous
-            } else {
-                unique_scope_for_count(roots.len())
-            };
+            let root_match = browser_inspection_root_match(&roots, has_unscoped_meeting_window);
             match root_match {
                 UniqueMatch::Missing => warnings.push(
                     "browser inspection found no uniquely scoped meeting AXWindow and active AXWebArea"
@@ -2332,6 +2381,40 @@ fn slack_huddle_context(nodes: &[AxNode]) -> Option<(String, String)> {
     }
 
     None
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn slack_huddle_recording_label(nodes: &[AxNode]) -> Option<String> {
+    if let Some((label, _)) = slack_huddle_context(nodes) {
+        return Some(label);
+    }
+    // Recording needs live-call evidence, not the channel identity required
+    // for safely addressing a chat composer. The caller scopes one Slack window.
+    if nodes
+        .iter()
+        .filter(|node| node.role.as_deref() == Some("AXWindow"))
+        .count()
+        != 1
+    {
+        return None;
+    }
+    let has_toolbar = nodes.iter().any(|node| {
+        node.role.as_deref() == Some("AXToolbar")
+            && node.enabled != Some(false)
+            && node_labels(node).any(|label| label.trim().eq_ignore_ascii_case("huddles actions"))
+    });
+    let live_button = |label: &str| {
+        nodes.iter().any(|node| {
+            node.role.as_deref() == Some("AXButton")
+                && node.enabled == Some(true)
+                && node_has_positive_bounds(node)
+                && node_labels(node).any(|value| value.trim().eq_ignore_ascii_case(label))
+        })
+    };
+    (has_toolbar
+        && live_button("leave huddle")
+        && (live_button("mute microphone") || live_button("unmute microphone")))
+    .then(|| "Slack huddle".to_string())
 }
 
 #[cfg(any(test, target_os = "macos", target_os = "linux", target_os = "windows"))]

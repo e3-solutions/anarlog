@@ -1,5 +1,83 @@
 use super::*;
 
+fn meet_inspection_root(joined: bool) -> BrowserMeetingRoot {
+    BrowserMeetingRoot {
+        platform: MeetingPlatform::GoogleMeet,
+        window_title: Some("Google Meet".to_string()),
+        web_area_url: Some("https://meet.google.com/abc-defg-hij".to_string()),
+        nodes: if joined {
+            vec![fixture_node(0, "AXButton", "Leave call", &[0])]
+        } else {
+            vec![fixture_node(0, "AXButton", "Join now", &[0])]
+        },
+    }
+}
+
+#[test]
+fn browser_inspection_prefers_one_joined_call_over_home_and_prejoin_pages() {
+    for roots in [
+        vec![meet_inspection_root(false), meet_inspection_root(true)],
+        vec![meet_inspection_root(true), meet_inspection_root(false)],
+    ] {
+        let UniqueMatch::One(index) = browser_inspection_root_match(&roots, false) else {
+            panic!("one joined Meet must remain detectable beside an inactive provider page");
+        };
+        assert!(scoped_meeting_is_active(
+            &roots[index].platform,
+            &roots[index].nodes,
+            false,
+        ));
+    }
+}
+
+#[test]
+fn browser_inspection_keeps_multiple_joined_calls_or_unscoped_windows_ambiguous() {
+    assert_eq!(
+        browser_inspection_root_match(
+            &[meet_inspection_root(true), meet_inspection_root(true)],
+            false,
+        ),
+        UniqueMatch::Ambiguous,
+    );
+    assert_eq!(
+        browser_inspection_root_match(&[meet_inspection_root(true)], true),
+        UniqueMatch::Ambiguous,
+    );
+}
+
+#[test]
+fn browser_inspection_counts_browser_specific_leave_controls_as_competing_calls() {
+    let teams = BrowserMeetingRoot {
+        platform: MeetingPlatform::MicrosoftTeams,
+        window_title: Some("Microsoft Teams".to_string()),
+        web_area_url: Some("https://teams.microsoft.com/meet/123".to_string()),
+        nodes: vec![fixture_node(0, "AXButton", "Leave", &[0])],
+    };
+    assert_eq!(
+        browser_inspection_root_match(&[meet_inspection_root(true), teams], false),
+        UniqueMatch::Ambiguous,
+    );
+}
+
+#[test]
+fn browser_inspection_preserves_existing_inactive_and_missing_evidence() {
+    assert_eq!(
+        browser_inspection_root_match(&[], false),
+        UniqueMatch::Missing,
+    );
+    assert_eq!(
+        browser_inspection_root_match(&[meet_inspection_root(false)], false),
+        UniqueMatch::One(0),
+    );
+    assert_eq!(
+        browser_inspection_root_match(
+            &[meet_inspection_root(false), meet_inspection_root(false)],
+            false,
+        ),
+        UniqueMatch::Ambiguous,
+    );
+}
+
 #[test]
 fn test_bounds_are_only_requested_for_visibility_sensitive_nodes() {
     assert!(!node_needs_bounds(
