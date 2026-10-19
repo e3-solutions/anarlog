@@ -68,6 +68,7 @@ const {
   requestCaptureRecoveryMock,
   waitForSessionSearchIndexMock,
   useConfigValueMock,
+  useSettingsReadyMock,
   useSTTConnectionMock,
   isSupportedLanguagesLiveMock,
   leftSidebarExpanded,
@@ -132,6 +133,7 @@ const {
   requestCaptureRecoveryMock: vi.fn(),
   waitForSessionSearchIndexMock: vi.fn(),
   useConfigValueMock: vi.fn(),
+  useSettingsReadyMock: vi.fn(),
   useSTTConnectionMock: vi.fn(),
   isSupportedLanguagesLiveMock: vi.fn(),
   leftSidebarExpanded: { value: true },
@@ -333,6 +335,10 @@ vi.mock("~/session-sharing/editor-activity", () => ({
 
 vi.mock("~/shared/config", () => ({
   useConfigValue: useConfigValueMock,
+}));
+
+vi.mock("~/settings/queries", () => ({
+  useSettingsReady: useSettingsReadyMock,
 }));
 
 vi.mock("~/shared/completion-sound", () => ({
@@ -554,6 +560,7 @@ describe("getPostCaptureAction", () => {
 describe("useStartListening", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useSettingsReadyMock.mockReturnValue(true);
     getCaptureSnapshotMock.mockResolvedValue({
       status: "ok",
       data: { activeSessionId: null, finalizingSessionIds: [] },
@@ -1296,12 +1303,15 @@ describe("useStartListening", () => {
     expect(runBatchMock).not.toHaveBeenCalled();
   });
 
-  test("records without STT while offering an actionable transcription setup", async () => {
-    useSTTConnectionMock.mockReturnValue({ conn: null });
-    const { result } = renderHook(() => useStartListening("session-1"));
+  test("automatically records retained audio without STT while offering transcription setup", async () => {
+    useSTTConnectionMock.mockReturnValue({ conn: null, isReady: false });
+    const { result } = renderHook(() =>
+      useStartListeningState("session-1", { automatic: true }),
+    );
+    expect(result.current.connectionReady).toBe(true);
 
     await act(async () => {
-      await result.current();
+      await result.current.startListening();
     });
 
     expect(startMock).toHaveBeenCalledWith(
@@ -1309,6 +1319,7 @@ describe("useStartListening", () => {
         model: "",
         base_url: "",
         api_key: "",
+        retain_audio: true,
       }),
       expect.any(Object),
     );
@@ -1329,6 +1340,41 @@ describe("useStartListening", () => {
       state: { tab: "transcription" },
     });
   });
+
+  test.each([
+    { automatic: true, retain: "forever", settingsReady: true, ready: true },
+    { automatic: true, retain: "none", settingsReady: true, ready: false },
+    { automatic: true, retain: "forever", settingsReady: false, ready: false },
+    { automatic: false, retain: "forever", settingsReady: true, ready: false },
+  ])(
+    "provider-free automatic capture waits for safe retained audio: $automatic/$retain/$settingsReady",
+    ({ automatic, retain, settingsReady, ready }) => {
+      useSTTConnectionMock.mockReturnValue({ conn: null, isReady: false });
+      useSettingsReadyMock.mockReturnValue(settingsReady);
+      useConfigValueMock.mockImplementation((key: string) =>
+        key === "audio_retention" ? retain : undefined,
+      );
+      const { result } = renderHook(() =>
+        useStartListeningState("session-1", { automatic }),
+      );
+      expect(result.current.connectionReady).toBe(ready);
+    },
+  );
+
+  test.each([false, true])(
+    "preserves configured provider readiness for manual and automatic capture: %s",
+    (isReady) => {
+      const { conn } = useSTTConnectionMock();
+      useSTTConnectionMock.mockReturnValue({ conn, isReady });
+      const { result, rerender } = renderHook(
+        ({ automatic }) => useStartListeningState("session-1", { automatic }),
+        { initialProps: { automatic: false } },
+      );
+      expect(result.current.connectionReady).toBe(isReady);
+      rerender({ automatic: true });
+      expect(result.current.connectionReady).toBe(isReady);
+    },
+  );
 
   test("does not replace a capture marker while recovery blocks starting", async () => {
     canStartLiveSessionMock.mockReturnValue(false);
