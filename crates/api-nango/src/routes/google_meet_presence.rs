@@ -144,7 +144,11 @@ impl GoogleUserInfo {
         if self.verified_email != Some(true) {
             return Err(provider_error());
         }
-        let email = self.email.ok_or_else(provider_error)?.trim().to_ascii_lowercase();
+        let email = self
+            .email
+            .ok_or_else(provider_error)?
+            .trim()
+            .to_ascii_lowercase();
         if email.is_empty() || !email.contains('@') || email.contains(char::is_whitespace) {
             return Err(provider_error());
         }
@@ -230,7 +234,9 @@ async fn check_presence(
     .await?;
     let self_id = person.account_id()?;
     let userinfo: GoogleUserInfo = get(
-        &proxy.clone().base_url_override("https://www.googleapis.com"),
+        &proxy
+            .clone()
+            .base_url_override("https://www.googleapis.com"),
         "/oauth2/v1/userinfo?alt=json",
     )
     .await?;
@@ -465,7 +471,11 @@ mod tests {
     async fn matches_account_source_id_not_person_resource_name() {
         let (server, app) = setup(true).await;
         mock_person(&server, person()).await;
-        mock_userinfo(&server, json!({"email":"E3@example.com","verified_email":true})).await;
+        mock_userinfo(
+            &server,
+            json!({"email":"E3@example.com","verified_email":true}),
+        )
+        .await;
         mock_space(&server, true).await;
         mock_record(&server).await;
         Mock::given(method("GET"))
@@ -486,7 +496,11 @@ mod tests {
     async fn other_active_participant_does_not_count_as_self() {
         let (server, app) = setup(true).await;
         mock_person(&server, person()).await;
-        mock_userinfo(&server, json!({"email":"E3@example.com","verified_email":true})).await;
+        mock_userinfo(
+            &server,
+            json!({"email":"E3@example.com","verified_email":true}),
+        )
+        .await;
         mock_space(&server, true).await;
         mock_record(&server).await;
         Mock::given(method("GET"))
@@ -506,7 +520,11 @@ mod tests {
     async fn checks_next_page_before_reporting_absent() {
         let (server, app) = setup(true).await;
         mock_person(&server, person()).await;
-        mock_userinfo(&server, json!({"email":"E3@example.com","verified_email":true})).await;
+        mock_userinfo(
+            &server,
+            json!({"email":"E3@example.com","verified_email":true}),
+        )
+        .await;
         mock_space(&server, true).await;
         mock_record(&server).await;
         Mock::given(method("GET"))
@@ -537,7 +555,11 @@ mod tests {
     async fn no_active_conference_is_absent() {
         let (server, app) = setup(true).await;
         mock_person(&server, person()).await;
-        mock_userinfo(&server, json!({"email":"E3@example.com","verified_email":true})).await;
+        mock_userinfo(
+            &server,
+            json!({"email":"E3@example.com","verified_email":true}),
+        )
+        .await;
         mock_space(&server, false).await;
         let (status, value) = post(app, "abc-defg-hij").await;
         assert_eq!(status, StatusCode::OK);
@@ -549,7 +571,11 @@ mod tests {
     async fn google_denial_is_error_not_absence() {
         let (server, app) = setup(true).await;
         mock_person(&server, person()).await;
-        mock_userinfo(&server, json!({"email":"E3@example.com","verified_email":true})).await;
+        mock_userinfo(
+            &server,
+            json!({"email":"E3@example.com","verified_email":true}),
+        )
+        .await;
         Mock::given(method("GET"))
             .and(path("/proxy/v2/spaces/abc-defg-hij"))
             .respond_with(ResponseTemplate::new(403))
@@ -576,7 +602,11 @@ mod tests {
     async fn missing_userinfo_email_fails_closed() {
         let (server, app) = setup(true).await;
         mock_person(&server, person()).await;
-        mock_userinfo(&server, json!({"name":"E3 employee"})).await;
+        mock_userinfo(
+            &server,
+            json!({"name":"E3 employee"}),
+        )
+        .await;
         let (status, value) = post(app, "abc-defg-hij").await;
         assert_eq!(status, StatusCode::BAD_GATEWAY);
         assert!(value.get("present").is_none());
@@ -586,7 +616,11 @@ mod tests {
     async fn unverified_userinfo_email_fails_closed() {
         let (server, app) = setup(true).await;
         mock_person(&server, person()).await;
-        mock_userinfo(&server, json!({"email":"e3@example.com","verified_email":false})).await;
+        mock_userinfo(
+            &server,
+            json!({"email":"e3@example.com","verified_email":false}),
+        )
+        .await;
         let (status, value) = post(app, "abc-defg-hij").await;
         assert_eq!(status, StatusCode::BAD_GATEWAY);
         assert!(value.get("present").is_none());
@@ -596,7 +630,11 @@ mod tests {
     async fn malformed_google_response_is_error_not_absence() {
         let (server, app) = setup(true).await;
         mock_person(&server, person()).await;
-        mock_userinfo(&server, json!({"email":"E3@example.com","verified_email":true})).await;
+        mock_userinfo(
+            &server,
+            json!({"email":"E3@example.com","verified_email":true}),
+        )
+        .await;
         Mock::given(method("GET"))
             .and(path("/proxy/v2/spaces/abc-defg-hij"))
             .respond_with(
@@ -613,7 +651,11 @@ mod tests {
     async fn later_page_error_is_not_reported_as_absence() {
         let (server, app) = setup(true).await;
         mock_person(&server, person()).await;
-        mock_userinfo(&server, json!({"email":"E3@example.com","verified_email":true})).await;
+        mock_userinfo(
+            &server,
+            json!({"email":"E3@example.com","verified_email":true}),
+        )
+        .await;
         mock_space(&server, true).await;
         mock_record(&server).await;
         Mock::given(method("GET"))
