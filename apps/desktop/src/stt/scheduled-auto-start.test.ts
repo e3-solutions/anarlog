@@ -348,6 +348,70 @@ describe("startScheduledMeeting", () => {
     expect(mocks.openNew).not.toHaveBeenCalled();
   });
 
+  test("detected mode never restarts a calendar Meet after manual stop", async () => {
+    const meet = currentMeeting("a", {
+      meeting_link: "https://meet.google.com/abc-defg-hij",
+      ended_at: new Date(Date.now() + 30 * 60_000).toISOString(),
+      calendar_provider: "google",
+      calendar_enabled: true,
+      calendar_tracking_id: "priyal@e3group.ai",
+    });
+    mocks.executeMeeting.mockResolvedValue([meet]);
+    mocks.liveStatus = "active";
+    await expect(
+      startScheduledMeeting(
+        meet,
+        false,
+        null,
+        undefined,
+        undefined,
+        undefined,
+        true,
+      ),
+    ).resolves.toBe("ignored");
+    mocks.liveStatus = "inactive";
+    await expect(
+      startScheduledMeeting(
+        meet,
+        false,
+        null,
+        undefined,
+        undefined,
+        undefined,
+        true,
+      ),
+    ).resolves.toBe("ignored");
+    expect(mocks.getOrCreateSessionForEventId).not.toHaveBeenCalled();
+    expect(mocks.openNew).not.toHaveBeenCalled();
+    expect(mocks.hasJoinedScheduledMeet).not.toHaveBeenCalled();
+  });
+
+  test("detected mode preserves explicit validated Meet auto-join without arming capture", async () => {
+    const meet = currentMeeting("a", {
+      meeting_link: "https://meet.google.com/abc-defg-hij",
+      ended_at: new Date(Date.now() + 30 * 60_000).toISOString(),
+      calendar_provider: "google",
+      calendar_enabled: true,
+      calendar_tracking_id: "priyal@e3group.ai",
+    });
+    mocks.executeMeeting.mockResolvedValue([meet]);
+    await expect(
+      startScheduledMeeting(
+        meet,
+        true,
+        { Authorization: "Bearer test" },
+        undefined,
+        undefined,
+        undefined,
+        true,
+      ),
+    ).resolves.toBe("ignored");
+    expect(mocks.openUrl).toHaveBeenCalledWith(meet.meeting_link, null);
+    expect(mocks.getOrCreateSessionForEventId).not.toHaveBeenCalled();
+    expect(mocks.openNew).not.toHaveBeenCalled();
+    expect(mocks.hasJoinedScheduledMeet).not.toHaveBeenCalled();
+  });
+
   test("scheduled Meet waits for a call on this device", async () => {
     const meet = currentMeeting("a", {
       meeting_link: "https://meet.google.com/abc-defg-hij",

@@ -369,7 +369,34 @@ export async function startScheduledMeeting(
   const requiresMeetPresence =
     isGoogleMeetLink(row.meeting_link) ||
     isGoogleMeetLink(currentRow.meeting_link);
-  if (detectedMeetingsOnly && !requiresMeetPresence) return "ineligible";
+  // Local detection owns recording in this mode, including manual-stop
+  // suppression. A calendar tick must never become a second recording owner.
+  if (detectedMeetingsOnly) {
+    if (!requiresMeetPresence) return "ineligible";
+    if (
+      !googleMeetCode(currentRow.meeting_link) ||
+      googleMeetCode(row.meeting_link) !==
+        googleMeetCode(currentRow.meeting_link)
+    )
+      return "ineligible";
+    if (isIgnoredScheduledMeeting(currentRow, ignoredIds, ignoredSeriesIds))
+      return "ignored";
+    if (autoJoin) {
+      const connection = await resolveScheduledMeetConnection(
+        currentRow,
+        headers,
+      );
+      if (shouldCancel()) return "cancelled";
+      if (!connection) return "waiting";
+      const opened = await openerCommands.openUrl(
+        currentRow.meeting_link,
+        null,
+      );
+      if (shouldCancel()) return "cancelled";
+      if (opened.status === "ok") onAutoJoinOpened?.();
+    }
+    return "ignored";
+  }
   if (requiresMeetPresence) {
     if (!(await hasLocalScheduledMeet())) return "waiting";
     if (shouldCancel()) return "cancelled";
@@ -670,6 +697,7 @@ export function ScheduledMeetingAutoStart() {
 
           const startEventRevision = eventRevisions.get(candidate.id) ?? 0;
           let outcome: Awaited<ReturnType<typeof startScheduledMeeting>>;
+          const detectedModeAtStart = Boolean(detectedMeetingsOnlyRef.current);
           try {
             outcome = await startScheduledMeeting(
               candidate,
@@ -679,9 +707,13 @@ export function ScheduledMeetingAutoStart() {
                 !openedEventIds.has(candidate.id),
               getHeadersRef.current(),
               () => openedEventIds.add(candidate.id),
-              () => cancelled || !autoStartRef.current,
+              () =>
+                cancelled ||
+                !autoStartRef.current ||
+                detectedModeAtStart !==
+                  Boolean(detectedMeetingsOnlyRef.current),
               (sessionId) => armedSessionByEvent.set(candidate.id, sessionId),
-              Boolean(detectedMeetingsOnlyRef.current),
+              detectedModeAtStart,
             );
           } catch (error) {
             console.error(

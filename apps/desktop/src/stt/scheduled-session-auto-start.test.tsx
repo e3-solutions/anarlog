@@ -9,6 +9,7 @@ import { useAppLock } from "~/lock/store";
 const mocks = vi.hoisted(() => ({
   beginScheduledAutoStart: vi.fn(),
   canStart: true,
+  detectedMeetings: false,
   liveStatus: "inactive",
   readDueScheduledSessionMeeting: vi.fn(),
   hasJoinedScheduledMeet: vi.fn(),
@@ -59,6 +60,10 @@ vi.mock("~/store/zustand/tabs", () => ({
   },
 }));
 
+vi.mock("~/shared/config", () => ({
+  useConfigValue: () => mocks.detectedMeetings,
+}));
+
 vi.mock("~/auth", () => ({
   useAuth: () => ({ getHeaders: () => ({ Authorization: "Bearer test" }) }),
 }));
@@ -100,6 +105,7 @@ vi.mock("~/stt/useStartListening", () => ({
 
 beforeEach(() => {
   mocks.canStart = true;
+  mocks.detectedMeetings = false;
   mocks.liveStatus = "inactive";
   mocks.readDueScheduledSessionMeeting.mockReset().mockResolvedValue({
     id: "event-1",
@@ -416,5 +422,47 @@ test("does not capture a scheduled Meet joined only on another device", async ()
   await vi.waitFor(() =>
     expect(mocks.updateSessionTabState).toHaveBeenCalled(),
   );
+  expect(mocks.startListening).not.toHaveBeenCalled();
+});
+
+test("detected mode abandons an already armed calendar capture", () => {
+  mocks.connectionReady = false;
+  const view = render(<ScheduledSessionAutoStart sessionId="session-1" />);
+  mocks.detectedMeetings = true;
+  mocks.connectionReady = true;
+  view.rerender(<ScheduledSessionAutoStart sessionId="session-1" />);
+  expect(mocks.startListening).not.toHaveBeenCalled();
+  expect(mocks.updateSessionTabState).toHaveBeenCalledWith(tab, {
+    view: null,
+    autoStart: null,
+    scheduledAutoStart: null,
+  });
+});
+
+test("detected mode still starts detection-owned ad hoc capture", async () => {
+  mocks.detectedMeetings = true;
+  render(
+    <ScheduledSessionAutoStart
+      sessionId="session-1"
+      requiresCalendarEligibility={false}
+    />,
+  );
+  await vi.waitFor(() => expect(mocks.startListening).toHaveBeenCalledOnce());
+});
+
+test("enabling detected mode cancels an in-flight calendar eligibility check", async () => {
+  let resolveEligibility: (row: { id: string }) => void = () => {};
+  mocks.readDueScheduledSessionMeeting.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        resolveEligibility = resolve;
+      }),
+  );
+  const view = render(<ScheduledSessionAutoStart sessionId="session-1" />);
+  mocks.detectedMeetings = true;
+  view.rerender(<ScheduledSessionAutoStart sessionId="session-1" />);
+  await act(async () => {
+    resolveEligibility({ id: "event-1" });
+  });
   expect(mocks.startListening).not.toHaveBeenCalled();
 });

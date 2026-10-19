@@ -6,6 +6,7 @@ import { useAuth } from "~/auth";
 import { isLockedFlag } from "~/lock/flag";
 import { useAppLock } from "~/lock/store";
 import { useSession } from "~/session/queries";
+import { useConfigValue } from "~/shared/config";
 import { useLatestRef } from "~/shared/hooks/useLatestRef";
 import { type Tab, useTabs } from "~/store/zustand/tabs";
 import { useListener } from "~/stt/contexts";
@@ -29,6 +30,7 @@ export function ScheduledSessionAutoStart({
   requiresCalendarEligibility?: boolean;
   sessionId: string;
 }) {
+  const detectedMeetings = useConfigValue("auto_start_detected_meetings");
   const canStartLiveSession = useListener((state) =>
     state.canStartLiveSession(sessionId),
   );
@@ -41,7 +43,11 @@ export function ScheduledSessionAutoStart({
   );
   const locked = isLockedFlag(session?.locked) && !revealed;
 
-  if (recordingActive || (session && locked)) {
+  if (
+    recordingActive ||
+    (session && locked) ||
+    (requiresCalendarEligibility && detectedMeetings)
+  ) {
     return <AbandonedScheduledSessionAutoStart sessionId={sessionId} />;
   }
 
@@ -123,6 +129,9 @@ function StartScheduledSessionAutoStart({
   sessionId: string;
   startListening: () => Promise<void>;
 }) {
+  const detectedMeetingsRef = useLatestRef(
+    useConfigValue("auto_start_detected_meetings"),
+  );
   const auth = useAuth();
   const getHeadersRef = useLatestRef(auth.getHeaders);
   const startListeningRef = useLatestRef(startListening);
@@ -153,6 +162,7 @@ function StartScheduledSessionAutoStart({
         clearPendingAutoStart(sessionId);
         if (
           !eligible ||
+          (requiresCalendarEligibility && detectedMeetingsRef.current) ||
           (requiresCalendarEligibility &&
             isScheduledAutoStartInFlight(sessionId))
         ) {
