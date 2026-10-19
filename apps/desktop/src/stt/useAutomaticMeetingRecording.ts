@@ -20,11 +20,10 @@ import { useTabs } from "~/store/zustand/tabs";
 
 export function useAutomaticMeetingRecording(store: ListenerStore) {
   const enabled = useConfigValue("auto_start_detected_meetings");
-  const slack = useConfigValue("auto_start_slack_huddles");
   const ignored = useConfigValue("ignored_platforms");
   const autoStop = useConfigValue("auto_stop_meetings");
-  const policy = useRef({ enabled, slack, autoStop, ignored });
-  policy.current = { enabled, slack, autoStop, ignored };
+  const policy = useRef({ enabled, autoStop, ignored });
+  policy.current = { enabled, autoStop, ignored };
   const reset = useRef(() => {});
   const ownedSession = useRef<string | null>(null);
 
@@ -73,7 +72,7 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
 
     async function reconcile() {
       if (cancelled || checking) return;
-      if (!policy.current.enabled && !policy.current.slack) {
+      if (!policy.current.enabled) {
         reset.current();
         return;
       }
@@ -83,11 +82,7 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
           detectCommands.inspectMeetingAccessibility(),
           detectCommands.listMicUsingApplications(),
         ]);
-        if (
-          cancelled ||
-          (!policy.current.enabled && !policy.current.slack) ||
-          inspection.status !== "ok"
-        )
+        if (cancelled || !policy.current.enabled || inspection.status !== "ok")
           return;
         const selected = selectAutomaticMeeting(
           inspection.data.filter(
@@ -95,7 +90,7 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
           ),
           {
             googleMeet: policy.current.enabled,
-            slack: policy.current.enabled || policy.current.slack,
+            slack: policy.current.enabled,
           },
         );
         const now = Date.now();
@@ -218,7 +213,7 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
           const refreshed = await detectCommands.inspectMeetingAccessibility();
           if (
             cancelled ||
-            (!policy.current.enabled && !policy.current.slack) ||
+            !policy.current.enabled ||
             refreshed.status !== "ok" ||
             automaticMeetingObservation(selected, refreshed.data) !==
               "active" ||

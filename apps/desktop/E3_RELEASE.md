@@ -8,7 +8,7 @@ This milestone detects and records Google Meet and Slack Huddles on the local Ma
 
 For scheduled Google Meet automation, the existing API route verifies that the connected Google account joined the active conference. The desktop additionally requires a validated active Meet surface on this Mac before arming capture and again immediately before listening. A phone-only join therefore cannot trigger this scheduled desktop path. The local detected-meeting path also supports ad hoc Meet and does not require a calendar entry or remote account integration. It may start capture independently while a scheduled API request is pending; API unavailability does not disable valid ad hoc local evidence.
 
-When detected-meeting mode is enabled, non-Meet calendar links do not automatically start recordings. Their calling platforms require a future detection adapter. The legacy Slack setting remains readable for compatibility, while the general setting is the pilot control.
+When detected-meeting mode is enabled, non-Meet calendar links do not automatically start recordings. Their calling platforms require a future detection adapter. The single **Record detected meetings** control enables both supported platforms; turning it off disables both.
 
 Review the final detection implementation for confirmation delays, transient-call handling, rejoin behavior, and stop rules. An ambiguous or unavailable Accessibility observation must not be treated as a confirmed departure. Exact consecutive-call separation depends on the available call identity and should be verified in the pilot.
 

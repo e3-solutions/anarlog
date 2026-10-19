@@ -256,7 +256,6 @@ describe("ListenerProvider detect events", () => {
     useConfigValueMock.mockImplementation(
       (key: string) =>
         key !== "notification_disabled" &&
-        key !== "auto_start_slack_huddles" &&
         key !== "auto_start_detected_meetings",
     );
     getNearbyCalendarEventsMock.mockImplementation(readConfiguredNearbyEvents);

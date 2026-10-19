@@ -381,11 +381,7 @@ export const useHandleDetectEvents = (store: ListenerStore) => {
     detectEvents.detectEvent
       .listen(({ payload }) => {
         if (payload.type === "micDetected") {
-          if (
-            automaticMeetings.policy.current.enabled ||
-            automaticMeetings.policy.current.slack
-          )
-            return;
+          if (automaticMeetings.policy.current.enabled) return;
           const ignorableApps = getIgnorableApps(payload.apps);
           const appIds = ignorableApps.map((app) => app.id);
 

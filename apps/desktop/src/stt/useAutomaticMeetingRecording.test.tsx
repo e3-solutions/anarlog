@@ -310,7 +310,7 @@ describe("automatic local meeting recording", () => {
     expect(mocks.open).not.toHaveBeenCalled();
   });
 
-  it("supports the old Slack setting without enabling browser automatic capture", async () => {
+  it("does not enable either platform from an obsolete Slack setting", async () => {
     mocks.config.mockImplementation((key: string) => {
       if (key === "ignored_platforms") return [];
       return key === "auto_start_slack_huddles" || key === "auto_stop_meetings";
@@ -320,6 +320,6 @@ describe("automatic local meeting recording", () => {
     expect(mocks.open).not.toHaveBeenCalled();
     snapshot([slack]);
     await tick();
-    expect(mocks.open).toHaveBeenCalledOnce();
+    expect(mocks.open).not.toHaveBeenCalled();
   });
 });

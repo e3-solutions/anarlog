@@ -29,7 +29,6 @@ fn validate(bytes: &[u8]) -> Result<ManagedSettings, sqlx::Error> {
             }
             "intelligence_disabled" => value == &Value::Bool(true),
             "auto_start_scheduled_meetings"
-            | "auto_start_slack_huddles"
             | "auto_start_detected_meetings"
             | "auto_stop_meetings"
             | "autostart"
@@ -112,7 +111,7 @@ mod tests {
     #[test]
     fn secrets_and_unsafe_values_are_rejected() {
         assert!(validate(br#"{"schema_version":1,"settings":{"intelligence_disabled":true,"telemetry_consent":false}}"#).is_ok());
-        assert!(validate(br#"{"schema_version":1,"settings":{"autostart":true,"automatic_updates":true,"auto_start_scheduled_meetings":true,"auto_start_slack_huddles":true,"auto_start_detected_meetings":true,"auto_stop_meetings":true}}"#).is_ok());
+        assert!(validate(br#"{"schema_version":1,"settings":{"autostart":true,"automatic_updates":true,"auto_start_scheduled_meetings":true,"auto_start_detected_meetings":true,"auto_stop_meetings":true}}"#).is_ok());
         for text in [
             r#"{"schema_version":1,"settings":{"telemetry_consent":true}}"#,
             r#"{"schema_version":1,"settings":{"api_key":"secret"}}"#,
