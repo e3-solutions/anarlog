@@ -13,11 +13,13 @@ export type DesktopScheme =
   | "anarlog"
   | "anarlog-staging"
   | "anarlog-nightly"
+  | "e3-meeting-capture-pilot"
   | "anarlog-dev";
 
 export const getScheme = async (): Promise<DesktopScheme> => {
   const id = await getIdentifier();
   const schemes: Record<string, DesktopScheme> = {
+    "ai.e3group.meeting-capture-pilot": "e3-meeting-capture-pilot",
     "com.hyprnote.stable": "anarlog",
     "com.hyprnote.Hyprnote": "anarlog",
     "com.hyprnote.staging": "anarlog-staging",

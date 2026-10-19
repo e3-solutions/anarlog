@@ -1,7 +1,8 @@
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 
 import { useMountEffect } from "@anlg/ui/hooks/use-mount-effect";
 
+import { useAuth } from "~/auth";
 import { isLockedFlag } from "~/lock/flag";
 import { useAppLock } from "~/lock/store";
 import { useSession } from "~/session/queries";
@@ -14,6 +15,11 @@ import {
   finishScheduledAutoStart,
   isScheduledAutoStartInFlight,
 } from "~/stt/scheduled-auto-start-state";
+import {
+  hasJoinedScheduledMeet,
+  hasLocalScheduledMeet,
+  isGoogleMeetLink,
+} from "~/stt/scheduled-meet-presence";
 import { useStartListeningState } from "~/stt/useStartListening";
 
 export function ScheduledSessionAutoStart({
@@ -88,10 +94,13 @@ function ReadyScheduledSessionAutoStart({
   );
   const attemptedRef = useRef(false);
 
-  useMountEffect(() => {
-    const timeout = setTimeout(() => clearPendingAutoStart(sessionId), 30_000);
+  useEffect(() => {
+    const timeout = setTimeout(
+      () => clearPendingAutoStart(sessionId),
+      connectionReady && requiresCalendarEligibility ? 60_000 : 30_000,
+    );
     return () => clearTimeout(timeout);
-  });
+  }, [connectionReady, requiresCalendarEligibility, sessionId]);
 
   return connectionReady ? (
     <StartScheduledSessionAutoStart
@@ -114,6 +123,8 @@ function StartScheduledSessionAutoStart({
   sessionId: string;
   startListening: () => Promise<void>;
 }) {
+  const auth = useAuth();
+  const getHeadersRef = useLatestRef(auth.getHeaders);
   const startListeningRef = useLatestRef(startListening);
 
   useMountEffect(() => {
@@ -125,7 +136,15 @@ function StartScheduledSessionAutoStart({
     let captureStarted = false;
 
     const eligibility = requiresCalendarEligibility
-      ? readDueScheduledSessionMeeting(sessionId).then(Boolean)
+      ? readDueScheduledSessionMeeting(sessionId).then(async (row) => {
+          if (!row) return false;
+          if (!isGoogleMeetLink(row.meeting_link)) return true;
+          return (
+            (await hasLocalScheduledMeet()) &&
+            (await hasJoinedScheduledMeet(row, getHeadersRef.current())) &&
+            (await hasLocalScheduledMeet())
+          );
+        })
       : Promise.resolve(true);
 
     void eligibility

@@ -824,6 +824,10 @@ msgstr ""
 msgid "Automatically put all future instances of this recurring meeting into a folder."
 msgstr ""
 
+#: src/settings/general/meeting-settings.tsx
+msgid "Automatically record active Google Meet calls and Slack huddles detected through Accessibility, including ad hoc meetings."
+msgstr ""
+
 #: src/settings/automations/index.tsx
 msgid "Automation actions"
 msgstr ""
@@ -4624,6 +4628,10 @@ msgstr ""
 
 #: src/session/components/outer-header/index.tsx
 msgid "Record"
+msgstr ""
+
+#: src/settings/general/meeting-settings.tsx
+msgid "Record detected meetings"
 msgstr ""
 
 #: src/settings/general/permissions.tsx

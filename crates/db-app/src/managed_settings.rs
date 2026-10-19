@@ -24,12 +24,17 @@ fn validate(bytes: &[u8]) -> Result<ManagedSettings, sqlx::Error> {
     }
     for (key, value) in &doc.settings {
         let valid = match key.as_str() {
-            "telemetry_consent"
-            | "crash_reporting_consent"
-            | "cloud_sync_enabled"
-            | "automatic_updates" => value == &Value::Bool(false),
+            "telemetry_consent" | "crash_reporting_consent" | "cloud_sync_enabled" => {
+                value == &Value::Bool(false)
+            }
             "intelligence_disabled" => value == &Value::Bool(true),
-            "auto_start_scheduled_meetings" | "save_recordings" => value.is_boolean(),
+            "auto_start_scheduled_meetings"
+            | "auto_start_slack_huddles"
+            | "auto_start_detected_meetings"
+            | "auto_stop_meetings"
+            | "autostart"
+            | "automatic_updates"
+            | "save_recordings" => value.is_boolean(),
             "current_llm_provider" | "current_llm_model" => value.as_str() == Some(""),
             "audio_retention" => value.as_str() == Some("forever"),
             "current_stt_provider" => value.as_str() == Some("custom"),
@@ -107,6 +112,7 @@ mod tests {
     #[test]
     fn secrets_and_unsafe_values_are_rejected() {
         assert!(validate(br#"{"schema_version":1,"settings":{"intelligence_disabled":true,"telemetry_consent":false}}"#).is_ok());
+        assert!(validate(br#"{"schema_version":1,"settings":{"autostart":true,"automatic_updates":true,"auto_start_scheduled_meetings":true,"auto_start_slack_huddles":true,"auto_start_detected_meetings":true,"auto_stop_meetings":true}}"#).is_ok());
         for text in [
             r#"{"schema_version":1,"settings":{"telemetry_consent":true}}"#,
             r#"{"schema_version":1,"settings":{"api_key":"secret"}}"#,

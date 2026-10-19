@@ -824,6 +824,10 @@ msgstr "Automatically install updates"
 msgid "Automatically put all future instances of this recurring meeting into a folder."
 msgstr "Automatically put all future instances of this recurring meeting into a folder."
 
+#: src/settings/general/meeting-settings.tsx
+msgid "Automatically record active Google Meet calls and Slack huddles detected through Accessibility, including ad hoc meetings."
+msgstr "Automatically record active Google Meet calls and Slack huddles detected through Accessibility, including ad hoc meetings."
+
 #: src/settings/automations/index.tsx
 msgid "Automation actions"
 msgstr "Automation actions"
@@ -4625,6 +4629,10 @@ msgstr "Reconnect Slack"
 #: src/session/components/outer-header/index.tsx
 msgid "Record"
 msgstr "Record"
+
+#: src/settings/general/meeting-settings.tsx
+msgid "Record detected meetings"
+msgstr "Record detected meetings"
 
 #: src/settings/general/permissions.tsx
 msgid "Record other participants in meetings."

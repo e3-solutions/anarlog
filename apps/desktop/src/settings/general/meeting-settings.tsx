@@ -14,6 +14,7 @@ interface SettingItem {
 export function MeetingSettingsView({
   autoJoinScheduledMeetings,
   autoStartScheduledMeetings,
+  autoStartDetectedMeetings,
   autoStopMeetings,
   floatingBar,
   meetingDisclosureAutoPost,
@@ -22,6 +23,7 @@ export function MeetingSettingsView({
 }: {
   autoJoinScheduledMeetings: SettingItem;
   autoStartScheduledMeetings: SettingItem;
+  autoStartDetectedMeetings: SettingItem;
   autoStopMeetings: SettingItem;
   floatingBar: SettingItem;
   meetingDisclosureAutoPost: SettingItem;
@@ -47,6 +49,19 @@ export function MeetingSettingsView({
         checked={autoStartScheduledMeetings.value}
         onChange={autoStartScheduledMeetings.onChange}
       />
+      {supportsMeetingAx && supportsMicDetection && (
+        <SettingSwitchRow
+          title={<Trans>Record detected meetings</Trans>}
+          description={
+            <Trans>
+              Automatically record active Google Meet calls and Slack huddles
+              detected through Accessibility, including ad hoc meetings.
+            </Trans>
+          }
+          checked={autoStartDetectedMeetings.value}
+          onChange={autoStartDetectedMeetings.onChange}
+        />
+      )}
       <SettingSwitchRow
         title={<Trans>Join scheduled meetings</Trans>}
         description={

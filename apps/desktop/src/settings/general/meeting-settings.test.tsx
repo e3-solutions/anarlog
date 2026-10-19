@@ -39,6 +39,7 @@ function renderMeetingSettings({
       <MeetingSettingsView
         autoJoinScheduledMeetings={setting()}
         autoStartScheduledMeetings={setting(autoStartScheduledMeetings)}
+        autoStartDetectedMeetings={setting(false)}
         autoStopMeetings={setting()}
         floatingBar={setting(floatingBar)}
         meetingDisclosureAutoPost={meetingDisclosureAutoPost}

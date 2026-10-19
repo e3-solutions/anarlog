@@ -28,6 +28,9 @@ const {
   useConfigValueMock,
   getNearbyCalendarEventsMock,
   loadSessionEventMock,
+  createSessionMock,
+  softDeleteSessionMock,
+  openNewMock,
 } = vi.hoisted(() => ({
   listMicUsingApplicationsMock: vi.fn(),
   inspectMeetingAccessibilityMock: vi.fn(),
@@ -38,6 +41,9 @@ const {
   useConfigValueMock: vi.fn((key: string) => key !== "notification_disabled"),
   getNearbyCalendarEventsMock: vi.fn(),
   loadSessionEventMock: vi.fn(),
+  createSessionMock: vi.fn(),
+  softDeleteSessionMock: vi.fn(),
+  openNewMock: vi.fn(),
 }));
 
 vi.mock("@anlg/plugin-detect", () => ({
@@ -65,6 +71,12 @@ vi.mock("~/calendar/queries", () => ({
 
 vi.mock("~/session/queries", () => ({
   loadSessionEvent: loadSessionEventMock,
+  createSession: createSessionMock,
+  softDeleteSession: softDeleteSessionMock,
+}));
+
+vi.mock("~/store/zustand/tabs", () => ({
+  useTabs: { getState: () => ({ openNew: openNewMock }) },
 }));
 
 vi.mock("~/shared/config", () => ({
@@ -237,9 +249,15 @@ describe("ListenerProvider detect events", () => {
     useConfigValueMock.mockReset();
     getNearbyCalendarEventsMock.mockReset();
     loadSessionEventMock.mockReset();
+    createSessionMock.mockReset().mockResolvedValue("huddle-session");
+    softDeleteSessionMock.mockReset().mockResolvedValue(null);
+    openNewMock.mockReset();
     useStoreMock.mockReturnValue(null);
     useConfigValueMock.mockImplementation(
-      (key: string) => key !== "notification_disabled",
+      (key: string) =>
+        key !== "notification_disabled" &&
+        key !== "auto_start_slack_huddles" &&
+        key !== "auto_start_detected_meetings",
     );
     getNearbyCalendarEventsMock.mockImplementation(readConfiguredNearbyEvents);
     loadSessionEventMock.mockImplementation(readConfiguredSessionEvent);

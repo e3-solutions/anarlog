@@ -15,6 +15,7 @@ use crate::routes::{
         crate::routes::google_drive::validate_folder,
         crate::routes::google_drive::prepare_export,
         crate::routes::google_drive::export_markdown,
+        crate::routes::google_meet_presence::presence,
         crate::routes::disconnect::delete_connection,
         crate::routes::status::list_connections,
         crate::routes::webhook::nango_webhook,
@@ -32,6 +33,8 @@ use crate::routes::{
             WebhookResponse,
             WhoAmIItem,
             WhoAmIResponse,
+            crate::routes::google_meet_presence::MeetPresenceRequest,
+            crate::routes::google_meet_presence::MeetPresenceResponse,
         )
     ),
     tags(

@@ -9,6 +9,7 @@ import { getCurrentWebviewWindowLabel } from "@anlg/plugin-windows";
 import { useMountEffect } from "@anlg/ui/hooks/use-mount-effect";
 import { parseEventInstant } from "@anlg/utils";
 
+import { useAuth } from "~/auth";
 import { getIgnoredEventSets } from "~/calendar/ignored-events";
 import { liveQueryClient } from "~/db";
 import { getOrCreateSessionForEventId } from "~/session/queries";
@@ -19,6 +20,14 @@ import { listenerStore } from "~/store/zustand/listener/instance";
 import { type Tab, useTabs } from "~/store/zustand/tabs";
 import { isMeetingCapableMicApp, type MicApp } from "~/stt/meeting-apps";
 import { hasScheduledAutoStartInFlight } from "~/stt/scheduled-auto-start-state";
+import {
+  googleMeetCode,
+  hasJoinedScheduledMeet,
+  hasLocalScheduledMeet,
+  isE3CalendarId,
+  isGoogleMeetLink,
+  resolveScheduledMeetConnection,
+} from "~/stt/scheduled-meet-presence";
 import { decideAutomaticMeetingAttendance } from "~/stt/scheduled-meeting-attendance";
 
 // A meeting that started while the app was asleep or quit is still worth
@@ -41,19 +50,25 @@ const MIC_HOLD_LOOKAHEAD_MS = PREVIOUS_CALL_MIN_HOLD_MS + 5 * 60_000;
 // auto-start watches every calendar, so anything looser would record all day.
 const SCHEDULED_MEETINGS_SQL = `
   SELECT
-    id,
-    started_at,
-    ended_at,
-    meeting_link,
-    tracking_id_event,
-    recurrence_series_id,
-    attendance_json
+    events.id,
+    events.started_at,
+    events.ended_at,
+    events.meeting_link,
+    events.tracking_id_event,
+    events.recurrence_series_id,
+    events.attendance_json,
+    calendars.connection_id AS calendar_connection_id,
+    calendars.provider AS calendar_provider,
+    calendars.enabled AS calendar_enabled,
+    calendars.deleted_at AS calendar_deleted_at,
+    calendars.tracking_id_calendar AS calendar_tracking_id
   FROM events
-  WHERE deleted_at IS NULL
-    AND is_all_day = 0
-    AND started_at <> ''
-    AND meeting_link <> ''
-  ORDER BY started_at, id
+  LEFT JOIN calendars ON calendars.id = events.calendar_id
+  WHERE events.deleted_at IS NULL
+    AND events.is_all_day = 0
+    AND events.started_at <> ''
+    AND events.meeting_link <> ''
+  ORDER BY events.started_at, events.id
 `;
 
 export type ScheduledMeetingRow = {
@@ -64,6 +79,11 @@ export type ScheduledMeetingRow = {
   tracking_id_event: string;
   recurrence_series_id: string;
   attendance_json: string | null;
+  calendar_connection_id?: string;
+  calendar_provider?: string;
+  calendar_enabled?: number | boolean;
+  calendar_deleted_at?: string | null;
+  calendar_tracking_id?: string;
 };
 
 function isSameScheduledMeeting(
@@ -77,7 +97,12 @@ function isSameScheduledMeeting(
     left.meeting_link === right.meeting_link &&
     left.tracking_id_event === right.tracking_id_event &&
     left.recurrence_series_id === right.recurrence_series_id &&
-    left.attendance_json === right.attendance_json
+    left.attendance_json === right.attendance_json &&
+    left.calendar_connection_id === right.calendar_connection_id &&
+    left.calendar_provider === right.calendar_provider &&
+    left.calendar_enabled === right.calendar_enabled &&
+    left.calendar_deleted_at === right.calendar_deleted_at &&
+    left.calendar_tracking_id === right.calendar_tracking_id
   );
 }
 
@@ -115,7 +140,23 @@ export function selectDueMeetings({
 
     const startMs = startedAt.getTime();
     const elapsedMs = nowMs - startMs;
-    if (elapsedMs < 0 || elapsedMs > SCHEDULED_AUTO_START_GRACE_MS) {
+    const isMeet = isGoogleMeetLink(row.meeting_link);
+    if (
+      isMeet &&
+      (row.calendar_provider !== "google" ||
+        !row.calendar_enabled ||
+        row.calendar_deleted_at ||
+        !isE3CalendarId(row.calendar_tracking_id))
+    ) {
+      continue;
+    }
+    const endMs = parseEventInstant(row.ended_at)?.getTime();
+    if (
+      elapsedMs < 0 ||
+      (isMeet
+        ? endMs === undefined || nowMs >= endMs
+        : elapsedMs > SCHEDULED_AUTO_START_GRACE_MS)
+    ) {
       continue;
     }
 
@@ -209,19 +250,25 @@ async function readDueScheduledMeeting(
   const [row] = await liveQueryClient.execute<ScheduledMeetingRow>(
     `
       SELECT
-        id,
-        started_at,
-        ended_at,
-        meeting_link,
-        tracking_id_event,
-        recurrence_series_id,
-        attendance_json
+        events.id,
+        events.started_at,
+        events.ended_at,
+        events.meeting_link,
+        events.tracking_id_event,
+        events.recurrence_series_id,
+        events.attendance_json,
+        calendars.connection_id AS calendar_connection_id,
+        calendars.provider AS calendar_provider,
+        calendars.enabled AS calendar_enabled,
+        calendars.deleted_at AS calendar_deleted_at,
+        calendars.tracking_id_calendar AS calendar_tracking_id
       FROM events
-      WHERE id = ?
-        AND deleted_at IS NULL
-        AND is_all_day = 0
-        AND started_at <> ''
-        AND meeting_link <> ''
+      LEFT JOIN calendars ON calendars.id = events.calendar_id
+      WHERE events.id = ?
+        AND events.deleted_at IS NULL
+        AND events.is_all_day = 0
+        AND events.started_at <> ''
+        AND events.meeting_link <> ''
       LIMIT 1
     `,
     [eventId],
@@ -248,9 +295,15 @@ export async function readDueScheduledSessionMeeting(
         events.meeting_link,
         events.tracking_id_event,
         events.recurrence_series_id,
-        events.attendance_json
+        events.attendance_json,
+        calendars.connection_id AS calendar_connection_id,
+        calendars.provider AS calendar_provider,
+        calendars.enabled AS calendar_enabled,
+        calendars.deleted_at AS calendar_deleted_at,
+        calendars.tracking_id_calendar AS calendar_tracking_id
       FROM sessions
       JOIN events ON events.id = sessions.event_id
+      LEFT JOIN calendars ON calendars.id = events.calendar_id
       WHERE sessions.id = ?
         AND sessions.deleted_at IS NULL
         AND events.deleted_at IS NULL
@@ -286,12 +339,20 @@ function isIgnoredScheduledMeeting(
 export async function startScheduledMeeting(
   row: ScheduledMeetingRow,
   autoJoin: boolean,
-): Promise<"started" | "ignored" | "blocked" | "ineligible"> {
+  headers: Record<string, string> | null = null,
+  onAutoJoinOpened?: () => void,
+  shouldCancel: () => boolean = () => false,
+  onSessionArmed?: (sessionId: string) => void,
+  detectedMeetingsOnly = false,
+): Promise<
+  "started" | "ignored" | "blocked" | "ineligible" | "waiting" | "cancelled"
+> {
   if (listenerStore.getState().live.status === "active") {
     return "ignored";
   }
 
   const { ignoredIds, ignoredSeriesIds } = await getIgnoredEventSets();
+  if (shouldCancel()) return "cancelled";
   if (
     listenerStore.getState().live.status === "active" ||
     isIgnoredScheduledMeeting(row, ignoredIds, ignoredSeriesIds)
@@ -300,11 +361,48 @@ export async function startScheduledMeeting(
   }
 
   let currentRow = await readDueScheduledMeeting(row.id);
+  if (shouldCancel()) return "cancelled";
   if (!currentRow) {
     return "ineligible";
   }
 
+  const requiresMeetPresence =
+    isGoogleMeetLink(row.meeting_link) ||
+    isGoogleMeetLink(currentRow.meeting_link);
+  if (detectedMeetingsOnly && !requiresMeetPresence) return "ineligible";
+  if (requiresMeetPresence) {
+    if (!(await hasLocalScheduledMeet())) return "waiting";
+    if (shouldCancel()) return "cancelled";
+    if (
+      googleMeetCode(row.meeting_link) !==
+      googleMeetCode(currentRow.meeting_link)
+    ) {
+      return "ineligible";
+    }
+    if (isIgnoredScheduledMeeting(currentRow, ignoredIds, ignoredSeriesIds)) {
+      return "ignored";
+    }
+    const meetConnection = await resolveScheduledMeetConnection(
+      currentRow,
+      headers,
+    );
+    if (shouldCancel()) return "cancelled";
+    if (!meetConnection) return "waiting";
+    if (autoJoin) {
+      const opened = await openerCommands.openUrl(
+        currentRow.meeting_link,
+        null,
+      );
+      if (shouldCancel()) return "cancelled";
+      if (opened.status === "ok") onAutoJoinOpened?.();
+    }
+    if (!(await hasJoinedScheduledMeet(currentRow, headers, meetConnection)))
+      return "waiting";
+    if (shouldCancel()) return "cancelled";
+  }
+
   const sessionId = await getOrCreateSessionForEventId(currentRow.id);
+  if (shouldCancel()) return "cancelled";
   if (listenerStore.getState().live.status === "active") {
     return "ignored";
   }
@@ -316,11 +414,27 @@ export async function startScheduledMeeting(
   // before opening a URL or arming capture so a last-second decline,
   // cancellation, or reschedule cannot trigger either automatic action.
   currentRow = await readDueScheduledMeeting(currentRow.id);
+  if (shouldCancel()) return "cancelled";
   if (!currentRow) {
     return "ineligible";
   }
 
+  if (
+    isGoogleMeetLink(row.meeting_link) ||
+    isGoogleMeetLink(currentRow.meeting_link)
+  ) {
+    if (
+      googleMeetCode(row.meeting_link) !==
+      googleMeetCode(currentRow.meeting_link)
+    ) {
+      return "ineligible";
+    }
+    if (!(await hasJoinedScheduledMeet(currentRow, headers))) return "waiting";
+    if (shouldCancel()) return "cancelled";
+  }
+
   const latestIgnoredEvents = await getIgnoredEventSets();
+  if (shouldCancel()) return "cancelled";
   if (
     listenerStore.getState().live.status === "active" ||
     isIgnoredScheduledMeeting(
@@ -335,7 +449,7 @@ export async function startScheduledMeeting(
   // Joining and listening are independent: the link opens as soon as the
   // meeting is due, while listening still has to wait for the session tab,
   // the STT connection, and capture readiness (and may be abandoned).
-  if (autoJoin) {
+  if (autoJoin && !isGoogleMeetLink(currentRow.meeting_link)) {
     void openerCommands.openUrl(currentRow.meeting_link, null);
   }
 
@@ -344,26 +458,32 @@ export async function startScheduledMeeting(
     id: sessionId,
     state: { view: null, autoStart: true, scheduledAutoStart: true },
   });
+  onSessionArmed?.(sessionId);
 
   return "started";
 }
 
 export function ScheduledMeetingAutoStart() {
+  const auth = useAuth();
+  const getHeadersRef = useLatestRef(auth.getHeaders);
   const {
     auto_start_scheduled_meetings: autoStart,
     auto_join_scheduled_meetings: autoJoin,
+    auto_start_detected_meetings: detectedMeetingsOnly,
   } = useConfigValues([
     "auto_start_scheduled_meetings",
     "auto_join_scheduled_meetings",
+    "auto_start_detected_meetings",
   ] as const);
   const autoStartRef = useLatestRef(autoStart);
+  const detectedMeetingsOnlyRef = useLatestRef(detectedMeetingsOnly);
   const autoJoinRef = useLatestRef(autoJoin);
   const configChangedRef = useRef<() => void>(() => {});
   const configChangeNodeRef = useCallback(
     (node: HTMLSpanElement | null) => {
       if (node) configChangedRef.current();
     },
-    [autoJoin, autoStart],
+    [autoJoin, autoStart, detectedMeetingsOnly],
   );
 
   useMountEffect(() => {
@@ -377,6 +497,8 @@ export function ScheduledMeetingAutoStart() {
     let starting = false;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     const firedEventIds = new Set<string>();
+    const openedEventIds = new Set<string>();
+    const armedSessionByEvent = new Map<string, string>();
     const eventRevisions = new Map<string, number>();
     const ineligibleEventRevisions = new Map<string, number>();
     const micHolds = new Map<string, number>();
@@ -485,19 +607,23 @@ export function ScheduledMeetingAutoStart() {
         (row) =>
           ineligibleEventRevisions.get(row.id) !== eventRevisions.get(row.id),
       );
-      const next = due[0];
       const scheduleAfterTransientBlock = () => {
-        if (next) scheduleTick(TICK_MS);
+        if (due.length) scheduleTick(TICK_MS);
         else scheduleNextStart();
       };
       const liveStatus = listenerStore.getState().live.status;
       const action = getScheduledAutoStartAction(liveStatus);
       if (action === "skip") {
-        // Do not let an overlapping meeting start after the active recording ends.
+        const activeSessionId = listenerStore.getState().live.sessionId;
         for (const row of due) {
-          firedEventIds.add(row.id);
+          if (
+            !isGoogleMeetLink(row.meeting_link) ||
+            armedSessionByEvent.get(row.id) === activeSessionId
+          ) {
+            firedEventIds.add(row.id);
+          }
         }
-        scheduleNextStart();
+        scheduleAfterTransientBlock();
         return;
       }
 
@@ -510,77 +636,110 @@ export function ScheduledMeetingAutoStart() {
         return;
       }
 
-      if (!next) {
+      if (!due.length) {
         scheduleNextStart();
         return;
       }
-
-      if (
-        isPreviousCallOnMic({
-          holds: micHolds,
-          meeting: next,
-          rows,
-          lastRecordingEndedMs,
-        })
-      ) {
-        // The earlier recording ended but its call did not; starting now would
-        // file the rest of that call under this meeting.
-        scheduleTick(TICK_MS);
-        return;
-      }
-
-      const startEventRevision = eventRevisions.get(next.id) ?? 0;
       starting = true;
-      void startScheduledMeeting(next, Boolean(autoJoinRef.current))
-        .then((outcome) => {
-          // A blocked start is transient (another session finalizing, a start
-          // already in flight), so leave it eligible for the next tick.
-          if (outcome === "blocked") {
-            scheduleTick(TICK_MS);
-            return;
+      void (async () => {
+        let retryImmediately = false;
+        for (const candidate of due) {
+          if (cancelled || !autoStartRef.current) return;
+          if (
+            isPreviousCallOnMic({
+              holds: micHolds,
+              meeting: candidate,
+              rows,
+              lastRecordingEndedMs,
+            })
+          ) {
+            continue;
           }
 
-          // Keep this event dormant until calendar data changes, then try the
-          // next overlapping meeting immediately instead of letting the newer
-          // ineligible event hide it for the full grace window.
+          const code = googleMeetCode(candidate.meeting_link);
+          if (
+            code &&
+            due.some(
+              (other) =>
+                other.id !== candidate.id &&
+                googleMeetCode(other.meeting_link) === code,
+            )
+          ) {
+            continue;
+          }
+
+          const startEventRevision = eventRevisions.get(candidate.id) ?? 0;
+          let outcome: Awaited<ReturnType<typeof startScheduledMeeting>>;
+          try {
+            outcome = await startScheduledMeeting(
+              candidate,
+              Boolean(autoJoinRef.current) &&
+                (!isGoogleMeetLink(candidate.meeting_link) ||
+                  candidate.id === due[0].id) &&
+                !openedEventIds.has(candidate.id),
+              getHeadersRef.current(),
+              () => openedEventIds.add(candidate.id),
+              () => cancelled || !autoStartRef.current,
+              (sessionId) => armedSessionByEvent.set(candidate.id, sessionId),
+              Boolean(detectedMeetingsOnlyRef.current),
+            );
+          } catch (error) {
+            console.error(
+              "[listener] failed to check scheduled meeting",
+              error,
+            );
+            continue;
+          }
+          if (cancelled || !autoStartRef.current || outcome === "cancelled")
+            return;
+          if (outcome === "blocked") break;
+          if (outcome === "waiting") continue;
           if (outcome === "ineligible") {
-            const currentEventRevision = eventRevisions.get(next.id) ?? 0;
-            if (currentEventRevision !== startEventRevision) {
+            const currentRevision = eventRevisions.get(candidate.id) ?? 0;
+            if (currentRevision !== startEventRevision) {
               scheduleTick(1);
               return;
             }
-            ineligibleEventRevisions.set(next.id, currentEventRevision);
-            scheduleTick(1);
-            return;
+            ineligibleEventRevisions.set(candidate.id, currentRevision);
+            retryImmediately = true;
+            continue;
           }
-
           if (outcome === "ignored") {
-            firedEventIds.add(next.id);
-            return;
+            firedEventIds.add(candidate.id);
+            continue;
           }
-
-          // Anything overlapping the meeting we just started is one the user
-          // walked out of; claiming them keeps a later tick from falling back.
-          for (const row of due) {
-            firedEventIds.add(row.id);
+          if (isGoogleMeetLink(candidate.meeting_link)) {
+            // The tab can still fail to start capture; keep the event eligible.
+            scheduleTick(TICK_MS);
+          } else {
+            for (const row of due) firedEventIds.add(row.id);
           }
-        })
+          return;
+        }
+        if (retryImmediately) scheduleTick(1);
+        else scheduleTick(TICK_MS);
+      })()
         .catch((error) => {
           console.error(
             "[listener] failed to auto-start scheduled meeting",
             error,
           );
-          scheduleTick(TICK_MS);
+          if (!cancelled) scheduleTick(TICK_MS);
         })
         .finally(() => {
           starting = false;
-          if (!timeout) tick();
+          if (!cancelled && !timeout) tick();
         });
     };
     configChangedRef.current = tick;
     const unsubscribeTabs = useTabs.subscribe(tick);
     const unsubscribeListener = listenerStore.subscribe((state, previous) => {
       if (state.live.status === previous.live.status) return;
+      if (state.live.status === "active") {
+        for (const [eventId, sessionId] of armedSessionByEvent) {
+          if (state.live.sessionId === sessionId) firedEventIds.add(eventId);
+        }
+      }
       if (previous.live.status === "active") {
         lastRecordingEndedMs = Date.now();
       }

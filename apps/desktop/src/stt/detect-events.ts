@@ -32,6 +32,7 @@ import {
   getNotificationIconForDisplayApp,
 } from "./meeting-apps";
 import { recordDetectedMeetingApps } from "./meeting-source-apps";
+import { useAutomaticMeetingRecording } from "./useAutomaticMeetingRecording";
 
 import {
   getNearbyCalendarEvents,
@@ -68,6 +69,7 @@ function getMicDetectedNotificationTitle(event: NearbyEvent | null): string {
 }
 
 export const useHandleDetectEvents = (store: ListenerStore) => {
+  const automaticMeetings = useAutomaticMeetingRecording(store);
   const stop = useStore(store, (state) => state.stop);
   const setMuted = useStore(store, (state) => state.setMuted);
   const autoStopMeetings = useConfigValue("auto_stop_meetings");
@@ -379,15 +381,16 @@ export const useHandleDetectEvents = (store: ListenerStore) => {
     detectEvents.detectEvent
       .listen(({ payload }) => {
         if (payload.type === "micDetected") {
+          if (
+            automaticMeetings.policy.current.enabled ||
+            automaticMeetings.policy.current.slack
+          )
+            return;
           const ignorableApps = getIgnorableApps(payload.apps);
           const appIds = ignorableApps.map((app) => app.id);
 
           if (shouldCaptureMicDetectedTriggerApps()) {
             captureTriggerApps(ignorableApps);
-            return;
-          }
-
-          if (!notificationDetectRef.current) {
             return;
           }
 
@@ -398,6 +401,8 @@ export const useHandleDetectEvents = (store: ListenerStore) => {
 
           void (async () => {
             try {
+              if (!notificationDetectRef.current) return;
+
               const nearbyEvents = await getNearbyCalendarEvents(
                 Date.now(),
                 15 * 60 * 1000,
@@ -469,6 +474,12 @@ export const useHandleDetectEvents = (store: ListenerStore) => {
             }
           })();
         } else if (payload.type === "micStopped") {
+          if (
+            automaticMeetings.ownedSession.current ===
+              store.getState().live.sessionId &&
+            automaticMeetings.ownedSession.current
+          )
+            return;
           const autoStopEnabled = autoStopMeetingsRef.current !== false;
           if (!autoStopEnabled) {
             return;
@@ -506,6 +517,7 @@ export const useHandleDetectEvents = (store: ListenerStore) => {
         } else if (payload.type === "sleepStateChanged") {
           if (payload.value) {
             clearPendingAutoStop();
+            automaticMeetings.reset.current();
             stop();
           }
         } else if (payload.type === "micMuted") {

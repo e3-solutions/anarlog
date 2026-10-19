@@ -55,6 +55,16 @@ export const SETTING_DEFINITIONS = {
     path: ["general", "auto_start_scheduled_meetings"],
     default: true as boolean,
   },
+  auto_start_detected_meetings: {
+    type: "boolean",
+    path: ["general", "auto_start_detected_meetings"],
+    default: false as boolean,
+  },
+  auto_start_slack_huddles: {
+    type: "boolean",
+    path: ["general", "auto_start_slack_huddles"],
+    default: false as boolean,
+  },
   auto_join_scheduled_meetings: {
     type: "boolean",
     path: ["general", "auto_join_scheduled_meetings"],

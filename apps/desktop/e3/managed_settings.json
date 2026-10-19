@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "settings": {
+    "autostart": true,
+    "auto_start_scheduled_meetings": true,
+    "auto_start_detected_meetings": true,
+    "auto_start_slack_huddles": true,
+    "auto_stop_meetings": true,
+    "save_recordings": true,
+    "audio_retention": "forever",
+    "automatic_updates": true
+  }
+}
