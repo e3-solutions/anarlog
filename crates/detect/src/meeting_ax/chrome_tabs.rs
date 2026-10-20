@@ -146,11 +146,9 @@ pub(super) fn inspect(bundle_id: &str, pid: i32) -> Option<Vec<String>> {
     if bundle_id != "com.google.Chrome" {
         return None;
     }
-    // Retain the application instance: a PID alone can be reused after exit.
-    let before = cidre::ns::RunningApp::with_pid(pid)?;
-    if before.is_terminated() || before.bundle_id()?.to_string() != bundle_id {
-        return None;
-    }
+    // A kernel birth stamp detects PID reuse without AppKit application caches.
+    // The PID-targeted script separately verifies Chrome's bundle and running state.
+    let before = anlg_bundle::process_identity_for_pid(pid)?;
     let attempts = ATTEMPTS.get_or_init(Default::default);
     {
         let mut attempts = attempts.lock().unwrap_or_else(|error| error.into_inner());
@@ -165,15 +163,9 @@ pub(super) fn inspect(bundle_id: &str, pid: i32) -> Option<Vec<String>> {
     }
     let started = Instant::now();
     let outcome = query(pid).and_then(|inventory| {
-        let after = cidre::ns::RunningApp::with_pid(pid).ok_or("process_missing")?;
-        if before.is_terminated() || after.is_terminated() || !before.is_equal(&after) {
+        let after = anlg_bundle::process_identity_for_pid(pid).ok_or("process_missing")?;
+        if before != after {
             return Err("process_instance_changed");
-        }
-        if after
-            .bundle_id()
-            .is_none_or(|id| id.to_string() != bundle_id)
-        {
-            return Err("process_wrong_bundle");
         }
         Ok(inventory)
     });
