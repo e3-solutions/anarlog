@@ -53,6 +53,33 @@ fn should_check_via_sidecar(permission: Permission) -> bool {
     !matches!(permission, Permission::Accessibility)
 }
 
+#[cfg(all(target_os = "macos", feature = "private-tcc"))]
+fn parse_sidecar_status(permission: Permission, value: &str) -> Option<PermissionStatus> {
+    use PermissionStatus::{Authorized, Denied, NeverRequested};
+
+    match (permission, value.trim()) {
+        (Permission::Accessibility, "trusted") => Some(Authorized),
+        (Permission::Accessibility, "untrusted") => Some(Denied),
+        (Permission::Accessibility, _) => None,
+        (_, "notDetermined") => Some(NeverRequested),
+        (Permission::Calendar | Permission::Reminders, "fullAccess") => Some(Authorized),
+        (Permission::Calendar | Permission::Reminders, "denied" | "restricted" | "writeOnly") => {
+            Some(Denied)
+        }
+        (Permission::Contacts | Permission::Microphone, "authorized") => Some(Authorized),
+        (Permission::Contacts | Permission::Microphone, "denied" | "restricted") => Some(Denied),
+        (
+            Permission::SystemAudio | Permission::ScreenRecording | Permission::InputMonitoring,
+            "authorized",
+        ) => Some(Authorized),
+        (
+            Permission::SystemAudio | Permission::ScreenRecording | Permission::InputMonitoring,
+            "denied",
+        ) => Some(Denied),
+        _ => None,
+    }
+}
+
 #[cfg(target_os = "macos")]
 #[link(name = "IOKit", kind = "framework")]
 unsafe extern "C" {
@@ -140,6 +167,7 @@ impl<'a, R: tauri::Runtime, M: tauri::Manager<R>> Permissions<'a, R, M> {
 
     #[cfg(all(target_os = "macos", feature = "private-tcc"))]
     async fn check_sidecar(&self, permission: Permission) -> Option<PermissionStatus> {
+        use tauri_plugin_shell::process::CommandEvent;
         use tauri_plugin_sidecar2::Sidecar2PluginExt;
 
         let arg = match permission {
@@ -158,63 +186,47 @@ impl<'a, R: tauri::Runtime, M: tauri::Manager<R>> Permissions<'a, R, M> {
             .sidecar2()
             .sidecar("check-permissions")
             .ok()?
-            .args([arg]);
+            .args([arg])
+            .set_raw_out(true);
 
-        let output = cmd.output().await.ok()?;
+        let (mut events, child) = cmd.spawn().ok()?;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            let mut stdout = Vec::new();
+            while let Some(event) = events.recv().await {
+                match event {
+                    CommandEvent::Stdout(bytes) => {
+                        if stdout.len() + bytes.len() > 1024 {
+                            return None;
+                        }
+                        stdout.extend(bytes);
+                    }
+                    CommandEvent::Terminated(payload) => {
+                        return (payload.code == Some(0)).then_some(stdout);
+                    }
+                    CommandEvent::Error(error) => {
+                        tracing::warn!(%error, "check-permissions binary failed");
+                        return None;
+                    }
+                    _ => {}
+                }
+            }
+            None
+        })
+        .await;
+        let stdout = match result {
+            Ok(Some(stdout)) => stdout,
+            _ => {
+                // A cancelled output future does not terminate its subprocess.
+                let _ = child.kill();
+                tracing::warn!(?permission, "check-permissions unavailable or timed out");
+                return None;
+            }
+        };
 
-        if !output.status.success() {
-            tracing::warn!(
-                status = ?output.status,
-                stderr = %String::from_utf8_lossy(&output.stderr),
-                "check-permissions binary failed"
-            );
-            return None;
-        }
-
-        let value = String::from_utf8(output.stdout).ok()?;
+        let value = String::from_utf8(stdout).ok()?;
         let value = value.trim();
 
-        let status = match permission {
-            Permission::Calendar => match value {
-                "notDetermined" => PermissionStatus::NeverRequested,
-                "fullAccess" => PermissionStatus::Authorized,
-                _ => PermissionStatus::Denied,
-            },
-            Permission::Reminders => match value {
-                "notDetermined" => PermissionStatus::NeverRequested,
-                "fullAccess" => PermissionStatus::Authorized,
-                _ => PermissionStatus::Denied,
-            },
-            Permission::Contacts => match value {
-                "notDetermined" => PermissionStatus::NeverRequested,
-                "authorized" => PermissionStatus::Authorized,
-                _ => PermissionStatus::Denied,
-            },
-            Permission::Microphone => match value {
-                "notDetermined" => PermissionStatus::NeverRequested,
-                "authorized" => PermissionStatus::Authorized,
-                _ => PermissionStatus::Denied,
-            },
-            Permission::SystemAudio => match value {
-                "notDetermined" => PermissionStatus::NeverRequested,
-                "authorized" => PermissionStatus::Authorized,
-                _ => PermissionStatus::Denied,
-            },
-            Permission::ScreenRecording => match value {
-                "notDetermined" => PermissionStatus::NeverRequested,
-                "authorized" => PermissionStatus::Authorized,
-                _ => PermissionStatus::Denied,
-            },
-            Permission::Accessibility => match value {
-                "trusted" => PermissionStatus::Authorized,
-                _ => PermissionStatus::Denied,
-            },
-            Permission::InputMonitoring => match value {
-                "notDetermined" => PermissionStatus::NeverRequested,
-                "authorized" => PermissionStatus::Authorized,
-                _ => PermissionStatus::Denied,
-            },
-        };
+        let status = parse_sidecar_status(permission, value)?;
 
         tracing::debug!(permission = arg, %value, ?status, "check via sidecar");
         Some(status)
@@ -537,7 +549,29 @@ impl<'a, R: tauri::Runtime, M: tauri::Manager<R>> Permissions<'a, R, M> {
                 );
             }
 
-            let _ = rx.recv_timeout(std::time::Duration::from_secs(60));
+            match rx.recv_timeout(std::time::Duration::from_secs(60)) {
+                Ok(true) => {}
+                Ok(false) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "Microphone access was not granted. Enable it in System Settings > Privacy & Security > Microphone.",
+                    )
+                    .into());
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "Microphone permission confirmation timed out. Complete the macOS prompt or check System Settings > Privacy & Security > Microphone, then try again.",
+                    )
+                    .into());
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(std::io::Error::other(
+                        "Microphone permission confirmation ended without a response. Try again.",
+                    )
+                    .into());
+                }
+            }
         }
 
         #[cfg(not(target_os = "macos"))]
@@ -725,6 +759,17 @@ impl<R: tauri::Runtime, T: tauri::Manager<R>> PermissionsPluginExt<R> for T {
 #[cfg(all(test, target_os = "macos", feature = "private-tcc"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_sidecar_output_falls_back_without_hiding_real_denial() {
+        for value in ["", "unknown", "error", "authorized\ndenied"] {
+            assert!(parse_sidecar_status(Permission::Microphone, value).is_none());
+        }
+        assert!(matches!(
+            parse_sidecar_status(Permission::Microphone, "denied"),
+            Some(PermissionStatus::Denied)
+        ));
+    }
 
     #[test]
     fn accessibility_check_bypasses_sidecar() {

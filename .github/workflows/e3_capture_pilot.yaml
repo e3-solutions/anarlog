@@ -26,6 +26,7 @@ jobs:
     timeout-minutes: 120
     env:
       TAURI_ENV_TARGET_TRIPLE: aarch64-apple-darwin
+      CARGO_TARGET_DIR: ${{ github.workspace }}/apps/desktop/src-tauri/target
       NODE_OPTIONS: --max-old-space-size=4096
       VITE_API_URL: http://localhost:3001
     steps:
@@ -63,6 +64,15 @@ jobs:
           apple-certificate: ${{ secrets.APPLE_CERTIFICATE }}
           apple-certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           keychain-password: ${{ secrets.KEYCHAIN_PASSWORD }}
+      - id: notarization-preflight
+        if: inputs.signing_mode == 'developer-id'
+        timeout-minutes: 2
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          node scripts/notarize-dmg.mjs --preflight
       - uses: ./.github/actions/install_desktop_deps # zizmor: ignore[self-repository] -- Build helpers must match the checked-out candidate, including PR merge commits.
         with:
           target: macos
@@ -77,11 +87,15 @@ jobs:
           # Manual builds use their branch cache and can restore default-branch entries.
           prefix-key: e3-pilot-native-v2-opt1
           workspaces: . -> apps/desktop/src-tauri/target
-          # Avoid sealing a registry-only cache when compilation is cancelled.
-          cache-on-failure: false
+          # Preserve compiled dependencies even if Apple's later notarization fails.
+          cache-on-failure: true
           cache-workspace-crates: true
       - uses: ./.github/actions/pnpm_install # zizmor: ignore[self-repository] -- Use the checked-out candidate's workspace setup.
       - run: echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
+      - name: Validate native permission repairs before packaging
+        run: |
+          rustfmt --check --edition 2024 plugins/permissions/src/ext.rs
+          cargo test --locked -p tauri-plugin-permissions --features private-tcc --lib tests::
       - name: Generate detect bindings with the owning exporter
         run: |
           pnpm exec prettier --version

@@ -1,14 +1,22 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { notarizeDmg, runCommand } from "./notarize-dmg.mjs";
+import {
+  notarizeDmg,
+  preflightNotarization,
+  runCommand,
+} from "./notarize-dmg.mjs";
 
 test("process deadline bounds waits without cutting off a large upload", () => {
-  for (const command of ["submit", "wait"]) {
+  for (const [command, timeout] of [
+    ["submit", undefined],
+    ["wait", 660_000],
+    ["history", 60_000],
+  ]) {
     runCommand(["notarytool", command], (executable, args, options) => {
       assert.equal(executable, "xcrun");
       assert.equal(args[1], command);
-      assert.equal(options.timeout, command === "wait" ? 660_000 : undefined);
+      assert.equal(options.timeout, timeout);
       assert.equal(options.killSignal, "SIGKILL");
     });
   }
@@ -51,6 +59,35 @@ function fixture(results) {
     },
   };
 }
+
+test("notarization preflight rejects unavailable credentials without uploads or secret disclosure", () => {
+  for (const result of [
+    { status: 0, stdout: '{"history":[]}' },
+    { status: 1, stderr: "HTTP 401 account=test password=secret team=team" },
+    { status: 1, stderr: "HTTP 403 account=test password=secret team=team" },
+    { status: null, error: { code: "ETIMEDOUT" } },
+    offline,
+    { status: 0, stdout: "malformed secret" },
+  ]) {
+    const f = fixture([result]);
+    if (result.status === 0 && result.stdout.includes('"history"')) {
+      assert.doesNotThrow(() => preflightNotarization(f.options));
+    } else {
+      assert.throws(
+        () => preflightNotarization(f.options),
+        (error) => {
+          assert.match(error.message, /Notarization preflight failed/);
+          assert.ok(!error.message.includes("secret"));
+          return true;
+        },
+      );
+    }
+    assert.deepEqual(
+      f.calls.map((args) => args.slice(0, 2)),
+      [["notarytool", "history"]],
+    );
+  }
+});
 
 test("submits once and recovers interrupted waits using the same ID", async () => {
   const f = fixture([reply("Uploaded"), offline, reply("Accepted")]);

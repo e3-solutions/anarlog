@@ -42,6 +42,30 @@ describe("usePermission", () => {
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   );
 
+  it("does not turn a failed status check into a denied permission or request a reset", async () => {
+    mocks.checkPermission.mockResolvedValue({
+      status: "error",
+      error: "Permission check unavailable",
+    });
+    const { result } = renderHook(() => usePermission("microphone"), {
+      wrapper,
+    });
+    await waitFor(() =>
+      expect(result.current.error).toBe("Permission check unavailable"),
+    );
+    expect(result.current.status).toBeUndefined();
+    expect(result.current.confirmedStatus).toBeUndefined();
+    mocks.checkPermission.mockResolvedValue({
+      status: "ok",
+      data: "authorized",
+    });
+    act(() => result.current.recheck());
+    await waitFor(() => expect(result.current.status).toBe("authorized"));
+    expect(result.current.error).toBeNull();
+    expect(mocks.requestPermission).not.toHaveBeenCalled();
+    expect(mocks.resetPermission).not.toHaveBeenCalled();
+  });
+
   it("keeps a failed runtime probe denied and exposes its diagnostic", async () => {
     mocks.requestPermission.mockResolvedValue({
       status: "error",

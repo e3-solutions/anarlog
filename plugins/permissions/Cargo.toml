@@ -27,6 +27,7 @@ tauri-specta = { workspace = true, features = ["derive", "typescript"] }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
 
 [target."cfg(target_os = \"macos\")".dependencies]
 anlg-bundle = { workspace = true }
