@@ -76,7 +76,7 @@ with timeout of 1 seconds
     tell application id "com.google.Chrome"
         repeat with browserWindow in every window
             repeat with meetingTab in (every tab of browserWindow whose URL starts with "https://meet.google.com/")
-                set resultText to resultText & (id of meetingTab as text) & tab & (URL of meetingTab as text) & linefeed
+                set resultText to resultText & (id of meetingTab as text) & (character id 9) & (URL of meetingTab as text) & linefeed
             end repeat
         end repeat
     end tell
