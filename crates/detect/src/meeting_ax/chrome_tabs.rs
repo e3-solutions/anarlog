@@ -117,7 +117,9 @@ fn query() -> Result<Vec<String>, &'static str> {
             .take(131_073)
             .read_to_end(&mut bytes)
             .map_err(|_| "read")?;
-        (bytes.len() <= 131_072).then_some(bytes).ok_or("output_limit")
+        (bytes.len() <= 131_072)
+            .then_some(bytes)
+            .ok_or("output_limit")
     });
     let deadline = Instant::now() + Duration::from_millis(1500);
     let outcome = loop {
@@ -161,7 +163,9 @@ pub(super) fn inspect(bundle_id: &str, pid: i32) -> Option<Vec<String>> {
     }
     let started = Instant::now();
     let outcome = query().and_then(|inventory| {
-        sole_chrome_pid(pid).then_some(inventory).ok_or("pid_changed")
+        sole_chrome_pid(pid)
+            .then_some(inventory)
+            .ok_or("pid_changed")
     });
     tracing::debug!(
         status = outcome.as_ref().err().copied().unwrap_or("complete"),
