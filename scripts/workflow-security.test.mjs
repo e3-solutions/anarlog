@@ -71,7 +71,7 @@ function pilotStepRun(source, id) {
   return run.replace(/^          /gm, "");
 }
 
-test("native-check mode cannot access signing secrets, package apps or upload artifacts", async () => {
+test("native-check mode exports only generated source and cannot access signing secrets or package apps", async () => {
   const source = await readFile(
     new URL("../.github/workflows/e3_capture_pilot.yaml", import.meta.url),
     "utf8",
@@ -85,6 +85,23 @@ test("native-check mode cannot access signing secrets, package apps or upload ar
     .split(/^      - /m)
     .slice(1);
   for (const step of steps) {
+    const generatedSourceUpload = step.startsWith(
+      "name: Preserve generated preview bindings and permissions\n",
+    );
+    if (generatedSourceUpload) {
+      assert.doesNotMatch(step, /secrets\.|run:/);
+      const paths = step
+        .split("          path: |\n")[1]
+        ?.split("          retention-days:")[0]
+        .trim()
+        .split("\n")
+        .map((line) => line.trim());
+      assert.deepEqual(paths, [
+        "plugins/transcription/js/bindings.gen.ts",
+        "plugins/transcription/permissions/",
+      ]);
+      continue;
+    }
     const restricted =
       /secrets\.|apple_cert|notarize|codesign|stapler|tauri build|prepare-binaries|archive-pilot|actions\/upload-artifact/.test(
         step,
@@ -174,9 +191,11 @@ test("deferred notarization preserves signed checkpoints without publishing a re
   const protectedSteps = [
     find("id: notarization-preflight\n"),
     find("id: notarize-pilot\n"),
-    find("name: e3-pilot-notary-submission-"),
+    find(
+      "name: e3-shared-preview-${{ inputs.preview_instance }}-notary-submission-",
+    ),
     find("id: archive-pilot\n"),
-    find("name: e3-meeting-capture-pilot-arm64-"),
+    find("name: e3-shared-recordings-preview-"),
   ];
   for (const step of protectedSteps) {
     assert.match(step, /if: [^\n]*inputs\.defer_notarization != true/);
@@ -186,7 +205,7 @@ test("deferred notarization preserves signed checkpoints without publishing a re
     "cloudsync_dylib=",
     "id: build-pilot\n",
     "id: checkpoint-signed-pilot\n",
-    "name: e3-pilot-signed-NOT-NOTARIZED-",
+    "name: e3-shared-preview-${{ inputs.preview_instance }}-signed-NOT-NOTARIZED-",
   ]) {
     const step = find(needle);
     assert.doesNotMatch(
@@ -210,7 +229,25 @@ test("deferred notarization preserves signed checkpoints without publishing a re
   assert.match(find("id: archive-pilot\n"), /spctl --assess/);
 });
 
-test("pilot signing override preserves certificate names as JSON data", async () => {
+async function previewBuildEnv(directory) {
+  const config = "tauri.shared-recordings-preview.json";
+  const bundle = "ai.e3group.meeting-capture-shared-preview";
+  const parent = path.join(directory, "apps/desktop/src-tauri");
+  await mkdir(parent, { recursive: true });
+  await writeFile(
+    path.join(parent, config),
+    JSON.stringify({ identifier: bundle }),
+  );
+  return {
+    PREVIEW_CONFIG: config,
+    PREVIEW_BUNDLE_ID: bundle,
+    PREVIEW_PRODUCT: "E3 Shared Recordings Preview",
+    VITE_SUPABASE_URL: "https://fixture.supabase.co",
+    VITE_SUPABASE_ANON_KEY: "sb_publishable_fixture",
+  };
+}
+
+test("preview signing rejects pilot identities and server keys while preserving certificate names as JSON data", async () => {
   const source = await readFile(
     new URL("../.github/workflows/e3_capture_pilot.yaml", import.meta.url),
     "utf8",
@@ -231,12 +268,16 @@ test("pilot signing override preserves certificate names as JSON data", async ()
           RUNNER_TEMP: directory,
           SIGNING_MODE: mode,
           SIGNING_IDENTITY: identity,
+          ...(await previewBuildEnv(directory)),
         },
         encoding: "utf8",
       });
       assert.equal(result.status, 0, result.stderr);
       const override = JSON.parse(
-        await readFile(path.join(directory, "e3-pilot-signing.json"), "utf8"),
+        await readFile(
+          path.join(directory, "e3-shared-preview-signing.json"),
+          "utf8",
+        ),
       );
       assert.deepEqual(override, {
         bundle: {
@@ -246,6 +287,28 @@ test("pilot signing override preserves certificate names as JSON data", async ()
           },
         },
       });
+    }
+    for (const invalid of [
+      { PREVIEW_BUNDLE_ID: "ai.e3group.meeting-capture-pilot" },
+      { VITE_SUPABASE_ANON_KEY: "sb_secret_must_not_ship" },
+    ]) {
+      const result = spawnSync("python3", ["-c", python], {
+        cwd: directory,
+        env: {
+          PATH: process.env.PATH,
+          RUNNER_TEMP: directory,
+          SIGNING_MODE: "developer-id",
+          SIGNING_IDENTITY: identity,
+          ...(await previewBuildEnv(directory)),
+          ...invalid,
+        },
+        encoding: "utf8",
+      });
+      assert.notEqual(result.status, 0);
+      assert.doesNotMatch(
+        result.stdout + result.stderr,
+        /sb_secret_must_not_ship/,
+      );
     }
     await assert.rejects(readFile(path.join(directory, "injected")), {
       code: "ENOENT",
@@ -282,6 +345,7 @@ for name in ("APPLE_ID", "APPLE_PASSWORD", "APPLE_TEAM_ID", "APPLE_API_ISSUER", 
             RUNNER_TEMP: directory,
             SIGNING_MODE: mode,
             SIGNING_IDENTITY: "Developer ID Application: Fixture (TEAM)",
+            ...(await previewBuildEnv(directory)),
             APPLE_ID: "",
             APPLE_PASSWORD: "",
             APPLE_TEAM_ID: "",
@@ -309,11 +373,11 @@ test("pilot notarization saves the submission before waiting and staples only ac
     const directory = await mkdtemp(path.join(os.tmpdir(), "pilot-notary-"));
     try {
       await mkdir(path.join(directory, "scripts"));
-      await mkdir(path.join(directory, "pilot-signed-checkpoint"));
+      await mkdir(path.join(directory, "preview-signed-checkpoint"));
       await writeFile(
         path.join(
           directory,
-          "pilot-signed-checkpoint/E3-Meeting-Capture-Pilot-arm64.zip",
+          "preview-signed-checkpoint/E3-Shared-Recordings-Preview-arm64.zip",
         ),
         "signed fixture",
       );
@@ -341,6 +405,7 @@ export async function notarizeDmg({log}) {
             GITHUB_RUN_ATTEMPT: outcome === "rerun" ? "2" : "1",
             GITHUB_SHA: "fixture-commit",
             TEST_OUTCOME: outcome,
+            PREVIEW_PRODUCT: "E3 Shared Recordings Preview",
           },
           encoding: "utf8",
         },
@@ -348,13 +413,13 @@ export async function notarizeDmg({log}) {
       assert.equal(result.status === 0, outcome === "accepted", result.stderr);
       if (outcome === "rerun") {
         await assert.rejects(
-          readFile(path.join(directory, "pilot-notary-submission.json")),
+          readFile(path.join(directory, "preview-notary-submission.json")),
           { code: "ENOENT" },
         );
       } else {
         const receipt = JSON.parse(
           await readFile(
-            path.join(directory, "pilot-notary-submission.json"),
+            path.join(directory, "preview-notary-submission.json"),
             "utf8",
           ),
         );
