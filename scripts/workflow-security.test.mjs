@@ -116,10 +116,15 @@ test("pilot signing preflight reports secret names without exposing values", asy
   const directory = await mkdtemp(path.join(os.tmpdir(), "pilot-signing-"));
   const secret = 'sensitive-$(touch injected)`touch injected`"';
   try {
-    const invoke = (mode, secrets = {}) =>
+    const invoke = (mode, secrets = {}, deferred = false) =>
       spawnSync("bash", ["-e", "-c", script], {
         cwd: directory,
-        env: { PATH: process.env.PATH, SIGNING_MODE: mode, ...secrets },
+        env: {
+          PATH: process.env.PATH,
+          SIGNING_MODE: mode,
+          DEFER_NOTARIZATION: String(deferred),
+          ...secrets,
+        },
         encoding: "utf8",
       });
     const missing = invoke("developer-id");
@@ -131,12 +136,78 @@ test("pilot signing preflight reports secret names without exposing values", asy
     assert.ok(!(signed.stdout + signed.stderr).includes(secret));
     assert.equal(invoke("ad-hoc").status, 0);
     assert.notEqual(invoke("unsupported").status, 0);
+    const signingOnly = Object.fromEntries(
+      required
+        .filter((name) => !["APPLE_ID", "APPLE_PASSWORD"].includes(name))
+        .map((name) => [name, secret]),
+    );
+    assert.equal(invoke("developer-id", signingOnly, true).status, 0);
+    assert.notEqual(invoke("developer-id", signingOnly).status, 0);
+    assert.notEqual(invoke("developer-id", {}, true).status, 0);
+    assert.notEqual(invoke("ad-hoc", {}, true).status, 0);
     await assert.rejects(readFile(path.join(directory, "injected")), {
       code: "ENOENT",
     });
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("deferred notarization preserves signed checkpoints without publishing a ready artifact", async () => {
+  const source = await readFile(
+    new URL("../.github/workflows/e3_capture_pilot.yaml", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    source,
+    /defer_notarization:\n(?:.*\n)*?        type: boolean\n        default: false/,
+  );
+  const steps = source
+    .split("    steps:\n")[1]
+    .split(/^      - /m)
+    .slice(1);
+  const find = (needle) => {
+    const found = steps.filter((step) => step.includes(needle));
+    assert.equal(found.length, 1, `Expected one step containing ${needle}`);
+    return found[0];
+  };
+  const protectedSteps = [
+    find("id: notarization-preflight\n"),
+    find("id: notarize-pilot\n"),
+    find("name: e3-pilot-notary-submission-"),
+    find("id: archive-pilot\n"),
+    find("name: e3-meeting-capture-pilot-arm64-"),
+  ];
+  for (const step of protectedSteps) {
+    assert.match(step, /if: [^\n]*inputs\.defer_notarization != true/);
+  }
+  for (const needle of [
+    "uses: ./.github/actions/apple_cert",
+    "cloudsync_dylib=",
+    "id: build-pilot\n",
+    "id: checkpoint-signed-pilot\n",
+    "name: e3-pilot-signed-NOT-NOTARIZED-",
+  ]) {
+    const step = find(needle);
+    assert.doesNotMatch(
+      step.split("        run:")[0],
+      /if: [^\n]*defer_notarization/,
+    );
+  }
+  const preflight = find("id: signing-preflight\n");
+  for (const name of ["APPLE_ID", "APPLE_PASSWORD"]) {
+    assert.ok(
+      preflight.includes(
+        `${name}: \${{ inputs.defer_notarization != true && secrets.${name} || '' }}`,
+      ),
+    );
+  }
+  assert.match(
+    find("id: checkpoint-signed-pilot\n"),
+    /codesign --verify --deep --strict/,
+  );
+  assert.match(find("id: archive-pilot\n"), /stapler validate/);
+  assert.match(find("id: archive-pilot\n"), /spctl --assess/);
 });
 
 test("pilot signing override preserves certificate names as JSON data", async () => {
