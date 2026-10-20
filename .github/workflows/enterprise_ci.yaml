@@ -8,12 +8,14 @@ on:
     paths:
       - .github/workflows/enterprise_ci.yaml
       - crates/meeting-capture/**
+      - crates/shared-recording/**
       - enterprise/**
       - rust-toolchain.toml
   pull_request:
     paths:
       - .github/workflows/enterprise_ci.yaml
       - crates/meeting-capture/**
+      - crates/shared-recording/**
       - enterprise/**
       - rust-toolchain.toml
 
@@ -39,4 +41,8 @@ jobs:
       - run: cargo test --manifest-path enterprise/Cargo.toml --locked -p anarlog-enterprise-google-meet-worker --test reliability_gate --test fixture_replay
       - run: cargo test --manifest-path enterprise/Cargo.toml --locked -p anarlog-enterprise-google-meet-worker --lib
       - run: cargo test --manifest-path enterprise/Cargo.toml --locked -p anarlog-enterprise-control-plane --test upgrade
+      - run: cargo test --locked -p shared-recording
+      - run: cargo clippy --locked -p shared-recording --all-targets --no-deps -- -D warnings
+      - run: cargo test --manifest-path enterprise/Cargo.toml --locked -p anarlog-enterprise-control-plane --lib --test shared_recordings --test recording_transcription
+      - run: cargo clippy --manifest-path enterprise/Cargo.toml --locked -p anarlog-enterprise-control-plane --tests --lib --no-deps -- -D warnings
       - run: cargo clippy --manifest-path enterprise/Cargo.toml --locked -p anarlog-enterprise-google-meet-worker --tests --lib -- -D warnings

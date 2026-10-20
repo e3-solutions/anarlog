@@ -6,7 +6,9 @@ pub mod capture;
 pub mod config;
 pub mod license;
 pub mod projector;
+pub mod recording_transcription;
 pub mod schedule;
+pub mod shared_recordings;
 pub mod store;
 pub mod zoom;
 

@@ -18,6 +18,9 @@ anlg-db-app = { path = "../crates/db-app", package = "db-app" }
 anlg-db-core = { path = "../crates/db-core", package = "db-core" }
 anlg-meeting-capture = { path = "../crates/meeting-capture", package = "meeting-capture" }
 anlg-session-ingest = { path = "../crates/session-ingest", package = "session-ingest", default-features = false }
+anlg-shared-recording = { path = "../crates/shared-recording", package = "shared-recording" }
+owhisper-client = { path = "../crates/owhisper-client", package = "owhisper-client" }
+owhisper-interface = { path = "../crates/owhisper-interface", package = "owhisper-interface" }
 
 anyhow = "1"
 async-trait = "0.1"

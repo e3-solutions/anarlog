@@ -8,6 +8,9 @@ license-file.workspace = true
 anarlog-enterprise-zoom-rtms-worker = { path = "../zoom-rtms-worker" }
 anlg-meeting-capture.workspace = true
 anlg-session-ingest.workspace = true
+anlg-shared-recording.workspace = true
+owhisper-client.workspace = true
+owhisper-interface.workspace = true
 
 anyhow.workspace = true
 async-trait.workspace = true
@@ -18,12 +21,14 @@ http.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2.workspace = true
-sqlx = { workspace = true, features = ["chrono", "json", "macros", "migrate", "postgres", "runtime-tokio"] }
+sqlx = { workspace = true, features = ["chrono", "json", "macros", "migrate", "postgres", "sqlite", "runtime-tokio"] }
+tempfile = "3"
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tower-http = { workspace = true, features = ["limit", "request-id", "trace"] }
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
+url.workspace = true
 
 [dev-dependencies]
 anarlog-enterprise-google-meet-worker = { path = "../google-meet-worker" }
