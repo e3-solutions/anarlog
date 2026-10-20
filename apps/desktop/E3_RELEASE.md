@@ -92,6 +92,10 @@ Use the existing Apple certificate import and desktop signing infrastructure. Th
 
 Check the downloaded `BUILD.txt` before replacing the app. Do not substitute an ad-hoc artifact for a signed candidate during an iteration test. After the first signed installation and permission grant, install a second distinct build and verify that detection and both audio channels work without removing permission entries; automated signing checks alone do not establish permission persistence on this Mac.
 
+To sign an already compiled pilot without rebuilding Rust, use `scripts/sign-e3-pilot-local.py` on macOS with `--output-dir`, the full Developer ID Application `--identity`, and optionally an unlocked signing `--keychain`. It copies the input app into a fresh output directory, preserves each executable's entitlements, signs the bundled code before the app, and verifies the result. Only FinderInfo and ResourceFork packaging metadata are removed from that copy; quarantine remains intact. The installed/source app is not modified.
+
+Add `--notary-profile <profile>` to submit with an existing `notarytool` Keychain profile, staple Apple's accepted ticket, validate Gatekeeper acceptance, and rebuild the final ZIP. Without that option the output explicitly reports `notarized: false`; signing alone does not clear downloaded-app warnings. Save notarization credentials interactively with `xcrun notarytool store-credentials <profile> --apple-id <account> --team-id <team>` and enter the app-specific password only at its hidden prompt. The script accepts no passwords.
+
 ## Signed E3 distribution
 
 `node apps/desktop/scripts/build-e3.mjs` requires:
