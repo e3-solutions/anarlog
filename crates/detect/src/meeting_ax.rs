@@ -8,7 +8,6 @@ use std::time::{Duration, Instant};
 #[derive(Clone, Copy)]
 struct BrowserAccessibilityRequest {
     attempted_at: Instant,
-    succeeded: bool,
 }
 
 #[cfg(target_os = "macos")]
@@ -26,6 +25,7 @@ fn should_request_browser_accessibility(
     bundle_id: &str,
     previous: Option<BrowserAccessibilityRequest>,
     now: Instant,
+    meeting_web_area_missing: bool,
 ) -> bool {
     // Chromium publishes toolbar AX without necessarily publishing webpage AX.
     // Safari and Gecko do not use Chromium's activation attribute.
@@ -55,19 +55,29 @@ fn should_request_browser_accessibility(
     );
     chromium
         && previous.is_none_or(|request| {
-            !request.succeeded
+            meeting_web_area_missing
                 && now.saturating_duration_since(request.attempted_at) >= Duration::from_secs(30)
         })
 }
 
 #[cfg(target_os = "macos")]
-fn request_browser_accessibility(app: &MeetingApp, pid: i32, element: &ax::UiElement) {
+fn request_browser_accessibility(
+    app: &MeetingApp,
+    pid: i32,
+    element: &ax::UiElement,
+    meeting_web_area_missing: bool,
+) {
     let now = Instant::now();
     {
         let mut requests = browser_accessibility_requests()
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if !should_request_browser_accessibility(&app.id, requests.get(&pid).copied(), now) {
+        if !should_request_browser_accessibility(
+            &app.id,
+            requests.get(&pid).copied(),
+            now,
+            meeting_web_area_missing,
+        ) {
             return;
         }
         // Reserve before IPC: concurrent inspections must not keep resetting
@@ -76,7 +86,6 @@ fn request_browser_accessibility(app: &MeetingApp, pid: i32, element: &ax::UiEle
             pid,
             BrowserAccessibilityRequest {
                 attempted_at: now,
-                succeeded: false,
             },
         );
     }
@@ -85,17 +94,13 @@ fn request_browser_accessibility(app: &MeetingApp, pid: i32, element: &ax::UiEle
     // https://chromium.googlesource.com/chromium/src/+/main/chrome/browser/chrome_browser_application_mac.mm
     let attribute = cf::String::from_str("AXEnhancedUserInterface");
     let attribute = ax::Attr::with_string(&attribute);
-    let result = if ax_bool_attr(element, attribute) == Some(true) {
+    // An accepted attribute write is not proof that webpage AX became usable.
+    // Reassert it on a throttled recovery even if the getter still reports true.
+    let result = if !meeting_web_area_missing && ax_bool_attr(element, attribute) == Some(true) {
         Ok(())
     } else {
         ax_set_attr(element, attribute, cf::Boolean::value_true().as_type_ref())
     };
-    let mut requests = browser_accessibility_requests()
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    if let Some(request) = requests.get_mut(&pid) {
-        request.succeeded = result.is_ok();
-    }
     if let Err(status) = result {
         // A failed optional activation never manufactures active-call evidence.
         tracing::debug!(pid, status, "browser_accessibility_activation_failed");
@@ -362,8 +367,9 @@ fn inspect_browser_app(
     }
     let ax_app = ax::UiElement::with_app_pid(pid);
     let _ = ax_app.set_messaging_timeout_secs(0.6);
-    request_browser_accessibility(&app, pid, &ax_app);
-    let (roots, unscoped) = collect_browser_meeting_roots(&ax_app, &mut warnings);
+    let (roots, unscoped, meeting_web_area_missing) =
+        collect_browser_meeting_roots(&ax_app, &mut warnings);
+    request_browser_accessibility(&app, pid, &ax_app, meeting_web_area_missing);
     let inventory = chrome_tabs::inspect(&app.id, pid);
     let mut rows = browser_inspections_from_roots(app, pid, true, roots, unscoped, warnings);
     for row in &mut rows {
@@ -718,7 +724,7 @@ pub fn send_meeting_chat_message(
         let ax_app = ax::UiElement::with_app_pid(pid);
         let _ = ax_app.set_messaging_timeout_secs(0.6);
         if is_browser_bundle(scoped_bundle_id) {
-            let (roots, poisoned) = collect_browser_meeting_windows(&ax_app, &mut warnings);
+            let (roots, poisoned, _) = collect_browser_meeting_windows(&ax_app, &mut warnings);
             if poisoned || roots.len() > 1 {
                 warnings.push(format!(
                     "refusing to send because the browser exposed {} meeting chat surfaces",
@@ -978,7 +984,7 @@ pub fn capture_meeting_chat_messages(bundle_ids: Vec<String>) -> MeetingChatCapt
         for (app, pid) in running_apps {
             let ax_app = ax::UiElement::with_app_pid(pid);
             let _ = ax_app.set_messaging_timeout_secs(0.6);
-            let (roots, has_unscoped_meeting_window) =
+            let (roots, has_unscoped_meeting_window, _) =
                 collect_browser_meeting_roots(&ax_app, &mut warnings);
             browser_scope_poisoned |= has_unscoped_meeting_window;
             browser_roots.extend(roots.into_iter().filter_map(|root| {
@@ -1744,25 +1750,31 @@ fn scoped_meeting_is_active(
 fn collect_browser_meeting_roots(
     ax_app: &ax::UiElement,
     warnings: &mut Vec<String>,
-) -> (Vec<BrowserMeetingRoot>, bool) {
-    let (roots, poisoned) = collect_browser_meeting_windows(ax_app, warnings);
-    (roots.into_iter().map(|(root, _)| root).collect(), poisoned)
+) -> (Vec<BrowserMeetingRoot>, bool, bool) {
+    let (roots, poisoned, meeting_web_area_missing) =
+        collect_browser_meeting_windows(ax_app, warnings);
+    (
+        roots.into_iter().map(|(root, _)| root).collect(),
+        poisoned,
+        meeting_web_area_missing,
+    )
 }
 
 #[cfg(target_os = "macos")]
 fn collect_browser_meeting_windows(
     ax_app: &ax::UiElement,
     warnings: &mut Vec<String>,
-) -> (Vec<(BrowserMeetingRoot, arc::R<ax::UiElement>)>, bool) {
+) -> (Vec<(BrowserMeetingRoot, arc::R<ax::UiElement>)>, bool, bool) {
     let focused_web_area = focused_web_area_element(ax_app);
     let mut windows = Vec::new();
     let mut visited = 0;
     let mut has_unscoped_meeting_window = false;
+    let mut meeting_web_area_missing = false;
     if !collect_window_elements(ax_app, 0, &mut visited, &mut windows) {
         warnings.push(
             "browser AX window discovery was incomplete; browser capture was excluded".to_string(),
         );
-        return (Vec::new(), true);
+        return (Vec::new(), true, false);
     }
 
     let roots = windows
@@ -1774,6 +1786,7 @@ fn collect_browser_meeting_windows(
             if !web_area_search_complete {
                 if browser_window_has_provider_signal(None, window_title.as_deref()) {
                     has_unscoped_meeting_window = true;
+                    meeting_web_area_missing = true;
                     warnings.push(
                         "a meeting-like browser window had an incomplete AXWebArea search; browser capture was excluded"
                             .to_string(),
@@ -1787,6 +1800,7 @@ fn collect_browser_meeting_windows(
                     .is_some_and(|title| !browser_title_platform_signals(title).is_empty())
                 {
                     has_unscoped_meeting_window = true;
+                    meeting_web_area_missing = true;
                     warnings.push(
                         "a meeting-like browser window did not expose one active AXWebArea; it was excluded"
                             .to_string(),
@@ -1838,7 +1852,7 @@ fn collect_browser_meeting_windows(
         })
         .collect();
 
-    (roots, has_unscoped_meeting_window)
+    (roots, has_unscoped_meeting_window, meeting_web_area_missing)
 }
 
 #[cfg(any(test, target_os = "macos", target_os = "linux"))]
@@ -2130,7 +2144,7 @@ fn inspect_app(
     if accessibility_trusted {
         let ax_app = ax::UiElement::with_app_pid(pid);
         let _ = ax_app.set_messaging_timeout_secs(0.6);
-        request_browser_accessibility(&app, pid, &ax_app);
+        request_browser_accessibility(&app, pid, &ax_app, false);
         if bundle_platform == MeetingPlatform::Slack {
             let mut roots = collect_slack_huddle_inspection_roots(&ax_app, &mut warnings);
             match roots.len() {

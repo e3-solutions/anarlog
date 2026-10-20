@@ -1,0 +1,53 @@
+name: E3 Meeting Capture Native Checks
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e3-capture-native-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: github.repository == 'e3-solutions/anarlog'
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      TAURI_ENV_TARGET_TRIPLE: aarch64-apple-darwin
+      CARGO_TARGET_DIR: ${{ github.workspace }}/apps/desktop/src-tauri/target
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          lfs: true
+          submodules: recursive
+          persist-credentials: false
+      - uses: ./.github/actions/install_desktop_deps # zizmor: ignore[self-repository] -- Match the candidate's native dependency setup.
+        with:
+          target: macos
+      - uses: ./.github/actions/rust_install # zizmor: ignore[self-repository] -- Match the candidate's Rust toolchain setup.
+        with:
+          platform: macos
+      - name: Reuse pilot native build dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          # Keep this job ID, prefix and target path aligned with the pilot.
+          prefix-key: e3-pilot-native-v2-opt1
+          workspaces: . -> apps/desktop/src-tauri/target
+          cache-on-failure: true
+          cache-workspace-crates: true
+      - uses: ./.github/actions/pnpm_install # zizmor: ignore[self-repository] -- Match the candidate's workspace dependencies.
+      - run: echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
+      - name: Check permission and meeting detection formatting
+        run: |
+          rustfmt --check --edition 2024 plugins/permissions/src/ext.rs crates/detect/src/meeting_ax.rs
+      - name: Test native permission status handling
+        run: |
+          cargo test --locked -p tauri-plugin-permissions --features private-tcc --lib tests::
+      - run: cargo test --locked -p detect browser_activation
+      - run: cargo test --locked -p detect chrome_tabs
+      - run: cargo test --locked -p detect browser_inspection
+      - run: cargo test --locked -p detect slack_

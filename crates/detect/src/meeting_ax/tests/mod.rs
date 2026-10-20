@@ -83,7 +83,7 @@ fn browser_activation_excludes_non_chromium_and_native_apps() {
         "com.microsoft.edgemac",
         "com.brave.Browser",
     ] {
-        assert!(should_request_browser_accessibility(browser, None, now));
+        assert!(should_request_browser_accessibility(browser, None, now, false));
     }
     for other in [
         "com.apple.Safari",
@@ -93,35 +93,33 @@ fn browser_activation_excludes_non_chromium_and_native_apps() {
         "com.tinyspeck.slackmacgap",
         "unknown",
     ] {
-        assert!(!should_request_browser_accessibility(other, None, now));
+        assert!(!should_request_browser_accessibility(other, None, now, true));
     }
 }
 
 #[test]
-fn browser_activation_does_not_restart_debounce_and_can_recover_failed_requests() {
+fn browser_activation_retries_missing_web_area_without_churning_healthy_windows() {
     let now = Instant::now();
-    let failed = BrowserAccessibilityRequest {
+    let previous = BrowserAccessibilityRequest {
         attempted_at: now,
-        succeeded: false,
     };
     assert!(!should_request_browser_accessibility(
         "com.google.Chrome",
-        Some(failed),
+        Some(previous),
         now + Duration::from_secs(2),
+        true,
     ));
     assert!(should_request_browser_accessibility(
         "com.google.Chrome",
-        Some(failed),
+        Some(previous),
         now + Duration::from_secs(30),
+        true,
     ));
-    let succeeded = BrowserAccessibilityRequest {
-        succeeded: true,
-        ..failed
-    };
     assert!(!should_request_browser_accessibility(
         "com.google.Chrome",
-        Some(succeeded),
+        Some(previous),
         now + Duration::from_secs(3600),
+        false,
     ));
 }
 
