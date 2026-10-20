@@ -251,8 +251,12 @@ fn browser_call_identity(root: &BrowserMeetingRoot) -> Option<String> {
 fn is_meet_departure_node(node: &AxNode) -> bool {
     node_has_positive_bounds(node)
         && match node.role.as_deref() {
-            Some("AXHeading") => node_labels(node)
-                .any(|label| label.trim().eq_ignore_ascii_case("You left the meeting")),
+            Some("AXHeading") => node_labels(node).any(|label| {
+                matches!(
+                    label.trim().to_ascii_lowercase().as_str(),
+                    "you left the meeting" | "you've ended the meeting for everyone"
+                )
+            }),
             Some("AXButton") if node.enabled != Some(false) => node_labels(node).any(|label| {
                 matches!(
                     label.trim().to_ascii_lowercase().as_str(),
