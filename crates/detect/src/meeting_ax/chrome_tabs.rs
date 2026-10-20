@@ -169,7 +169,10 @@ pub(super) fn inspect(bundle_id: &str, pid: i32) -> Option<Vec<String>> {
         if before.is_terminated() || after.is_terminated() || !before.is_equal(&after) {
             return Err("process_instance_changed");
         }
-        if after.bundle_id().is_none_or(|id| id.to_string() != bundle_id) {
+        if after
+            .bundle_id()
+            .is_none_or(|id| id.to_string() != bundle_id)
+        {
             return Err("process_wrong_bundle");
         }
         Ok(inventory)

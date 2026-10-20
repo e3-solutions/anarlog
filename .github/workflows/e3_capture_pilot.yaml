@@ -90,6 +90,8 @@ jobs:
           # Manual builds use their branch cache and can restore default-branch entries.
           prefix-key: e3-pilot-native-v3-opt1
           workspaces: . -> apps/desktop/src-tauri/target
+          # Validation must not occupy the immutable full-build cache key.
+          save-if: ${{ inputs.native_checks_only != true }}
           # Preserve compiled dependencies even if Apple's later notarization fails.
           cache-on-failure: ${{ steps.native-format.outcome == 'success' }}
           cache-workspace-crates: true
