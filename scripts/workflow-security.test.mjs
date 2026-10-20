@@ -71,6 +71,34 @@ function pilotStepRun(source, id) {
   return run.replace(/^          /gm, "");
 }
 
+test("native-check mode cannot access signing secrets, package apps or upload artifacts", async () => {
+  const source = await readFile(
+    new URL("../.github/workflows/e3_capture_pilot.yaml", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    source,
+    /native_checks_only:\n(?:.*\n)*?        type: boolean\n        default: false/,
+  );
+  const steps = source
+    .split("    steps:\n")[1]
+    .split(/^      - /m)
+    .slice(1);
+  for (const step of steps) {
+    const restricted =
+      /secrets\.|apple_cert|notarize|codesign|stapler|tauri build|prepare-binaries|archive-pilot|actions\/upload-artifact/.test(
+        step,
+      );
+    if (restricted) {
+      // This release policy applies even to always() recovery uploads.
+      assert.match(
+        step,
+        /(?:^|\n)\s*if: (?:always\(\) && )?inputs\.native_checks_only != true(?: && [^\n]+)?\n/,
+      );
+    }
+  }
+});
+
 test("pilot signing preflight reports secret names without exposing values", async () => {
   const source = await readFile(
     new URL("../.github/workflows/e3_capture_pilot.yaml", import.meta.url),

@@ -3,6 +3,10 @@ name: E3 Meeting Capture Pilot
 on:
   workflow_dispatch:
     inputs:
+      native_checks_only:
+        description: Run native checks without signing or packaging
+        type: boolean
+        default: false
       signing_mode:
         description: macOS signing mode
         type: choice
@@ -31,6 +35,7 @@ jobs:
       VITE_API_URL: http://localhost:3001
     steps:
       - id: signing-preflight
+        if: inputs.native_checks_only != true
         env:
           SIGNING_MODE: ${{ inputs.signing_mode }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -57,7 +62,7 @@ jobs:
           lfs: true
           submodules: recursive
           persist-credentials: false
-      - if: inputs.signing_mode == 'developer-id'
+      - if: inputs.native_checks_only != true && inputs.signing_mode == 'developer-id'
         uses: ./.github/actions/apple_cert # zizmor: ignore[self-repository] -- Validate the signing identity before dependency installation or compilation.
         id: apple-cert
         with:
@@ -65,7 +70,7 @@ jobs:
           apple-certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           keychain-password: ${{ secrets.KEYCHAIN_PASSWORD }}
       - id: notarization-preflight
-        if: inputs.signing_mode == 'developer-id'
+        if: inputs.native_checks_only != true && inputs.signing_mode == 'developer-id'
         timeout-minutes: 2
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -94,7 +99,7 @@ jobs:
       - run: echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
       - name: Validate native permission repairs before packaging
         run: |
-          rustfmt --check --edition 2024 plugins/permissions/src/ext.rs
+          rustfmt --check --edition 2024 plugins/permissions/src/ext.rs crates/detect/src/meeting_ax.rs
           cargo test --locked -p tauri-plugin-permissions --features private-tcc --lib tests::
       - name: Generate detect bindings with the owning exporter
         run: |
@@ -102,6 +107,7 @@ jobs:
           pnpm exec cargo test --locked -p tauri-plugin-detect --lib test::export_types -- --exact
           pnpm exec prettier --check plugins/detect/js/bindings.gen.ts
       - name: Upload generated detect bindings
+        if: inputs.native_checks_only != true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: e3-detect-bindings-${{ github.sha }}
@@ -114,8 +120,9 @@ jobs:
       - run: cargo test --locked -p detect chrome_tabs
       - run: cargo test --locked -p detect browser_inspection
       - run: cargo test --locked -p detect slack_
-      - run: cargo xtask prepare-binaries
-      - if: inputs.signing_mode == 'developer-id'
+      - if: inputs.native_checks_only != true
+        run: cargo xtask prepare-binaries
+      - if: inputs.native_checks_only != true && inputs.signing_mode == 'developer-id'
         env:
           SIGNING_IDENTITY: ${{ steps.apple-cert.outputs.cert-id }}
         run: |
@@ -124,6 +131,7 @@ jobs:
           codesign --force --sign "$SIGNING_IDENTITY" --timestamp --options runtime "$cloudsync_dylib"
           codesign --verify --strict --verbose=2 "$cloudsync_dylib"
       - id: build-pilot
+        if: inputs.native_checks_only != true
         env:
           CARGO_PROFILE_RELEASE_OPT_LEVEL: "1"
           SIGNING_MODE: ${{ inputs.signing_mode }}
@@ -153,7 +161,7 @@ jobs:
             --config "$RUNNER_TEMP/e3-pilot-signing.json" \
             --bundles app
       - id: checkpoint-signed-pilot
-        if: inputs.signing_mode == 'developer-id'
+        if: inputs.native_checks_only != true && inputs.signing_mode == 'developer-id'
         env:
           BUILD_COMMIT: ${{ github.sha }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -165,7 +173,7 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent "$app" pilot-signed-checkpoint/E3-Meeting-Capture-Pilot-arm64.zip
           shasum -a 256 pilot-signed-checkpoint/E3-Meeting-Capture-Pilot-arm64.zip > pilot-signed-checkpoint/SHA256SUMS
           printf 'Commit: %s\nSigning: Developer ID signed; NOT NOTARIZED\nDiagnostic checkpoint only. Apple acceptance, stapling and Gatekeeper verification are pending. Do not treat this as the final installation artifact.\n' "$BUILD_COMMIT" > pilot-signed-checkpoint/BUILD.txt
-      - if: inputs.signing_mode == 'developer-id'
+      - if: inputs.native_checks_only != true && inputs.signing_mode == 'developer-id'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: e3-pilot-signed-NOT-NOTARIZED-${{ github.sha }}
@@ -173,7 +181,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - id: notarize-pilot
-        if: inputs.signing_mode == 'developer-id'
+        if: inputs.native_checks_only != true && inputs.signing_mode == 'developer-id'
         timeout-minutes: 45
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -199,7 +207,7 @@ jobs:
           }});
           JS
           xcrun stapler staple "apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/E3 Meeting Capture Pilot.app"
-      - if: always() && inputs.signing_mode == 'developer-id' && steps.checkpoint-signed-pilot.outcome == 'success'
+      - if: always() && inputs.native_checks_only != true && inputs.signing_mode == 'developer-id' && steps.checkpoint-signed-pilot.outcome == 'success'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: e3-pilot-notary-submission-${{ github.sha }}
@@ -207,6 +215,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - id: archive-pilot
+        if: inputs.native_checks_only != true
         shell: bash
         env:
           BUILD_COMMIT: ${{ github.sha }}
@@ -230,7 +239,8 @@ jobs:
           shasum -a 256 pilot-artifact/E3-Meeting-Capture-Pilot-arm64.zip > pilot-artifact/SHA256SUMS
           printf 'Commit: %s\nTarget: aarch64-apple-darwin\nRequires: macOS 15 or later on Apple Silicon\nSigning mode: %s\nSigning: %s\nBundle identifier: ai.e3group.meeting-capture-pilot\nRust optimization: level 1 for pilot iteration\nAutomatic updates: disabled\n' "$BUILD_COMMIT" "$SIGNING_MODE" "$signing_label" > pilot-artifact/BUILD.txt
           printf '%s\n' "Download this Actions artifact, unzip E3-Meeting-Capture-Pilot-arm64.zip, and move the app to Applications. $install_signing" 'Keep the same bundle identifier and Apple Developer team for later signed builds. Changing signing modes, developer teams, or the bundle identifier can require granting macOS permissions again. Quit the app before replacing it; automatic updates are disabled.' 'Enable meeting capture explicitly in app settings. See apps/desktop/E3_RELEASE.md at the recorded commit for setup and manual tests. Google account connectors require a separately configured API; this artifact does not provision a backend.' > pilot-artifact/INSTALL.txt
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - if: inputs.native_checks_only != true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: e3-meeting-capture-pilot-arm64-${{ github.sha }}
           path: pilot-artifact/
