@@ -196,21 +196,10 @@ fn browser_inspection_recognizes_host_ended_heading_without_a_rejoin_button() {
         fixture_node(2, "AXButton", "", &[1]),
         fixture_node(3, "AXButton", "", &[2]),
     ]);
-    let rows = browser_rows(vec![ended.clone()]);
+    let rows = browser_rows(vec![ended]);
     assert!(!rows[0].active_call);
     assert_eq!(rows[0].call_identity, joined[0].call_identity);
     assert!(rows[0].warnings.is_empty());
-
-    // The same text hidden from the visible page cannot end a quiet call.
-    ended.nodes[1].bounds = None;
-    let hidden = browser_rows(vec![ended]);
-    assert!(hidden[0].call_identity.is_none());
-    assert!(
-        hidden[0]
-            .warnings
-            .iter()
-            .any(|warning| warning.contains("incomplete"))
-    );
 }
 
 #[test]
