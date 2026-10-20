@@ -2,22 +2,15 @@ name: E3 Meeting Capture Pilot
 
 on:
   workflow_dispatch:
-  pull_request:
-    branches: [main]
-    paths:
-      - .github/workflows/e3_capture_pilot.yaml
-      - .github/actions/install_desktop_deps/**
-      - .github/actions/pnpm_install/**
-      - .github/actions/rust_install/**
-      - apps/desktop/**
-      - apps/cli/**
-      - crates/**
-      - plugins/**
-      - packages/**
-      - Cargo.toml
-      - Cargo.lock
-      - pnpm-lock.yaml
-      - rust-toolchain.toml
+    inputs:
+      signing_mode:
+        description: macOS signing mode
+        type: choice
+        required: true
+        default: developer-id
+        options:
+          - developer-id
+          - ad-hoc
 
 permissions:
   contents: read
@@ -36,6 +29,28 @@ jobs:
       NODE_OPTIONS: --max-old-space-size=4096
       VITE_API_URL: http://localhost:3001
     steps:
+      - id: signing-preflight
+        env:
+          SIGNING_MODE: ${{ inputs.signing_mode }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import sys
+          mode = os.environ["SIGNING_MODE"]
+          if mode not in ("developer-id", "ad-hoc"):
+              sys.exit("Unsupported signing mode")
+          if mode == "developer-id":
+              required = ("APPLE_CERTIFICATE", "APPLE_CERTIFICATE_PASSWORD", "KEYCHAIN_PASSWORD", "APPLE_ID", "APPLE_PASSWORD", "APPLE_TEAM_ID")
+              missing = [name for name in required if not os.environ.get(name, "").strip()]
+              if missing:
+                  sys.exit("Missing signing secrets: " + ", ".join(missing))
+          PY
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           lfs: true
@@ -52,7 +67,7 @@ jobs:
         with:
           # Separate full workspace caches from the old registry-only entry.
           # Match the pilot optimization below; Rust-cache hashes Cargo.lock/toolchain.
-          # PR caches are scoped to this PR merge ref, not shared between PRs.
+          # Manual builds use their branch cache and can restore default-branch entries.
           prefix-key: e3-pilot-native-v2-opt1
           workspaces: . -> apps/desktop/src-tauri/target
           # Avoid sealing a registry-only cache when compilation is cancelled.
@@ -78,28 +93,74 @@ jobs:
       - run: cargo test --locked -p detect browser_inspection
       - run: cargo test --locked -p detect slack_
       - run: cargo xtask prepare-binaries
-      - name: Build isolated pilot app without publishing or updater signing
+      - if: inputs.signing_mode == 'developer-id'
+        uses: ./.github/actions/apple_cert # zizmor: ignore[self-repository] -- Import only after validation passes, using the existing certificate action.
+        id: apple-cert
+        with:
+          apple-certificate: ${{ secrets.APPLE_CERTIFICATE }}
+          apple-certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          keychain-password: ${{ secrets.KEYCHAIN_PASSWORD }}
+      - if: inputs.signing_mode == 'developer-id'
+        env:
+          SIGNING_IDENTITY: ${{ steps.apple-cert.outputs.cert-id }}
+        run: |
+          set -euo pipefail
+          cloudsync_dylib="crates/cloudsync/vendor/cloudsync/macos/aarch64/cloudsync.dylib"
+          codesign --force --sign "$SIGNING_IDENTITY" --timestamp --options runtime "$cloudsync_dylib"
+          codesign --verify --strict --verbose=2 "$cloudsync_dylib"
+      - id: build-pilot
         env:
           CARGO_PROFILE_RELEASE_OPT_LEVEL: "1"
-        run: >-
-          pnpm -F desktop tauri build
-          --target aarch64-apple-darwin
-          --config src-tauri/tauri.e3-pilot.json
-          --bundles app
-      - name: Verify and archive app
+          SIGNING_MODE: ${{ inputs.signing_mode }}
+          SIGNING_IDENTITY: ${{ steps.apple-cert.outputs.cert-id }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          signed = os.environ["SIGNING_MODE"] == "developer-id"
+          identity = os.environ["SIGNING_IDENTITY"] if signed else "-"
+          if signed and not identity.startswith("Developer ID Application:"):
+              raise SystemExit("A Developer ID Application signing identity is required")
+          config = {"bundle": {"macOS": {"signingIdentity": identity, "hardenedRuntime": True}}}
+          Path(os.environ["RUNNER_TEMP"], "e3-pilot-signing.json").write_text(json.dumps(config))
+          PY
+          if [[ "$SIGNING_MODE" == "ad-hoc" ]]; then
+            unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID APPLE_SIGNING_IDENTITY APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_API_ISSUER APPLE_API_KEY APPLE_API_KEY_PATH
+          fi
+          pnpm -F desktop tauri build \
+            --target aarch64-apple-darwin \
+            --config src-tauri/tauri.e3-pilot.json \
+            --config "$RUNNER_TEMP/e3-pilot-signing.json" \
+            --bundles app
+      - id: archive-pilot
         shell: bash
         env:
           BUILD_COMMIT: ${{ github.sha }}
+          SIGNING_MODE: ${{ inputs.signing_mode }}
         run: |
           set -euo pipefail
           app="apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/E3 Meeting Capture Pilot.app"
           test -d "$app"
           codesign --verify --deep --strict --verbose=2 "$app"
+          if [[ "$SIGNING_MODE" == "developer-id" ]]; then
+            xcrun stapler validate "$app"
+            spctl --assess --type execute --verbose=4 "$app"
+            signing_label="Developer ID Application; Apple-notarized and stapled"
+            install_signing="This build is Developer ID signed and notarized. macOS still requires first-run microphone, system-audio, and Accessibility permissions."
+          else
+            signing_label="ad-hoc; not Apple-notarized"
+            install_signing="This explicitly selected ad-hoc build is not notarized; macOS may require System Settings > Privacy & Security > Open Anyway."
+          fi
           mkdir -p pilot-artifact
           ditto -c -k --sequesterRsrc --keepParent "$app" pilot-artifact/E3-Meeting-Capture-Pilot-arm64.zip
           shasum -a 256 pilot-artifact/E3-Meeting-Capture-Pilot-arm64.zip > pilot-artifact/SHA256SUMS
-          printf 'Commit: %s\nTarget: aarch64-apple-darwin\nRequires: macOS 15 or later on Apple Silicon\nSigning: ad-hoc; not Apple-notarized\nRust optimization: level 1 for pilot iteration\nAutomatic updates: disabled\n' "$BUILD_COMMIT" > pilot-artifact/BUILD.txt
-          printf '%s\n' 'Download the Actions artifact and unzip E3-Meeting-Capture-Pilot-arm64.zip. Move the app to Applications. This private pilot is ad-hoc signed and not notarized; macOS may require System Settings > Privacy & Security > Open Anyway. Enable meeting capture explicitly in app settings. See apps/desktop/E3_RELEASE.md at the recorded commit for setup and manual tests. Google account connectors require a separately configured API; this artifact does not provision a backend.' > pilot-artifact/INSTALL.txt
+          printf 'Commit: %s\nTarget: aarch64-apple-darwin\nRequires: macOS 15 or later on Apple Silicon\nSigning mode: %s\nSigning: %s\nBundle identifier: ai.e3group.meeting-capture-pilot\nRust optimization: level 1 for pilot iteration\nAutomatic updates: disabled\n' "$BUILD_COMMIT" "$SIGNING_MODE" "$signing_label" > pilot-artifact/BUILD.txt
+          printf '%s\n' "Download this Actions artifact, unzip E3-Meeting-Capture-Pilot-arm64.zip, and move the app to Applications. $install_signing" 'Keep the same bundle identifier and Apple Developer team for later signed builds. Changing signing modes, developer teams, or the bundle identifier can require granting macOS permissions again. Quit the app before replacing it; automatic updates are disabled.' 'Enable meeting capture explicitly in app settings. See apps/desktop/E3_RELEASE.md at the recorded commit for setup and manual tests. Google account connectors require a separately configured API; this artifact does not provision a backend.' > pilot-artifact/INSTALL.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: e3-meeting-capture-pilot-arm64-${{ github.sha }}

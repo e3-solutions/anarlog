@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -57,6 +57,256 @@ test("staging and release result steps treat shell metacharacters as literal dat
       await assert.rejects(readFile(path.join(directory, "injected")), {
         code: "ENOENT",
       });
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+function pilotStepRun(source, id) {
+  const step = source.split(`      - id: ${id}\n`)[1]?.split(/\n      - /)[0];
+  assert.ok(step, `Missing pilot step ${id}`);
+  const run = step.split("        run: |\n")[1];
+  assert.ok(run, `Missing run script for ${id}`);
+  return run.replace(/^          /gm, "");
+}
+
+test("pilot signing preflight reports secret names without exposing values", async () => {
+  const source = await readFile(
+    new URL("../.github/workflows/e3_capture_pilot.yaml", import.meta.url),
+    "utf8",
+  );
+  const script = pilotStepRun(source, "signing-preflight");
+  const required = [
+    "APPLE_CERTIFICATE",
+    "APPLE_CERTIFICATE_PASSWORD",
+    "KEYCHAIN_PASSWORD",
+    "APPLE_ID",
+    "APPLE_PASSWORD",
+    "APPLE_TEAM_ID",
+  ];
+  const directory = await mkdtemp(path.join(os.tmpdir(), "pilot-signing-"));
+  const secret = 'sensitive-$(touch injected)`touch injected`"';
+  try {
+    const invoke = (mode, secrets = {}) =>
+      spawnSync("bash", ["-e", "-c", script], {
+        cwd: directory,
+        env: { PATH: process.env.PATH, SIGNING_MODE: mode, ...secrets },
+        encoding: "utf8",
+      });
+    const missing = invoke("developer-id");
+    assert.notEqual(missing.status, 0);
+    for (const name of required) assert.ok(missing.stderr.includes(name));
+    const provided = Object.fromEntries(required.map((name) => [name, secret]));
+    const signed = invoke("developer-id", provided);
+    assert.equal(signed.status, 0, signed.stderr);
+    assert.ok(!(signed.stdout + signed.stderr).includes(secret));
+    assert.equal(invoke("ad-hoc").status, 0);
+    assert.notEqual(invoke("unsupported").status, 0);
+    await assert.rejects(readFile(path.join(directory, "injected")), {
+      code: "ENOENT",
+    });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("pilot signing override preserves certificate names as JSON data", async () => {
+  const source = await readFile(
+    new URL("../.github/workflows/e3_capture_pilot.yaml", import.meta.url),
+    "utf8",
+  );
+  const script = pilotStepRun(source, "build-pilot");
+  const python = script.match(/python3 - <<'PY'\n([\s\S]*?)\nPY\n/)[1];
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "pilot-signing-json-"),
+  );
+  const identity =
+    'Developer ID Application: Test "$(touch injected)`touch injected`';
+  try {
+    for (const mode of ["developer-id", "ad-hoc"]) {
+      const result = spawnSync("python3", ["-c", python], {
+        cwd: directory,
+        env: {
+          PATH: process.env.PATH,
+          RUNNER_TEMP: directory,
+          SIGNING_MODE: mode,
+          SIGNING_IDENTITY: identity,
+        },
+        encoding: "utf8",
+      });
+      assert.equal(result.status, 0, result.stderr);
+      const override = JSON.parse(
+        await readFile(path.join(directory, "e3-pilot-signing.json"), "utf8"),
+      );
+      assert.deepEqual(override, {
+        bundle: {
+          macOS: {
+            signingIdentity: mode === "developer-id" ? identity : "-",
+            hardenedRuntime: true,
+          },
+        },
+      });
+    }
+    await assert.rejects(readFile(path.join(directory, "injected")), {
+      code: "ENOENT",
+    });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("ad-hoc pilot builds omit notarization credentials from the Tauri process", async () => {
+  const source = await readFile(
+    new URL("../.github/workflows/e3_capture_pilot.yaml", import.meta.url),
+    "utf8",
+  );
+  const directory = await mkdtemp(path.join(os.tmpdir(), "pilot-adhoc-"));
+  try {
+    await writeFile(
+      path.join(directory, "pnpm"),
+      `#!/usr/bin/env python3
+import os
+for name in ("APPLE_ID", "APPLE_PASSWORD", "APPLE_TEAM_ID", "APPLE_API_ISSUER", "APPLE_API_KEY", "APPLE_API_KEY_PATH"):
+    assert name not in os.environ, name + " must be unset for ad-hoc signing"
+`,
+      { mode: 0o755 },
+    );
+    const result = spawnSync(
+      "bash",
+      ["-e", "-c", pilotStepRun(source, "build-pilot")],
+      {
+        cwd: directory,
+        env: {
+          PATH: directory + path.delimiter + process.env.PATH,
+          RUNNER_TEMP: directory,
+          SIGNING_MODE: "ad-hoc",
+          SIGNING_IDENTITY: "",
+          APPLE_ID: "",
+          APPLE_PASSWORD: "",
+          APPLE_TEAM_ID: "",
+          APPLE_API_ISSUER: "",
+          APPLE_API_KEY: "",
+          APPLE_API_KEY_PATH: "",
+        },
+        encoding: "utf8",
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Apple certificate inputs stay literal and temporary private keys are always removed", async () => {
+  const source = await readFile(
+    new URL("../.github/actions/apple_cert/action.yaml", import.meta.url),
+    "utf8",
+  );
+  const step = source
+    .split("    - name: Setup Certificate\n")[1]
+    .split("\n    - id:")[0];
+  const script = step.split("      run: |\n")[1].replace(/^        /gm, "");
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "apple-certificate-inputs-"),
+  );
+  const hostile =
+    '$(touch injected-command)`touch injected-backtick`"$HOME"\\quote';
+  const inputs = {
+    "apple-certificate": "certificate-" + hostile,
+    "apple-certificate-password": "certificate-password-" + hostile,
+    "keychain-password": "keychain-password-" + hostile,
+  };
+  try {
+    await writeFile(
+      path.join(directory, "base64"),
+      `#!/usr/bin/env python3
+import os
+import sys
+from pathlib import Path
+Path(os.environ["TEST_DIRECTORY"], "certificate-input").write_bytes(sys.stdin.buffer.read())
+sys.stdout.buffer.write(b"private certificate fixture")
+`,
+      { mode: 0o755 },
+    );
+    await writeFile(
+      path.join(directory, "security"),
+      `#!/usr/bin/env python3
+import json
+import os
+import stat
+import sys
+from pathlib import Path
+args = sys.argv[1:]
+with Path(os.environ["TEST_DIRECTORY"], "security-arguments").open("a") as log:
+    log.write(json.dumps(args) + "\\n")
+if args[0] == "import":
+    certificate = Path(args[1])
+    assert certificate.read_bytes() == b"private certificate fixture"
+    assert stat.S_IMODE(certificate.stat().st_mode) == 0o600
+    if os.environ["TEST_FAIL_IMPORT"] == "1":
+        sys.exit(7)
+if args[0] == "find-identity":
+    print('1) ABC "Developer ID Application: Fixture (TEAM)"')
+`,
+      { mode: 0o755 },
+    );
+    for (const failImport of ["0", "1"]) {
+      const result = spawnSync(
+        "bash",
+        [
+          "-e",
+          "-c",
+          script.replace(
+            /\$\{\{\s*inputs\.([^\s}]+)\s*\}\}/g,
+            (_, name) => inputs[name],
+          ),
+        ],
+        {
+          cwd: directory,
+          env: {
+            PATH: directory + path.delimiter + process.env.PATH,
+            RUNNER_TEMP: directory,
+            TEST_DIRECTORY: directory,
+            TEST_FAIL_IMPORT: failImport,
+            APPLE_CERTIFICATE: inputs["apple-certificate"],
+            APPLE_CERTIFICATE_PASSWORD: inputs["apple-certificate-password"],
+            KEYCHAIN_PASSWORD: inputs["keychain-password"],
+          },
+          encoding: "utf8",
+        },
+      );
+      assert.equal(result.status, failImport === "1" ? 7 : 0, result.stderr);
+      assert.equal(
+        await readFile(path.join(directory, "certificate-input"), "utf8"),
+        inputs["apple-certificate"],
+      );
+      const calls = (
+        await readFile(path.join(directory, "security-arguments"), "utf8")
+      )
+        .trim()
+        .split("\n")
+        .map(JSON.parse);
+      const imported = calls.filter((args) => args[0] === "import").at(-1);
+      assert.equal(
+        imported[imported.indexOf("-P") + 1],
+        inputs["apple-certificate-password"],
+      );
+      assert.ok(
+        calls.some(
+          (args) =>
+            args[0] === "create-keychain" &&
+            args[2] === inputs["keychain-password"],
+        ),
+      );
+      await assert.rejects(readFile(imported[1]), { code: "ENOENT" });
+      for (const value of Object.values(inputs))
+        assert.ok(!(result.stdout + result.stderr).includes(value));
+      for (const marker of ["injected-command", "injected-backtick"]) {
+        await assert.rejects(readFile(path.join(directory, marker)), {
+          code: "ENOENT",
+        });
+      }
     }
   } finally {
     await rm(directory, { recursive: true, force: true });

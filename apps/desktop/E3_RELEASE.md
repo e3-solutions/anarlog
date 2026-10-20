@@ -55,7 +55,7 @@ Run two short calls per platform with a second person, using a headset for at le
 
 Record start/stop delay, missed calls, duplicated sessions, and audio completeness against the number of supported calls actually attempted. Mocked tests do not establish real Slack/Meet Accessibility compatibility or audio capture quality.
 
-After replacing this ad-hoc signed pilot, verify Microphone, System audio, and Accessibility inside the app. macOS can retain enabled entries for an older binary. If the app still reports a missing grant, remove and re-add the current application in the corresponding System Settings list and use **Quit & Reopen** when prompted. Keep the pilot under **System Audio Recording Only**; full screen recording is unnecessary for this milestone.
+After an update, verify Microphone, System audio, and Accessibility inside the app. Switching from an ad-hoc build to the stable signed pilot can require one permission repair. Repeatedly removing entries or toggling permissions is not an iteration strategy: first verify the installed build's signing identity. Keep the pilot under **System Audio Recording Only**; full screen recording is unnecessary for this milestone.
 
 ## Local development and installable pilot
 
@@ -63,13 +63,34 @@ The repository currently has no published E3 release. Merging code does not crea
 
 For a local development build, install Node 22 or later, pnpm 11.1.1, Rust 1.94, and full Xcode with its Metal Toolchain. Command Line Tools alone are insufficient for native MLX dependencies. Run `pnpm install --frozen-lockfile`, then `pnpm dev:desktop` from the repository root. Local-first desktop development does not require production secrets; authenticated scheduled Meet verification still needs the API/integration configuration above.
 
-The dedicated pilot workflow below builds with an isolated identifier, disabled updater, and ad-hoc signing. A signed/notarized pilot is preferable for a wider team rollout.
+The dedicated pilot workflow below keeps an isolated identifier and disabled updater. Its normal installable build uses Developer ID signing and Apple notarization; ad-hoc signing is an explicit diagnostic option.
 
 The isolated pilot disables native analytics at compile time and uses a localhost API URL; it requires no production telemetry key or backend for local capture.
 
 The pilot uses Rust release optimization level 1 to shorten native build iteration while preserving release checks. Production release profiles are unchanged; measure performance separately before a wider rollout.
 
 Native compilation and packaging require the Rust/Xcode toolchains and sufficient disk space. Frontend tests alone do not verify a distributable build.
+
+### Fast iteration and stable permissions
+
+Ad-hoc signatures identify a particular binary rather than a persistent developer. macOS can therefore treat a rebuild as a different application for privacy approval. Keep `ai.e3group.meeting-capture-pilot`, the signing team, and the installation path stable across updates. A Developer ID signature supplies identity continuity; notarization separately addresses the downloaded-app Gatekeeper warning. Changing to that identity still needs initial approval, and macOS can independently require later confirmation. See [Apple's signing requirement explanation](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements).
+
+Use normal frontend tests, typechecks, and PR checks during edits. Dispatch **E3 Meeting Capture Pilot** explicitly when a native test or installable candidate is needed. Full app packaging no longer starts on every PR push. Select `developer-id` for an app intended to be installed; missing signing credentials fail before dependency installation or native compilation. The `ad-hoc` option remains unnotarized and can repeat permission prompts after replacement.
+
+Configure these GitHub Actions secrets for the fork using secure repository settings, never source files or chat:
+
+| Secret | Value |
+| --- | --- |
+| `APPLE_CERTIFICATE` | Base64-encoded E3 Developer ID Application `.p12`, including its private key. |
+| `APPLE_CERTIFICATE_PASSWORD` | Password protecting that exported `.p12`. |
+| `KEYCHAIN_PASSWORD` | Password used for the temporary CI signing keychain. |
+| `APPLE_ID` | Apple account authorized to notarize for the signing team. |
+| `APPLE_PASSWORD` | An Apple app-specific password for notarization, not the Mac login password. |
+| `APPLE_TEAM_ID` | The Apple Developer team issuing the certificate. |
+
+Use the existing Apple certificate import and desktop signing infrastructure. The pilot workflow overrides its diagnostic `signingIdentity: "-"` configuration for the signed build and requires signature, stapled-ticket, and Gatekeeper validation before uploading that artifact. Keep the same signing identity available for subsequent candidates. Updater credentials and CrabNebula publication are unnecessary for this Actions-artifact pilot.
+
+Check the downloaded `BUILD.txt` before replacing the app. Do not substitute an ad-hoc artifact for a signed candidate during an iteration test. After the first signed installation and permission grant, install a second distinct build and verify that detection and both audio channels work without removing permission entries; automated signing checks alone do not establish permission persistence on this Mac.
 
 ## Signed E3 distribution
 
@@ -86,7 +107,7 @@ Stable-derived builds still inherit upstream deep-link schemes and package metad
 
 ## Download the isolated pilot
 
-The `E3 Meeting Capture Pilot` workflow (`.github/workflows/e3_capture_pilot.yaml`) builds an Apple Silicon macOS app for pull requests targeting fork main and on manual dispatch. After a successful run, open its GitHub Actions page, download `e3-meeting-capture-pilot-arm64-<commit>`, unzip the artifact and then its inner app zip, and move **E3 Meeting Capture Pilot.app** to Applications. The artifact includes the exact commit, checksum and installation instructions. Requires Apple Silicon and macOS 15 or later. This build is ad-hoc signed, not Apple-notarized; if blocked, use macOS Privacy & Security → Open Anyway for this deliberately downloaded pilot.
+Dispatch the `E3 Meeting Capture Pilot` workflow (`.github/workflows/e3_capture_pilot.yaml`) for the reviewed branch and select `developer-id`. After a successful run, open its GitHub Actions page, download `e3-meeting-capture-pilot-arm64-<commit>`, unzip the artifact and then its inner app zip, and move **E3 Meeting Capture Pilot.app** to Applications with the previous app closed. The artifact includes the exact commit, signing mode, checksum and installation instructions. Requires Apple Silicon and macOS 15 or later. The default signed build must pass notarization checks; an explicitly selected ad-hoc diagnostic build still requires an app-specific macOS exception and is unsuitable for testing permission persistence across updates.
 
 The pilot has its own database/settings folder and deep-link scheme and has automatic updates disabled. Existing Anarlog recordings/settings are not reused. Do not run multiple meeting recorders during the test. Complete local onboarding, grant Microphone, System Audio Recording and Accessibility permissions, enable **Record detected meetings** and **Stop when meeting ends**, and set audio retention to **Forever**. A transcription provider is optional for record-only testing. Do not assume the normal automatic-update feed installs this pilot.
 
