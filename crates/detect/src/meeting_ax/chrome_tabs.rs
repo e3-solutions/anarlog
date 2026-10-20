@@ -95,7 +95,7 @@ fn sole_chrome_pid(pid: i32) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-fn query() -> Option<Vec<String>> {
+fn query() -> Result<Vec<String>, &'static str> {
     use std::{
         io::Read,
         process::{Command, Stdio},
@@ -109,30 +109,31 @@ fn query() -> Option<Vec<String>> {
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .ok()?;
-    let stdout = child.stdout.take()?;
-    let reader = thread::spawn(move || {
+        .map_err(|_| "spawn")?;
+    let stdout = child.stdout.take().ok_or("stdout")?;
+    let reader = thread::spawn(move || -> Result<Vec<u8>, &'static str> {
         let mut bytes = Vec::new();
-        stdout.take(131_073).read_to_end(&mut bytes).ok()?;
-        (bytes.len() <= 131_072).then_some(bytes)
+        stdout
+            .take(131_073)
+            .read_to_end(&mut bytes)
+            .map_err(|_| "read")?;
+        (bytes.len() <= 131_072).then_some(bytes).ok_or("output_limit")
     });
     let deadline = Instant::now() + Duration::from_millis(1500);
-    let success = loop {
+    let outcome = loop {
         match child.try_wait() {
-            Ok(Some(status)) => break status.success(),
+            Ok(Some(status)) => break status.success().then_some(()).ok_or("nonzero_exit"),
             Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(15)),
-            _ => {
+            state => {
                 let _ = child.kill();
                 let _ = child.wait();
-                break false;
+                break Err(if state.is_err() { "wait" } else { "timeout" });
             }
         }
     };
-    let bytes = reader.join().ok()??;
-    if !success {
-        return None;
-    }
-    parse_inventory(std::str::from_utf8(&bytes).ok()?)
+    let bytes = reader.join().map_err(|_| "reader_panic")??;
+    outcome?;
+    parse_inventory(std::str::from_utf8(&bytes).map_err(|_| "utf8")?).ok_or("parse")
 }
 
 #[cfg(target_os = "macos")]
@@ -158,7 +159,17 @@ pub(super) fn inspect(bundle_id: &str, pid: i32) -> Option<Vec<String>> {
         // Reserve before IPC. Failures, including permission prompts, back off.
         attempts.insert(pid, Instant::now());
     }
-    let result = query().filter(|_| sole_chrome_pid(pid));
+    let started = Instant::now();
+    let outcome = query().and_then(|inventory| {
+        sole_chrome_pid(pid).then_some(inventory).ok_or("pid_changed")
+    });
+    tracing::debug!(
+        status = outcome.as_ref().err().copied().unwrap_or("complete"),
+        count = outcome.as_ref().map_or(0, Vec::len),
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "chrome_tab_inventory_query"
+    );
+    let result = outcome.ok();
     if result.is_some() {
         attempts
             .lock()
