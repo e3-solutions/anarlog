@@ -187,7 +187,12 @@ fn browser_inspection_recognizes_host_ended_heading_without_a_rejoin_button() {
     let mut ended = meet_window("abc-defg-hij", 0x1000, false);
     ended.nodes.truncate(1);
     ended.nodes.extend([
-        fixture_node(1, "AXHeading", "You've ended the meeting for everyone", &[0]),
+        fixture_node(
+            1,
+            "AXHeading",
+            "You've ended the meeting for everyone",
+            &[0],
+        ),
         fixture_node(2, "AXButton", "", &[1]),
         fixture_node(3, "AXButton", "", &[2]),
     ]);
