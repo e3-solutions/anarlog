@@ -11,6 +11,7 @@ import {
   AUTOMATIC_MEETING_UNKNOWN_GRACE_MS,
   automaticMeetingObservation,
   selectAutomaticMeeting,
+  sameAutomaticMeeting,
   type AutomaticMeeting,
 } from "./automatic-meeting";
 
@@ -115,6 +116,12 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
             live.sessionId === capture.sessionId
           ) {
             capture.seenActive = true;
+            if (
+              selected &&
+              sameAutomaticMeeting(capture.meeting, selected) &&
+              selected.callIdentity?.includes(":tab:")
+            )
+              capture.meeting = selected;
             let observation = automaticMeetingObservation(
               capture.meeting,
               inspection.data,
@@ -209,7 +216,13 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
           retryAfter = now + 5_000;
           return;
         }
-        if (!selected || suppressed.has(selected.key)) return;
+        if (
+          !selected ||
+          [...suppressed.values()].some((meeting) =>
+            sameAutomaticMeeting(meeting, selected),
+          )
+        )
+          return;
         if (live.status === "active") {
           if (live.sessionId && live.triggerAppIds?.includes(selected.app.id)) {
             capture = {

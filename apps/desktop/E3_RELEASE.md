@@ -42,6 +42,10 @@ Run two short calls per platform with a second person, using a headset for at le
 | Slack shows a channel-named Huddle window without “Huddle in …” | Its live Huddle controls start recording, including while muted; chat addressing stays separately validated. |
 | Join muted, then unmute | Capture starts from confirmed attendance and remains one recording. |
 | Mute during a call | Recording continues. |
+| Hide a quiet muted Chrome Meet, then move its tab to another window | Recording continues as one session while its stable tab ID remains present. |
+| Close the captured Chrome Meet tab or navigate it away while Chrome remains running | With Automation granted, recording stops after 15 seconds of confirmed tab absence. |
+| Two tabs use the same Meet code; another tab shows an ended/prejoin page | That unrelated page must not end the captured hidden call. |
+| Deny Chrome Automation or make its inventory unavailable | No false confirmed departure; retain the conservative fallback. |
 | Leave the call | Recording stops after the implementation's confirmation period; file remains playable. |
 | End then immediately start another call | Second call records; no reminder cooldown blocks it. |
 | Temporary microphone/device or network interruption | No duplicate recording or premature confirmed departure. |
@@ -121,7 +125,9 @@ The isolated pilot can test local Slack and ad-hoc Meet capture without a calend
 
 Automatic detection currently enables Meet and Slack only; other app microphone activity still does not prove an actual supported call. The shared inspection/controller can be extended with platform evidence later. Calls must have readable local Accessibility evidence to start. Allow about 2 seconds plus inspection time for detection. Confirmed local departure uses a 15-second grace period. On macOS, an established Meet keeps recording while its browser process remains running and call evidence is unreadable, including a hidden muted tab; on macOS, disappearance of that exact browser process confirms departure. Slack and Meet on other operating systems retain the fallback: unreadable evidence combined with microphone release uses a conservative 60-second grace, recent far-end audio prevents stopping, and an offline interruption preserves an eight-minute reconnect hold. Notification/DND settings do not govern these checks. A brief evidence gap must not restart a manually stopped call.
 
-Closing a Meet tab while its browser remains running is indistinguishable from hiding an ongoing call with the current Accessibility snapshot. Click **Stop** manually when closing or leaving an unreadable/background Meet; automatic stopping requires positive departure evidence or the browser process exiting on macOS. Quiet audio and a muted microphone alone never establish that a Meet ended.
+Google Chrome on macOS additionally requests Automation permission to read Meet tab IDs and URLs through Chrome’s scripting interface. It reads only Meet tab metadata; Accessibility still provides the positive joined-call evidence required to start. A complete current inventory missing the captured tab confirms closure or navigation away, even if Chrome remains running; the usual 15-second stop grace applies. Moving the same tab between windows preserves its identity. Denial, timeout, malformed inventory, or multiple Chrome processes mean unknown rather than an empty inventory, so a quiet hidden call keeps recording. Other browsers retain the Accessibility/process fallback and may require manual Stop after an unreadable tab closes. Quiet audio and a muted microphone never establish departure.
+
+First-use Automation consent, tab movement, closure/navigation, duplicate Meet URLs, manual Stop across permission changes, and permission persistence across signed updates must be verified in the installed signed candidate. Legacy window identities cannot fully disambiguate same-code tab replacements until a unique stable tab identity is established.
 
 Meet continuity uses its canonical meeting code and native window identity. An unrelated home page or another meeting's departure page cannot end that recording. Duplicate tabs for the same Meet code within one window remain indistinguishable; use one joined tab per meeting when testing this pilot.
 

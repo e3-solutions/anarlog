@@ -90,6 +90,7 @@ jobs:
       - run: pnpm -F ui build
       - run: cargo test --locked -p storage
       - run: cargo test --locked -p detect browser_activation
+      - run: cargo test --locked -p detect chrome_tabs
       - run: cargo test --locked -p detect browser_inspection
       - run: cargo test --locked -p detect slack_
       - run: cargo xtask prepare-binaries

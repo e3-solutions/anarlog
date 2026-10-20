@@ -564,6 +564,7 @@ pub(super) fn inspect_meeting_accessibility() -> Vec<MeetingAccessibilityInspect
                 accessibility_trusted: true,
                 window_title: has_active_call.then_some(title).flatten(),
                 call_identity: None,
+                open_call_identities: None,
                 remote_screen_share: has_active_call && nodes_show_remote_screen_share(&nodes),
                 warnings,
             })

@@ -129,6 +129,8 @@ unsafe extern "C-unwind" {
 
 #[cfg(any(test, target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod analysis;
+#[cfg(any(test, target_os = "macos"))]
+mod chrome_tabs;
 #[cfg(any(test, target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod context;
 #[cfg(target_os = "linux")]
@@ -319,6 +321,7 @@ fn browser_inspections_from_roots(
                 accessibility_trusted,
                 window_title: root.window_title,
                 call_identity,
+                open_call_identities: None,
                 remote_screen_share: active_call && nodes_show_remote_screen_share(&root.nodes),
                 warnings: row_warnings,
             }
@@ -338,6 +341,7 @@ fn browser_inspections_from_roots(
             accessibility_trusted,
             window_title: None,
             call_identity: None,
+            open_call_identities: None,
             remote_screen_share: false,
             warnings,
         });
@@ -360,7 +364,23 @@ fn inspect_browser_app(
     let _ = ax_app.set_messaging_timeout_secs(0.6);
     request_browser_accessibility(&app, pid, &ax_app);
     let (roots, unscoped) = collect_browser_meeting_roots(&ax_app, &mut warnings);
-    browser_inspections_from_roots(app, pid, true, roots, unscoped, warnings)
+    let inventory = chrome_tabs::inspect(&app.id, pid);
+    let mut rows = browser_inspections_from_roots(app, pid, true, roots, unscoped, warnings);
+    for row in &mut rows {
+        if let Some(inventory) = &inventory {
+            if let Some((url, _)) = row
+                .call_identity
+                .as_deref()
+                .and_then(|id| id.rsplit_once(":window:"))
+            {
+                if let Some(identity) = chrome_tabs::unique_identity(url, inventory) {
+                    row.call_identity = Some(identity);
+                }
+            }
+        }
+        row.open_call_identities = inventory.clone();
+    }
+    rows
 }
 
 #[cfg(any(test, target_os = "macos", target_os = "linux"))]
@@ -2173,6 +2193,7 @@ fn inspect_app(
         accessibility_trusted,
         window_title,
         call_identity: None,
+        open_call_identities: None,
         remote_screen_share: active_call && nodes_show_remote_screen_share(&nodes),
         warnings,
     }

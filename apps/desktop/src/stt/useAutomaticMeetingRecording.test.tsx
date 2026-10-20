@@ -113,6 +113,88 @@ afterEach(() => {
 });
 
 describe("automatic local meeting recording", () => {
+  it("uses complete tab inventory to distinguish a hidden Meet from a closed tab while Chrome remains running", async () => {
+    const identity = "https://meet.google.com/abc-defg-hij:tab:42";
+    snapshot([{ ...meet, callIdentity: identity }]);
+    const { active, stop } = setup();
+    await tick(0);
+    active();
+    const hidden = {
+      ...meet,
+      activeCall: false,
+      platform: "unknown" as const,
+      callIdentity: null,
+      windowTitle: null,
+      warnings: ["no uniquely scoped meeting AXWindow"],
+    };
+    snapshot([{ ...hidden, ...{ openCallIdentities: [identity] } }]);
+    await tick(90_000);
+    expect(stop).not.toHaveBeenCalled();
+    snapshot([hidden]);
+    await tick(90_000);
+    expect(stop).not.toHaveBeenCalled();
+    snapshot([{ ...hidden, ...{ openCallIdentities: null } }]);
+    await tick(90_000);
+    expect(stop).not.toHaveBeenCalled();
+    snapshot([{ ...hidden, ...{ openCallIdentities: [] } }]);
+    await tick(14_000);
+    expect(stop).not.toHaveBeenCalled();
+    await tick(4_000);
+    expect(stop).toHaveBeenCalledOnce();
+    expect(mocks.open).toHaveBeenCalledOnce();
+  });
+
+  it("upgrades an owned window identity to the same Meet tab identity without duplicating capture", async () => {
+    const url = "https://meet.google.com/abc-defg-hij";
+    snapshot([{ ...meet, callIdentity: `${url}:window:abc` }]);
+    const { active, stop } = setup();
+    await tick(0);
+    active();
+    snapshot([
+      {
+        ...meet,
+        callIdentity: `${url}:tab:42`,
+        ...{ openCallIdentities: [`${url}:tab:42`] },
+      },
+    ]);
+    await tick(90_000);
+    expect(stop).not.toHaveBeenCalled();
+    expect(mocks.open).toHaveBeenCalledOnce();
+    snapshot([
+      {
+        ...meet,
+        activeCall: false,
+        platform: "unknown",
+        callIdentity: null,
+        ...{ openCallIdentities: [] },
+      },
+    ]);
+    await tick(18_000);
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it("preserves a manual stop when the same Meet upgrades from window to tab identity", async () => {
+    const url = "https://meet.google.com/abc-defg-hij";
+    snapshot([{ ...meet, callIdentity: `${url}:window:abc` }]);
+    const { active, stop } = setup();
+    await tick(0);
+    active();
+    stop();
+    const tab = {
+      ...meet,
+      callIdentity: `${url}:tab:42`,
+      ...{ openCallIdentities: [`${url}:tab:42`] },
+    };
+    snapshot([tab]);
+    await tick(90_000);
+    expect(mocks.open).toHaveBeenCalledOnce();
+    snapshot([{ ...tab, activeCall: false, ...{ openCallIdentities: [] } }]);
+    await tick();
+    snapshot([tab]);
+    await tick();
+    expect(mocks.open).toHaveBeenCalledTimes(2);
+  });
+
   it("preserves hidden silent context A, ignores ended B, then stops only A and records B", async () => {
     const a = { ...meet, callIdentity: "window-a:meet-a" };
     const b = { ...meet, callIdentity: "window-b:meet-b" };
