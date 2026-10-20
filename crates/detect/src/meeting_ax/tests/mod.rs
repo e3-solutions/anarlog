@@ -83,7 +83,9 @@ fn browser_activation_excludes_non_chromium_and_native_apps() {
         "com.microsoft.edgemac",
         "com.brave.Browser",
     ] {
-        assert!(should_request_browser_accessibility(browser, None, now, false));
+        assert!(should_request_browser_accessibility(
+            browser, None, now, false
+        ));
     }
     for other in [
         "com.apple.Safari",
@@ -93,16 +95,16 @@ fn browser_activation_excludes_non_chromium_and_native_apps() {
         "com.tinyspeck.slackmacgap",
         "unknown",
     ] {
-        assert!(!should_request_browser_accessibility(other, None, now, true));
+        assert!(!should_request_browser_accessibility(
+            other, None, now, true
+        ));
     }
 }
 
 #[test]
 fn browser_activation_retries_missing_web_area_without_churning_healthy_windows() {
     let now = Instant::now();
-    let previous = BrowserAccessibilityRequest {
-        attempted_at: now,
-    };
+    let previous = BrowserAccessibilityRequest { attempted_at: now };
     assert!(!should_request_browser_accessibility(
         "com.google.Chrome",
         Some(previous),

@@ -82,12 +82,7 @@ fn request_browser_accessibility(
         }
         // Reserve before IPC: concurrent inspections must not keep resetting
         // Chromium's two-second activation debounce. Never hold the lock over IPC.
-        requests.insert(
-            pid,
-            BrowserAccessibilityRequest {
-                attempted_at: now,
-            },
-        );
+        requests.insert(pid, BrowserAccessibilityRequest { attempted_at: now });
     }
     // Chromium's application handler enables full renderer AX asynchronously.
     // The next normal inspection observes it; no sleep or browser navigation.
