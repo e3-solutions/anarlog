@@ -390,7 +390,7 @@ fn canonical_browser_meeting_context(url: &str, platform: &MeetingPlatform) -> O
     Some(url.to_string())
 }
 
-fn browser_meeting_identity(root: &BrowserMeetingRoot) -> Option<String> {
+pub(super) fn browser_meeting_identity(root: &BrowserMeetingRoot) -> Option<String> {
     if let Some(url) = root.web_area_url.as_deref()
         && let Some(canonical) = canonical_browser_meeting_context(url, &root.platform)
     {

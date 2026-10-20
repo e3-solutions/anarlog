@@ -1,3 +1,4 @@
+import { platform } from "@tauri-apps/plugin-os";
 import { useRef } from "react";
 
 import { commands as detectCommands } from "@anlg/plugin-detect";
@@ -10,6 +11,7 @@ import {
   AUTOMATIC_MEETING_UNKNOWN_GRACE_MS,
   automaticMeetingObservation,
   selectAutomaticMeeting,
+  sameAutomaticMeeting,
   type AutomaticMeeting,
 } from "./automatic-meeting";
 
@@ -40,12 +42,12 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
       lastAudibleAt: number;
       networkHoldUntil: number | null;
     } | null = null;
-    let suppressed: AutomaticMeeting | null = null;
+    const suppressed = new Map<string, AutomaticMeeting>();
     let retryAfter = 0;
 
     reset.current = () => {
       capture = null;
-      suppressed = null;
+      suppressed.clear();
       ownedSession.current = null;
     };
 
@@ -64,7 +66,7 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
         previous.live.sessionId === capture.sessionId
       ) {
         // A manual stop must stand down until this call has actually ended.
-        suppressed = capture.meeting;
+        suppressed.set(capture.meeting.key, capture.meeting);
         capture = null;
         ownedSession.current = null;
       }
@@ -94,15 +96,17 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
           },
         );
         const now = Date.now();
-        if (suppressed) {
+        for (const [key, meeting] of suppressed) {
           if (
-            automaticMeetingObservation(suppressed, inspection.data) ===
-            "inactive"
-          ) {
-            suppressed = null;
-          } else if (!selected || selected.key === suppressed.key) {
-            return;
-          }
+            automaticMeetingObservation(meeting, inspection.data) ===
+              "inactive" ||
+            (platform() === "macos" &&
+              !inspection.data.some(
+                (entry) =>
+                  entry.app.id === meeting.app.id && entry.pid === meeting.pid,
+              ))
+          )
+            suppressed.delete(key);
         }
 
         const live = store.getState().live;
@@ -112,10 +116,32 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
             live.sessionId === capture.sessionId
           ) {
             capture.seenActive = true;
-            const observation = automaticMeetingObservation(
+            if (
+              selected &&
+              sameAutomaticMeeting(capture.meeting, selected) &&
+              selected.callIdentity?.includes(":tab:")
+            )
+              capture.meeting = selected;
+            let observation = automaticMeetingObservation(
               capture.meeting,
               inspection.data,
             );
+            const macMeet =
+              capture.meeting.platform === "googleMeet" &&
+              platform() === "macos";
+            if (
+              observation === "unknown" &&
+              macMeet &&
+              !inspection.data.some(
+                (entry) =>
+                  entry.app.id === capture!.meeting.app.id &&
+                  entry.pid === capture!.meeting.pid,
+              )
+            ) {
+              // macOS returns a row for every recognized running process,
+              // including unreadable ones. Missing that process is a departure.
+              observation = "inactive";
+            }
             const micActive =
               microphones.status !== "ok" ||
               microphones.data.some(
@@ -125,10 +151,18 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
               capture.networkHoldUntil ??= now + AUTO_STOP_NETWORK_HOLD_MS;
             if (
               observation === "active" ||
-              (observation === "unknown" && micActive)
+              (observation === "unknown" && (macMeet || micActive))
             ) {
-              capture.missingSince = null;
-              capture.missingObservation = null;
+              // A hidden browser tab can lose AX evidence and microphone
+              // ownership while its muted call continues. Only confirmed
+              // departure can end an established Meet capture.
+              // An unreadable Meet poll cannot stop capture. Preserve a prior
+              // confirmed departure so another fresh inactive poll can finish
+              // its grace; positive attendance resets that evidence.
+              if (observation === "active" || !macMeet) {
+                capture.missingSince = null;
+                capture.missingObservation = null;
+              }
               if (observation === "active") capture.networkHoldUntil = null;
               return;
             }
@@ -187,7 +221,12 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
           retryAfter = now + 5_000;
           return;
         }
-        if (!selected || (suppressed && selected.key === suppressed.key))
+        if (
+          !selected ||
+          [...suppressed.values()].some((meeting) =>
+            sameAutomaticMeeting(meeting, selected),
+          )
+        )
           return;
         if (live.status === "active") {
           if (live.sessionId && live.triggerAppIds?.includes(selected.app.id)) {
@@ -215,8 +254,15 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
             cancelled ||
             !policy.current.enabled ||
             refreshed.status !== "ok" ||
-            automaticMeetingObservation(selected, refreshed.data) !==
-              "active" ||
+            selectAutomaticMeeting(
+              refreshed.data.filter(
+                (entry) => !policy.current.ignored?.includes(entry.app.id),
+              ),
+              {
+                googleMeet: policy.current.enabled,
+                slack: policy.current.enabled,
+              },
+            )?.key !== selected.key ||
             !store.getState().canStartLiveSession(sessionId)
           )
             return;

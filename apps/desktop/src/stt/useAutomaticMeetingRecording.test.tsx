@@ -14,7 +14,10 @@ const mocks = vi.hoisted(() => ({
   remove: vi.fn(),
   open: vi.fn(),
   config: vi.fn(),
+  platform: vi.fn(),
 }));
+
+vi.mock("@tauri-apps/plugin-os", () => ({ platform: mocks.platform }));
 
 vi.mock("@anlg/plugin-detect", () => ({
   commands: {
@@ -41,6 +44,7 @@ const meet: MeetingAccessibilityInspection = {
   windowTitle: "Meet - abc-defg-hij",
   remoteScreenShare: false,
   warnings: [],
+  ...{ callIdentity: null },
 };
 const slack: MeetingAccessibilityInspection = {
   ...meet,
@@ -90,6 +94,7 @@ function setup() {
 beforeEach(() => {
   vi.useFakeTimers();
   vi.resetAllMocks();
+  mocks.platform.mockReturnValue("macos");
   mocks.config.mockImplementation((key: string) => {
     if (key === "ignored_platforms") return [];
     return (
@@ -108,6 +113,186 @@ afterEach(() => {
 });
 
 describe("automatic local meeting recording", () => {
+  it("requires fresh confirmed Meet departure after unreadable polls and resets the grace on reappearance", async () => {
+    const identity = "https://meet.google.com/abc-defg-hij:tab:42";
+    const joined = {
+      ...meet,
+      callIdentity: identity,
+      openCallIdentities: [identity],
+    };
+    snapshot([joined]);
+    const { active, stop } = setup();
+    await tick(0);
+    active();
+    const hidden = {
+      ...meet,
+      activeCall: false,
+      platform: "unknown" as const,
+      callIdentity: null,
+      windowTitle: null,
+      warnings: ["no uniquely scoped meeting AXWindow"],
+    };
+    snapshot([{ ...hidden, openCallIdentities: [] }]);
+    await tick(8_000);
+    snapshot([hidden]);
+    await tick(12_000);
+    expect(stop).not.toHaveBeenCalled();
+
+    snapshot([joined]);
+    await tick(2_000);
+    snapshot([{ ...hidden, openCallIdentities: [] }]);
+    await tick(14_000);
+    expect(stop).not.toHaveBeenCalled();
+    snapshot([hidden]);
+    await tick(4_000);
+    expect(stop).not.toHaveBeenCalled();
+    snapshot([{ ...hidden, openCallIdentities: [] }]);
+    await tick(2_000);
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it("uses complete tab inventory to distinguish a hidden Meet from a closed tab while Chrome remains running", async () => {
+    const identity = "https://meet.google.com/abc-defg-hij:tab:42";
+    snapshot([{ ...meet, callIdentity: identity }]);
+    const { active, stop } = setup();
+    await tick(0);
+    active();
+    const hidden = {
+      ...meet,
+      activeCall: false,
+      platform: "unknown" as const,
+      callIdentity: null,
+      windowTitle: null,
+      warnings: ["no uniquely scoped meeting AXWindow"],
+    };
+    snapshot([{ ...hidden, ...{ openCallIdentities: [identity] } }]);
+    await tick(90_000);
+    expect(stop).not.toHaveBeenCalled();
+    snapshot([hidden]);
+    await tick(90_000);
+    expect(stop).not.toHaveBeenCalled();
+    snapshot([{ ...hidden, ...{ openCallIdentities: null } }]);
+    await tick(90_000);
+    expect(stop).not.toHaveBeenCalled();
+    snapshot([{ ...hidden, ...{ openCallIdentities: [] } }]);
+    await tick(14_000);
+    expect(stop).not.toHaveBeenCalled();
+    await tick(4_000);
+    expect(stop).toHaveBeenCalledOnce();
+    expect(mocks.open).toHaveBeenCalledOnce();
+  });
+
+  it("upgrades an owned window identity to the same Meet tab identity without duplicating capture", async () => {
+    const url = "https://meet.google.com/abc-defg-hij";
+    snapshot([{ ...meet, callIdentity: `${url}:window:abc` }]);
+    const { active, stop } = setup();
+    await tick(0);
+    active();
+    snapshot([
+      {
+        ...meet,
+        callIdentity: `${url}:tab:42`,
+        ...{ openCallIdentities: [`${url}:tab:42`] },
+      },
+    ]);
+    await tick(90_000);
+    expect(stop).not.toHaveBeenCalled();
+    expect(mocks.open).toHaveBeenCalledOnce();
+    snapshot([
+      {
+        ...meet,
+        activeCall: false,
+        platform: "unknown",
+        callIdentity: null,
+        ...{ openCallIdentities: [] },
+      },
+    ]);
+    await tick(18_000);
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it("preserves a manual stop when the same Meet upgrades from window to tab identity", async () => {
+    const url = "https://meet.google.com/abc-defg-hij";
+    snapshot([{ ...meet, callIdentity: `${url}:window:abc` }]);
+    const { active, stop } = setup();
+    await tick(0);
+    active();
+    stop();
+    const tab = {
+      ...meet,
+      callIdentity: `${url}:tab:42`,
+      ...{ openCallIdentities: [`${url}:tab:42`] },
+    };
+    snapshot([tab]);
+    await tick(90_000);
+    expect(mocks.open).toHaveBeenCalledOnce();
+    snapshot([{ ...tab, activeCall: false, ...{ openCallIdentities: [] } }]);
+    await tick();
+    snapshot([tab]);
+    await tick();
+    expect(mocks.open).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves hidden silent context A, ignores ended B, then stops only A and records B", async () => {
+    const a = { ...meet, callIdentity: "window-a:meet-a" };
+    const b = { ...meet, callIdentity: "window-b:meet-b" };
+    const presence = {
+      ...meet,
+      activeCall: false,
+      platform: "unknown" as const,
+    };
+    snapshot([a, presence]);
+    const { active, stop } = setup();
+    await tick(0);
+    active();
+    snapshot([presence]);
+    await tick(9 * 60_000);
+    snapshot([presence, { ...b, activeCall: false }]);
+    await tick(90_000);
+    expect(stop).not.toHaveBeenCalled();
+    expect(mocks.open).toHaveBeenCalledOnce();
+    snapshot([presence, { ...a, activeCall: false }, b]);
+    await tick(14_000);
+    expect(stop).not.toHaveBeenCalled();
+    await tick(4_000);
+    expect(stop).toHaveBeenCalledOnce();
+    await tick();
+    expect(mocks.open).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps independent manual stops for contexts A and B until each positively departs", async () => {
+    const a = { ...meet, callIdentity: "window-a:meet-a" };
+    const b = { ...meet, callIdentity: "window-b:meet-b" };
+    snapshot([a]);
+    const { active, stop } = setup();
+    await tick(0);
+    active();
+    stop();
+    snapshot([b]);
+    await tick();
+    expect(mocks.open).toHaveBeenCalledTimes(2);
+    active();
+    stop();
+    snapshot([a]);
+    await tick(70_000);
+    expect(mocks.open).toHaveBeenCalledTimes(2);
+    snapshot([{ ...a, activeCall: false }]);
+    await tick();
+    snapshot([b]);
+    await tick();
+    expect(mocks.open).toHaveBeenCalledTimes(2);
+    snapshot([a]);
+    await tick();
+    expect(mocks.open).toHaveBeenCalledTimes(3);
+    active();
+    stop();
+    snapshot([{ ...b, activeCall: false }]);
+    await tick();
+    snapshot([b]);
+    await tick();
+    expect(mocks.open).toHaveBeenCalledTimes(4);
+  });
+
   it.each([meet, slack])(
     "starts joined $platform ad hoc or muted calls",
     async (inspection) => {
@@ -224,12 +409,13 @@ describe("automatic local meeting recording", () => {
   });
 
   it("preserves a muted listening call while far-end speech continues despite unreadable Accessibility", async () => {
+    snapshot([slack]);
     const { store, active, stop } = setup();
     await tick(0);
     active();
     snapshot([
       {
-        ...meet,
+        ...slack,
         activeCall: false,
         warnings: ["no uniquely scoped meeting AXWindow"],
       },
@@ -244,18 +430,77 @@ describe("automatic local meeting recording", () => {
     expect(mocks.open).toHaveBeenCalledOnce();
   });
 
+  it("keeps a quiet muted Meet recording across hidden-tab evidence loss until departure is confirmed", async () => {
+    const { active, stop } = setup();
+    await tick(0);
+    active();
+    snapshot([
+      {
+        ...meet,
+        platform: "unknown",
+        activeCall: false,
+        warnings: ["no uniquely scoped meeting AXWindow"],
+      },
+    ]);
+    await tick(90_000);
+    await tick(9 * 60_000);
+    expect(stop).not.toHaveBeenCalled();
+    expect(mocks.open).toHaveBeenCalledOnce();
+    snapshot([meet]);
+    await tick();
+    expect(mocks.open).toHaveBeenCalledOnce();
+    snapshot([{ ...meet, activeCall: false }]);
+    await tick(14_000);
+    expect(stop).not.toHaveBeenCalled();
+    await tick(4_000);
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it.each(["macos", "linux", "windows"])(
+    "treats a missing browser process as confirmed departure only on macOS: %s",
+    async (os) => {
+      mocks.platform.mockReturnValue(os);
+      const { active, stop } = setup();
+      await tick(0);
+      active();
+      snapshot([{ ...meet, pid: meet.pid + 1, activeCall: false }]);
+      await tick(14_000);
+      expect(stop).not.toHaveBeenCalled();
+      await tick(4_000);
+      if (os === "macos") expect(stop).toHaveBeenCalledOnce();
+      else {
+        expect(stop).not.toHaveBeenCalled();
+        await tick(90_000);
+        expect(stop).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
+  it("retains the Slack fallback stop when call evidence and microphone ownership remain unavailable", async () => {
+    snapshot([slack]);
+    const { active, stop } = setup();
+    await tick(0);
+    active();
+    snapshot([]);
+    await tick(58_000);
+    expect(stop).not.toHaveBeenCalled();
+    await tick(6_000);
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
   it("holds unknown call evidence during a network interruption and stops on reliable leave after reconnect", async () => {
     const online = vi
       .spyOn(window.navigator, "onLine", "get")
       .mockReturnValue(true);
     try {
+      snapshot([slack]);
       const { active, stop } = setup();
       await tick(0);
       active();
       online.mockReturnValue(false);
       window.dispatchEvent(new Event("offline"));
       snapshot([]);
-      mocks.microphones.mockResolvedValue({ status: "ok", data: [meet.app] });
+      mocks.microphones.mockResolvedValue({ status: "ok", data: [slack.app] });
       await tick(90_000);
       expect(stop).not.toHaveBeenCalled();
 
@@ -266,7 +511,7 @@ describe("automatic local meeting recording", () => {
       await tick(70_000);
       expect(stop).not.toHaveBeenCalled();
 
-      snapshot([{ ...meet, activeCall: false }]);
+      snapshot([{ ...slack, activeCall: false }]);
       await tick(14_000);
       expect(stop).not.toHaveBeenCalled();
       await tick(4_000);
@@ -281,12 +526,17 @@ describe("automatic local meeting recording", () => {
     await tick(0);
     active();
     stop();
-    snapshot([]);
+    const unreadable = {
+      ...meet,
+      activeCall: false,
+      accessibilityTrusted: false,
+    };
+    snapshot([unreadable]);
     await tick(4_000);
     snapshot([meet]);
     await tick();
     expect(mocks.open).toHaveBeenCalledOnce();
-    snapshot([]);
+    snapshot([unreadable]);
     await tick(64_000);
     snapshot([meet]);
     await tick();
@@ -297,6 +547,30 @@ describe("automatic local meeting recording", () => {
     await tick();
     expect(mocks.open).toHaveBeenCalledTimes(2);
   });
+
+  it.each(["macos", "linux", "windows"])(
+    "clears manual-stop suppression on successful process absence only on macOS: %s",
+    async (os) => {
+      mocks.platform.mockReturnValue(os);
+      const { active, stop } = setup();
+      await tick(0);
+      active();
+      stop();
+      mocks.inspect.mockResolvedValue({
+        status: "error",
+        error: "inspection failed",
+      });
+      await tick(64_000);
+      snapshot([meet]);
+      await tick();
+      expect(mocks.open).toHaveBeenCalledOnce();
+      snapshot([]);
+      await tick();
+      snapshot([meet]);
+      await tick();
+      expect(mocks.open).toHaveBeenCalledTimes(os === "macos" ? 2 : 1);
+    },
+  );
 
   it("respects ignored platforms even when their joined-call evidence is valid", async () => {
     mocks.config.mockImplementation((key: string) => {

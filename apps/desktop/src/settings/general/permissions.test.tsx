@@ -8,12 +8,13 @@ const mocks = vi.hoisted(() => ({
   permissions: new Map<
     Permission,
     {
-      status: PermissionStatus;
-      confirmedStatus: PermissionStatus;
+      status: PermissionStatus | undefined;
+      confirmedStatus: PermissionStatus | undefined;
       isPending: boolean;
       open: ReturnType<typeof vi.fn>;
       request: ReturnType<typeof vi.fn>;
       reset: ReturnType<typeof vi.fn>;
+      recheck: ReturnType<typeof vi.fn>;
       error: string | null;
     }
   >(),
@@ -37,7 +38,7 @@ vi.mock("~/shared/hooks/usePermissions", () => ({
 
 import { Permissions } from "./permissions";
 
-function permission(status: PermissionStatus) {
+function permission(status: PermissionStatus | undefined) {
   return {
     status,
     confirmedStatus: status,
@@ -45,6 +46,7 @@ function permission(status: PermissionStatus) {
     open: vi.fn(),
     request: vi.fn(),
     reset: vi.fn(),
+    recheck: vi.fn(),
     error: null as string | null,
   };
 }
@@ -70,6 +72,26 @@ describe("Permissions", () => {
     mocks.permissions.clear();
     mocks.usePermission.mockClear();
     mocks.closePermissionAssistant.mockClear();
+  });
+
+  it("retries an unavailable check without asking for permission again", () => {
+    renderPermissions("authorized");
+    cleanup();
+    const microphone = permission(undefined);
+    microphone.error = "Permission check unavailable";
+    mocks.permissions.set("microphone", microphone);
+    render(<Permissions />);
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Retry permission check: Microphone",
+      }),
+    );
+    expect(microphone.recheck).toHaveBeenCalledOnce();
+    expect(microphone.request).not.toHaveBeenCalled();
+    expect(microphone.open).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toBe(
+      "Permission check unavailable",
+    );
   });
 
   it("explains what Accessibility enables and opens Settings when denied", () => {

@@ -26,6 +26,7 @@ function PermissionRow({
   permission,
   onRequest,
   onOpen,
+  onRecheck,
   assisted = false,
   runtimeCapability = false,
 }: {
@@ -37,6 +38,7 @@ function PermissionRow({
   permission: string;
   onRequest: () => void;
   onOpen: () => void;
+  onRecheck: () => void;
   assisted?: boolean;
   runtimeCapability?: boolean;
 }) {
@@ -45,6 +47,10 @@ function PermissionRow({
   const isDenied = status === "denied";
 
   const handleButtonClick = () => {
+    if (status === undefined) {
+      onRecheck();
+      return;
+    }
     if (runtimeCapability) {
       if (!isAuthorized) {
         trackPermissionRequested(permission, status, "settings", "request");
@@ -68,13 +74,20 @@ function PermissionRow({
         <div
           className={cn([
             "mb-1 flex items-center gap-2",
-            !isAuthorized && "text-red-500",
+            status !== undefined && !isAuthorized && "text-red-500",
           ])}
         >
-          {!isAuthorized && <WarningCircle className="size-4" />}
+          {status !== undefined && !isAuthorized && (
+            <WarningCircle className="size-4" />
+          )}
           <h3 className="text-sm font-medium">{title}</h3>
         </div>
         <p className="text-muted-foreground text-xs">{description}</p>
+        {status === undefined && !error && (
+          <p role="status" className="text-muted-foreground mt-1 text-xs">
+            <Trans>Checking permission…</Trans>
+          </p>
+        )}
         {error && (
           <p role="alert" className="mt-1 text-xs text-red-500">
             {error}
@@ -85,20 +98,26 @@ function PermissionRow({
         variant={isAuthorized ? "ghost" : "default"}
         size="icon"
         onClick={handleButtonClick}
-        disabled={isPending || (runtimeCapability && isAuthorized)}
+        disabled={
+          isPending ||
+          (status === undefined && !error) ||
+          (runtimeCapability && isAuthorized)
+        }
         className={cn([
           "size-8",
           isAuthorized &&
             "text-green-600 hover:bg-transparent hover:text-green-600",
         ])}
         aria-label={
-          runtimeCapability
-            ? isDenied
-              ? `${t`Try again`}: ${title}`
-              : title
-            : assisted || isAuthorized || isDenied
-              ? t`Open ${title.toLowerCase()} settings`
-              : t`Request ${title.toLowerCase()} permission`
+          status === undefined
+            ? t`Retry permission check: ${title}`
+            : runtimeCapability
+              ? isDenied
+                ? `${t`Try again`}: ${title}`
+                : title
+              : assisted || isAuthorized || isDenied
+                ? t`Open ${title.toLowerCase()} settings`
+                : t`Request ${title.toLowerCase()} permission`
         }
       >
         {isAuthorized ? (
@@ -166,6 +185,7 @@ function AudioPermissions({
         error={mic.error}
         onRequest={mic.request}
         onOpen={mic.open}
+        onRecheck={mic.recheck}
         runtimeCapability={runtimeCapabilities}
       />
       <PermissionRow
@@ -177,6 +197,7 @@ function AudioPermissions({
         error={systemAudio.error}
         onRequest={systemAudio.request}
         onOpen={systemAudio.open}
+        onRecheck={systemAudio.recheck}
         runtimeCapability={runtimeCapabilities}
       />
     </PermissionGroup>
@@ -211,10 +232,12 @@ function MacOSPermissions() {
             ? t`Opens System Settings and guides you to add Anarlog to the ${accessibilityGuidance.paneTitle ?? "Privacy"} list.`
             : t`Read meeting controls and visible chat.`
         }
+        error={accessibility.error}
         status={accessibility.status}
         isPending={accessibility.isPending}
         onRequest={accessibility.request}
         onOpen={accessibility.open}
+        onRecheck={accessibility.recheck}
         assisted={Boolean(accessibilityGuidance)}
       />
 
@@ -223,10 +246,12 @@ function MacOSPermissions() {
           permission="calendar"
           title={t`Calendar`}
           description={t`Show Apple Calendar events in Anarlog.`}
+          error={calendar.error}
           status={calendar.status}
           isPending={calendar.isPending}
           onRequest={calendar.request}
           onOpen={calendar.open}
+          onRecheck={calendar.recheck}
         />
       </PermissionGroup>
     </div>

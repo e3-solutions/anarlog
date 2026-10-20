@@ -57,11 +57,9 @@ export function usePermission(type: Permission) {
     refetchInterval: 1000,
   });
   const status: PermissionStatus | undefined =
-    statusQuery.data?.status === "ok"
+    !statusQuery.isError && statusQuery.data?.status === "ok"
       ? statusQuery.data.data
-      : statusQuery.data
-        ? "denied"
-        : undefined;
+      : undefined;
 
   const optimisticStatus =
     optimistic &&
@@ -125,6 +123,7 @@ export function usePermission(type: Permission) {
             : statusQuery.error instanceof Error
               ? statusQuery.error.message
               : null)),
+    recheck: () => void statusQuery.refetch(),
     open,
     request,
     reset,

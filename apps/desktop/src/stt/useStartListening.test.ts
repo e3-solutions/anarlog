@@ -1,3 +1,4 @@
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -69,6 +70,7 @@ const {
   waitForSessionSearchIndexMock,
   useConfigValueMock,
   useSettingsReadyMock,
+  useQueryClientMock,
   useSTTConnectionMock,
   isSupportedLanguagesLiveMock,
   leftSidebarExpanded,
@@ -134,6 +136,7 @@ const {
   waitForSessionSearchIndexMock: vi.fn(),
   useConfigValueMock: vi.fn(),
   useSettingsReadyMock: vi.fn(),
+  useQueryClientMock: vi.fn(),
   useSTTConnectionMock: vi.fn(),
   isSupportedLanguagesLiveMock: vi.fn(),
   leftSidebarExpanded: { value: true },
@@ -339,6 +342,11 @@ vi.mock("~/shared/config", () => ({
 
 vi.mock("~/settings/queries", () => ({
   useSettingsReady: useSettingsReadyMock,
+}));
+
+vi.mock("@tanstack/react-query", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-query")>()),
+  useQueryClient: useQueryClientMock,
 }));
 
 vi.mock("~/shared/completion-sound", () => ({
@@ -561,6 +569,7 @@ describe("useStartListening", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useSettingsReadyMock.mockReturnValue(true);
+    useQueryClientMock.mockReturnValue(new QueryClient());
     getCaptureSnapshotMock.mockResolvedValue({
       status: "ok",
       data: { activeSessionId: null, finalizingSessionIds: [] },
@@ -3962,7 +3971,76 @@ describe("useStartListening", () => {
     expect(catalogLocalSessionAudioMock).toHaveBeenCalledWith("session-1");
   });
 
-  test("cleans up processed audio after live capture stops", async () => {
+  test("exposes first-recording audio and playback before post-stop transcription finishes", async () => {
+    const queryClient = useQueryClientMock() as QueryClient;
+    let savedAudio = false;
+    let finishBatch!: () => void;
+    const pendingBatch = new Promise<void>((resolve) => {
+      finishBatch = resolve;
+    });
+    runBatchMock.mockReturnValue(pendingBatch);
+    let stopped: Promise<unknown> | undefined;
+    const existence = new QueryObserver(queryClient, {
+      queryKey: ["audio", "session-1", "exist"],
+      queryFn: async () => savedAudio,
+      staleTime: Infinity,
+    });
+    const playback = new QueryObserver(queryClient, {
+      queryKey: ["audio", "session-1", "url"],
+      queryFn: async () => (savedAudio ? "/tmp/session.mp3" : null),
+      staleTime: Infinity,
+    });
+    const unsubscribers = [
+      existence.subscribe(() => {}),
+      playback.subscribe(() => {}),
+    ];
+    try {
+      await waitFor(() => {
+        expect(existence.getCurrentResult().data).toBe(false);
+        expect(playback.getCurrentResult().data).toBe(null);
+      });
+      const { result } = renderHook(() => useStartListening("session-1"));
+      await act(async () => {
+        await result.current();
+        savedAudio = true;
+        stopped = startMock.mock.calls[0]?.[1].onStopped("session-1", {
+          durationSeconds: 90,
+          audioPath: "/tmp/session.mp3",
+          requestedLiveTranscription: false,
+          liveTranscriptionActive: false,
+          needsBatchRepair: false,
+        });
+      });
+      await waitFor(() => {
+        expect(runBatchMock).toHaveBeenCalled();
+        expect(existence.getCurrentResult().data).toBe(true);
+        expect(playback.getCurrentResult().data).toBe("/tmp/session.mp3");
+      });
+    } finally {
+      finishBatch();
+      await act(async () => await stopped);
+      unsubscribers.forEach((unsubscribe) => unsubscribe());
+      queryClient.clear();
+    }
+  });
+
+  test("refreshes playback availability after zero-retention cleanup", async () => {
+    const queryClient = useQueryClientMock() as QueryClient;
+    let savedAudio = true;
+    const existence = new QueryObserver(queryClient, {
+      queryKey: ["audio", "session-1", "exist"],
+      queryFn: async () => savedAudio,
+      staleTime: Infinity,
+    });
+    const unsubscribe = existence.subscribe(() => {});
+    await waitFor(() => expect(existence.getCurrentResult().data).toBe(true));
+    useConfigValueMock.mockImplementation((key: string) =>
+      key === "audio_retention" ? "none" : undefined,
+    );
+    deleteProcessedAudioForRetentionMock.mockImplementationOnce(async () => {
+      savedAudio = false;
+      return true;
+    });
     const { result } = renderHook(() => useStartListening("session-1"));
 
     await act(async () => {
@@ -3983,13 +4061,13 @@ describe("useStartListening", () => {
 
     expect(runBatchMock).not.toHaveBeenCalled();
     expect(queueAutoEnhanceIfSummaryEmptyMock).not.toHaveBeenCalled();
-    expect(markSessionAudioTranscriptionCompleteMock).toHaveBeenCalledWith(
-      "session-1",
-    );
     expect(deleteProcessedAudioForRetentionMock).toHaveBeenCalledWith(
-      "forever",
+      "none",
       "session-1",
     );
+    await waitFor(() => expect(existence.getCurrentResult().data).toBe(false));
+    unsubscribe();
+    queryClient.clear();
   });
 
   test("regenerates the summary after resumed live capture is journaled", async () => {

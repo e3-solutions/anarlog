@@ -23,17 +23,23 @@ runs:
   steps:
     - name: Setup Certificate
       shell: bash
+      env:
+        APPLE_CERTIFICATE: ${{ inputs.apple-certificate }}
+        APPLE_CERTIFICATE_PASSWORD: ${{ inputs.apple-certificate-password }}
+        KEYCHAIN_PASSWORD: ${{ inputs.keychain-password }}
       run: |
         set -euo pipefail
-        echo "${{ inputs.apple-certificate }}" | base64 --decode > certificate.p12
-        security create-keychain -p "${{ inputs.keychain-password }}" build.keychain
+        umask 077
+        certificate_path=$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/apple-signing.XXXXXX")
+        trap 'rm -f "$certificate_path"' EXIT
+        printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$certificate_path"
+        security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
         security default-keychain -s build.keychain
-        security unlock-keychain -p "${{ inputs.keychain-password }}" build.keychain
-        security set-keychain-settings -t 3600 -u build.keychain
-        security import certificate.p12 -k build.keychain -P "${{ inputs.apple-certificate-password }}" -T /usr/bin/codesign
-        security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${{ inputs.keychain-password }}" build.keychain
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+        security set-keychain-settings -t 7200 -u build.keychain
+        security import "$certificate_path" -f pkcs12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+        security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
         security find-identity -v -p codesigning build.keychain
-        rm -f certificate.p12
 
     - id: verify-cert
       shell: bash
@@ -45,5 +51,5 @@ runs:
           exit 1
         fi
         CERT_ID=$(echo "$CERT_INFO" | awk -F'"' '{print $2}')
-        echo "cert-id=$CERT_ID" >> $GITHUB_OUTPUT
+        echo "cert-id=$CERT_ID" >> "$GITHUB_OUTPUT"
         echo "Certificate imported."

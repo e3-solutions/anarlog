@@ -1,6 +1,107 @@
 #[cfg(target_os = "macos")]
 use cidre::{arc, ax, cf, cg};
 
+#[cfg(any(test, target_os = "macos"))]
+use std::time::{Duration, Instant};
+
+#[cfg(any(test, target_os = "macos"))]
+#[derive(Clone, Copy)]
+struct BrowserAccessibilityRequest {
+    attempted_at: Instant,
+}
+
+#[cfg(target_os = "macos")]
+type BrowserAccessibilityRequests =
+    std::sync::Mutex<std::collections::HashMap<i32, BrowserAccessibilityRequest>>;
+
+#[cfg(target_os = "macos")]
+fn browser_accessibility_requests() -> &'static BrowserAccessibilityRequests {
+    static REQUESTS: std::sync::OnceLock<BrowserAccessibilityRequests> = std::sync::OnceLock::new();
+    REQUESTS.get_or_init(Default::default)
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn should_request_browser_accessibility(
+    bundle_id: &str,
+    previous: Option<BrowserAccessibilityRequest>,
+    now: Instant,
+    meeting_web_area_missing: bool,
+) -> bool {
+    // Chromium publishes toolbar AX without necessarily publishing webpage AX.
+    // Safari and Gecko do not use Chromium's activation attribute.
+    let chromium = matches!(
+        bundle_id,
+        "com.google.Chrome"
+            | "com.google.Chrome.canary"
+            | "org.chromium.Chromium"
+            | "com.microsoft.edgemac"
+            | "com.microsoft.edgemac.Beta"
+            | "com.microsoft.edgemac.Canary"
+            | "com.microsoft.edgemac.Dev"
+            | "com.brave.Browser"
+            | "com.brave.Browser.beta"
+            | "com.brave.Browser.nightly"
+            | "com.brave.Browser.origin"
+            | "com.vivaldi.Vivaldi"
+            | "com.operasoftware.Opera"
+            | "com.operasoftware.OperaDeveloper"
+            | "com.operasoftware.OperaGX"
+            | "com.operasoftware.OperaNext"
+            | "company.thebrowser.Browser"
+            | "company.thebrowser.dia"
+            | "com.browseros.BrowserOS"
+            | "ai.perplexity.comet"
+            | "net.imput.helium"
+    );
+    chromium
+        && previous.is_none_or(|request| {
+            meeting_web_area_missing
+                && now.saturating_duration_since(request.attempted_at) >= Duration::from_secs(30)
+        })
+}
+
+#[cfg(target_os = "macos")]
+fn request_browser_accessibility(
+    app: &MeetingApp,
+    pid: i32,
+    element: &ax::UiElement,
+    meeting_web_area_missing: bool,
+) {
+    let now = Instant::now();
+    {
+        let mut requests = browser_accessibility_requests()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if !should_request_browser_accessibility(
+            &app.id,
+            requests.get(&pid).copied(),
+            now,
+            meeting_web_area_missing,
+        ) {
+            return;
+        }
+        // Reserve before IPC: concurrent inspections must not keep resetting
+        // Chromium's two-second activation debounce. Never hold the lock over IPC.
+        requests.insert(pid, BrowserAccessibilityRequest { attempted_at: now });
+    }
+    // Chromium's application handler enables full renderer AX asynchronously.
+    // The next normal inspection observes it; no sleep or browser navigation.
+    // https://chromium.googlesource.com/chromium/src/+/main/chrome/browser/chrome_browser_application_mac.mm
+    let attribute = cf::String::from_str("AXEnhancedUserInterface");
+    let attribute = ax::Attr::with_string(&attribute);
+    // An accepted attribute write is not proof that webpage AX became usable.
+    // Reassert it on a throttled recovery even if the getter still reports true.
+    let result = if !meeting_web_area_missing && ax_bool_attr(element, attribute) == Some(true) {
+        Ok(())
+    } else {
+        ax_set_attr(element, attribute, cf::Boolean::value_true().as_type_ref())
+    };
+    if let Err(status) = result {
+        // A failed optional activation never manufactures active-call evidence.
+        tracing::debug!(pid, status, "browser_accessibility_activation_failed");
+    }
+}
+
 #[cfg(target_os = "macos")]
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C-unwind" {
@@ -28,6 +129,8 @@ unsafe extern "C-unwind" {
 
 #[cfg(any(test, target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod analysis;
+#[cfg(any(test, target_os = "macos"))]
+mod chrome_tabs;
 #[cfg(any(test, target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod context;
 #[cfg(target_os = "linux")]
@@ -71,7 +174,7 @@ use node::{
     node_labels, node_needs_bounds, nodes_show_remote_screen_share, searchable_node_text,
     teams_has_active_call_evidence,
 };
-#[cfg(any(test, target_os = "linux", target_os = "windows"))]
+#[cfg(any(test, target_os = "macos", target_os = "linux", target_os = "windows"))]
 use platform::is_browser_active_call_control;
 #[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(unused_imports))]
 #[cfg(any(test, target_os = "macos", target_os = "linux", target_os = "windows"))]
@@ -123,6 +226,166 @@ fn unique_scope_for_search(count: usize, complete: bool) -> UniqueMatch {
     } else {
         UniqueMatch::Ambiguous
     }
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn browser_call_identity(root: &BrowserMeetingRoot) -> Option<String> {
+    if root.platform != MeetingPlatform::GoogleMeet {
+        return None;
+    }
+    let mut url = url::Url::parse(&context::browser_meeting_identity(root)?).ok()?;
+    let code = url.path().trim_matches('/');
+    let code = platform::google_meet_code_from_title(&format!("Meet - {code}"))?;
+    url.set_path(&format!("/{code}"));
+    url.set_query(None);
+    url.set_fragment(None);
+    let window_hash = root
+        .nodes
+        .iter()
+        .find(|node| node.role.as_deref() == Some("AXWindow") && node.tree_path.is_empty())?
+        .element_hash?;
+    Some(format!("{url}:window:{window_hash:x}"))
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn is_meet_departure_node(node: &AxNode) -> bool {
+    node_has_positive_bounds(node)
+        && match node.role.as_deref() {
+            Some("AXHeading") => node_labels(node).any(|label| {
+                matches!(
+                    label.trim().to_ascii_lowercase().as_str(),
+                    "you left the meeting" | "you've ended the meeting for everyone"
+                )
+            }),
+            Some("AXButton") if node.enabled != Some(false) => node_labels(node).any(|label| {
+                matches!(
+                    label.trim().to_ascii_lowercase().as_str(),
+                    "rejoin" | "join now" | "ask to join"
+                )
+            }),
+            _ => false,
+        }
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn browser_inspections_from_roots(
+    app: MeetingApp,
+    pid: i32,
+    accessibility_trusted: bool,
+    roots: Vec<BrowserMeetingRoot>,
+    has_unscoped_meeting_window: bool,
+    mut warnings: Vec<String>,
+) -> Vec<MeetingAccessibilityInspection> {
+    let active_roots = roots
+        .iter()
+        .filter(|root| {
+            root.nodes
+                .iter()
+                .any(|node| is_browser_active_call_control(&root.platform, node))
+        })
+        .count();
+    let uncertain = has_unscoped_meeting_window
+        || warnings.iter().any(|warning| {
+            let warning = warning.to_ascii_lowercase();
+            warning.contains("ambiguous") || warning.contains("incomplete")
+        });
+    if uncertain || active_roots > 1 {
+        warnings.push("browser meeting window scope was ambiguous or incomplete".to_string());
+    }
+    let trustworthy = accessibility_trusted && !uncertain && active_roots <= 1;
+    let mut rows: Vec<_> = roots
+        .into_iter()
+        .map(|root| {
+            let joined = root
+                .nodes
+                .iter()
+                .any(|node| is_browser_active_call_control(&root.platform, node));
+            let departed = root.platform == MeetingPlatform::GoogleMeet
+                && root.nodes.iter().any(is_meet_departure_node);
+            let call_identity = (joined || departed)
+                .then(|| browser_call_identity(&root))
+                .flatten();
+            let mut row_warnings = warnings.clone();
+            if root.platform == MeetingPlatform::GoogleMeet
+                && ((!joined && !departed) || call_identity.is_none())
+            {
+                row_warnings.push(
+                    "browser meeting identity or departure evidence was incomplete".to_string(),
+                );
+            }
+            let active_call = trustworthy
+                && joined
+                && (root.platform != MeetingPlatform::GoogleMeet || call_identity.is_some());
+            MeetingAccessibilityInspection {
+                active_call,
+                app: app.clone(),
+                pid,
+                platform: root.platform,
+                surface: MeetingSurface::Web,
+                accessibility_trusted,
+                window_title: root.window_title,
+                call_identity,
+                open_call_identities: None,
+                remote_screen_share: active_call && nodes_show_remote_screen_share(&root.nodes),
+                warnings: row_warnings,
+            }
+        })
+        .collect();
+    if rows.is_empty() {
+        warnings.push(
+            "browser inspection found no uniquely scoped meeting AXWindow and active AXWebArea"
+                .to_string(),
+        );
+        rows.push(MeetingAccessibilityInspection {
+            active_call: false,
+            app,
+            pid,
+            platform: MeetingPlatform::Unknown,
+            surface: MeetingSurface::Web,
+            accessibility_trusted,
+            window_title: None,
+            call_identity: None,
+            open_call_identities: None,
+            remote_screen_share: false,
+            warnings,
+        });
+    }
+    rows
+}
+
+#[cfg(target_os = "macos")]
+fn inspect_browser_app(
+    app: MeetingApp,
+    pid: i32,
+    accessibility_trusted: bool,
+) -> Vec<MeetingAccessibilityInspection> {
+    let mut warnings = Vec::new();
+    if !accessibility_trusted {
+        warnings.push("macOS accessibility permission is not trusted".to_string());
+        return browser_inspections_from_roots(app, pid, false, Vec::new(), true, warnings);
+    }
+    let ax_app = ax::UiElement::with_app_pid(pid);
+    let _ = ax_app.set_messaging_timeout_secs(0.6);
+    let (roots, unscoped, meeting_web_area_missing) =
+        collect_browser_meeting_roots(&ax_app, &mut warnings);
+    request_browser_accessibility(&app, pid, &ax_app, meeting_web_area_missing);
+    let inventory = chrome_tabs::inspect(&app.id, pid);
+    let mut rows = browser_inspections_from_roots(app, pid, true, roots, unscoped, warnings);
+    for row in &mut rows {
+        if let Some(inventory) = &inventory {
+            if let Some((url, _)) = row
+                .call_identity
+                .as_deref()
+                .and_then(|id| id.rsplit_once(":window:"))
+            {
+                if let Some(identity) = chrome_tabs::unique_identity(url, inventory) {
+                    row.call_identity = Some(identity);
+                }
+            }
+        }
+        row.open_call_identities = inventory.clone();
+    }
+    rows
 }
 
 #[cfg(any(test, target_os = "macos", target_os = "linux"))]
@@ -225,9 +488,19 @@ fn browser_meeting_root_from_snapshot(
 #[cfg(target_os = "macos")]
 pub fn inspect_meeting_accessibility() -> Vec<MeetingAccessibilityInspection> {
     let accessibility_trusted = macos_accessibility_client::accessibility::application_is_trusted();
-    running_meeting_apps()
-        .into_iter()
-        .map(|(app, pid)| inspect_app(app, pid, accessibility_trusted))
+    let apps = running_meeting_apps();
+    browser_accessibility_requests()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .retain(|pid, _| apps.iter().any(|(_, running_pid)| running_pid == pid));
+    apps.into_iter()
+        .flat_map(|(app, pid)| {
+            if is_browser_bundle(&app.id) {
+                inspect_browser_app(app, pid, accessibility_trusted)
+            } else {
+                vec![inspect_app(app, pid, accessibility_trusted)]
+            }
+        })
         .collect()
 }
 
@@ -450,7 +723,7 @@ pub fn send_meeting_chat_message(
         let ax_app = ax::UiElement::with_app_pid(pid);
         let _ = ax_app.set_messaging_timeout_secs(0.6);
         if is_browser_bundle(scoped_bundle_id) {
-            let (roots, poisoned) = collect_browser_meeting_windows(&ax_app, &mut warnings);
+            let (roots, poisoned, _) = collect_browser_meeting_windows(&ax_app, &mut warnings);
             if poisoned || roots.len() > 1 {
                 warnings.push(format!(
                     "refusing to send because the browser exposed {} meeting chat surfaces",
@@ -710,7 +983,7 @@ pub fn capture_meeting_chat_messages(bundle_ids: Vec<String>) -> MeetingChatCapt
         for (app, pid) in running_apps {
             let ax_app = ax::UiElement::with_app_pid(pid);
             let _ = ax_app.set_messaging_timeout_secs(0.6);
-            let (roots, has_unscoped_meeting_window) =
+            let (roots, has_unscoped_meeting_window, _) =
                 collect_browser_meeting_roots(&ax_app, &mut warnings);
             browser_scope_poisoned |= has_unscoped_meeting_window;
             browser_roots.extend(roots.into_iter().filter_map(|root| {
@@ -1333,6 +1606,33 @@ fn collect_slack_huddle_roots(
 }
 
 #[cfg(target_os = "macos")]
+fn collect_slack_huddle_inspection_roots(
+    ax_app: &ax::UiElement,
+    warnings: &mut Vec<String>,
+) -> Vec<NativeMeetingRoot> {
+    let mut windows = Vec::new();
+    let mut visited = 0;
+    if !collect_window_elements(ax_app, 0, &mut visited, &mut windows) {
+        warnings.push("AX window discovery was incomplete; no Slack Huddle was scoped".to_string());
+        return Vec::new();
+    }
+    windows
+        .into_iter()
+        .filter_map(|element| {
+            let mut nodes = Vec::new();
+            if !collect_nodes(&element, 0, &mut nodes, warnings) {
+                return None;
+            }
+            let window_title = slack_huddle_recording_label(&nodes)?;
+            Some(NativeMeetingRoot {
+                window_title: Some(window_title),
+                nodes,
+            })
+        })
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
 fn collect_native_meeting_roots(
     ax_app: &ax::UiElement,
     platform: &MeetingPlatform,
@@ -1434,7 +1734,9 @@ fn scoped_meeting_is_active(
     nodes: &[AxNode],
     native_scope: bool,
 ) -> bool {
-    if native_scope {
+    if native_scope && *platform == MeetingPlatform::Slack {
+        slack_huddle_recording_label(nodes).is_some()
+    } else if native_scope {
         native_meeting_window_is_validated(platform, nodes)
     } else {
         nodes
@@ -1447,25 +1749,31 @@ fn scoped_meeting_is_active(
 fn collect_browser_meeting_roots(
     ax_app: &ax::UiElement,
     warnings: &mut Vec<String>,
-) -> (Vec<BrowserMeetingRoot>, bool) {
-    let (roots, poisoned) = collect_browser_meeting_windows(ax_app, warnings);
-    (roots.into_iter().map(|(root, _)| root).collect(), poisoned)
+) -> (Vec<BrowserMeetingRoot>, bool, bool) {
+    let (roots, poisoned, meeting_web_area_missing) =
+        collect_browser_meeting_windows(ax_app, warnings);
+    (
+        roots.into_iter().map(|(root, _)| root).collect(),
+        poisoned,
+        meeting_web_area_missing,
+    )
 }
 
 #[cfg(target_os = "macos")]
 fn collect_browser_meeting_windows(
     ax_app: &ax::UiElement,
     warnings: &mut Vec<String>,
-) -> (Vec<(BrowserMeetingRoot, arc::R<ax::UiElement>)>, bool) {
+) -> (Vec<(BrowserMeetingRoot, arc::R<ax::UiElement>)>, bool, bool) {
     let focused_web_area = focused_web_area_element(ax_app);
     let mut windows = Vec::new();
     let mut visited = 0;
     let mut has_unscoped_meeting_window = false;
+    let mut meeting_web_area_missing = false;
     if !collect_window_elements(ax_app, 0, &mut visited, &mut windows) {
         warnings.push(
             "browser AX window discovery was incomplete; browser capture was excluded".to_string(),
         );
-        return (Vec::new(), true);
+        return (Vec::new(), true, false);
     }
 
     let roots = windows
@@ -1477,6 +1785,7 @@ fn collect_browser_meeting_windows(
             if !web_area_search_complete {
                 if browser_window_has_provider_signal(None, window_title.as_deref()) {
                     has_unscoped_meeting_window = true;
+                    meeting_web_area_missing = true;
                     warnings.push(
                         "a meeting-like browser window had an incomplete AXWebArea search; browser capture was excluded"
                             .to_string(),
@@ -1490,6 +1799,7 @@ fn collect_browser_meeting_windows(
                     .is_some_and(|title| !browser_title_platform_signals(title).is_empty())
                 {
                     has_unscoped_meeting_window = true;
+                    meeting_web_area_missing = true;
                     warnings.push(
                         "a meeting-like browser window did not expose one active AXWebArea; it was excluded"
                             .to_string(),
@@ -1541,7 +1851,7 @@ fn collect_browser_meeting_windows(
         })
         .collect();
 
-    (roots, has_unscoped_meeting_window)
+    (roots, has_unscoped_meeting_window, meeting_web_area_missing)
 }
 
 #[cfg(any(test, target_os = "macos", target_os = "linux"))]
@@ -1833,45 +2143,22 @@ fn inspect_app(
     if accessibility_trusted {
         let ax_app = ax::UiElement::with_app_pid(pid);
         let _ = ax_app.set_messaging_timeout_secs(0.6);
+        request_browser_accessibility(&app, pid, &ax_app, false);
         if bundle_platform == MeetingPlatform::Slack {
-            let mut roots = collect_slack_huddle_roots(&ax_app, &mut warnings);
+            let mut roots = collect_slack_huddle_inspection_roots(&ax_app, &mut warnings);
             match roots.len() {
                 0 => warnings.push(
                     "Slack is running without a uniquely validated active Huddle".to_string(),
                 ),
                 1 => {
                     let root = roots.remove(0);
-                    window_title = Some(root.label);
+                    window_title = root.window_title;
                     nodes = root.nodes;
                     native_scope = true;
                 }
                 count => warnings.push(format!(
                     "Slack exposed {count} active Huddle windows; inspection is scoped to none"
                 )),
-            }
-        } else if is_browser_bundle(&app.id) {
-            let (mut roots, has_unscoped_meeting_window) =
-                collect_browser_meeting_roots(&ax_app, &mut warnings);
-            let root_match = if has_unscoped_meeting_window {
-                UniqueMatch::Ambiguous
-            } else {
-                unique_scope_for_count(roots.len())
-            };
-            match root_match {
-                UniqueMatch::Missing => warnings.push(
-                    "browser inspection found no uniquely scoped meeting AXWindow and active AXWebArea"
-                        .to_string(),
-                ),
-                UniqueMatch::One(index) => {
-                    let root = roots.remove(index);
-                    scoped_platform = Some(root.platform);
-                    window_title = root.window_title;
-                    nodes = root.nodes;
-                }
-                UniqueMatch::Ambiguous => warnings.push(
-                    "browser meeting window scope was ambiguous; inspection is scoped to none"
-                        .to_string(),
-                ),
             }
         } else if bundle_platform != MeetingPlatform::Unknown {
             let mut roots = collect_native_meeting_roots(&ax_app, &bundle_platform, &mut warnings);
@@ -1918,6 +2205,8 @@ fn inspect_app(
         surface,
         accessibility_trusted,
         window_title,
+        call_identity: None,
+        open_call_identities: None,
         remote_screen_share: active_call && nodes_show_remote_screen_share(&nodes),
         warnings,
     }
@@ -2226,6 +2515,40 @@ fn slack_huddle_context(nodes: &[AxNode]) -> Option<(String, String)> {
     }
 
     None
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn slack_huddle_recording_label(nodes: &[AxNode]) -> Option<String> {
+    if let Some((label, _)) = slack_huddle_context(nodes) {
+        return Some(label);
+    }
+    // Recording needs live-call evidence, not the channel identity required
+    // for safely addressing a chat composer. The caller scopes one Slack window.
+    if nodes
+        .iter()
+        .filter(|node| node.role.as_deref() == Some("AXWindow"))
+        .count()
+        != 1
+    {
+        return None;
+    }
+    let has_toolbar = nodes.iter().any(|node| {
+        node.role.as_deref() == Some("AXToolbar")
+            && node.enabled != Some(false)
+            && node_labels(node).any(|label| label.trim().eq_ignore_ascii_case("huddles actions"))
+    });
+    let live_button = |label: &str| {
+        nodes.iter().any(|node| {
+            node.role.as_deref() == Some("AXButton")
+                && node.enabled == Some(true)
+                && node_has_positive_bounds(node)
+                && node_labels(node).any(|value| value.trim().eq_ignore_ascii_case(label))
+        })
+    };
+    (has_toolbar
+        && live_button("leave huddle")
+        && (live_button("mute microphone") || live_button("unmute microphone")))
+    .then(|| "Slack huddle".to_string())
 }
 
 #[cfg(any(test, target_os = "macos", target_os = "linux", target_os = "windows"))]

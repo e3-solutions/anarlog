@@ -686,6 +686,8 @@ fn inspection_from_nodes(
         surface,
         accessibility_trusted,
         window_title,
+        call_identity: None,
+        open_call_identities: None,
         remote_screen_share: active_call && super::nodes_show_remote_screen_share(&nodes),
         warnings,
     }

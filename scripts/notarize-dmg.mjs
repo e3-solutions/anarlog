@@ -6,7 +6,12 @@ import { pathToFileURL } from "node:url";
 export function runCommand(args, spawn = spawnSync) {
   return spawn("xcrun", args, {
     encoding: "utf8",
-    timeout: args[1] === "wait" ? 11 * 60 * 1000 : undefined,
+    timeout:
+      args[1] === "wait"
+        ? 11 * 60 * 1000
+        : args[1] === "history"
+          ? 60_000
+          : undefined,
     killSignal: "SIGKILL",
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -20,17 +25,11 @@ function readResponse(result) {
   }
 }
 
-export async function notarizeDmg({
-  dmgPath,
-  env = process.env,
-  run = runCommand,
-  sleep = setTimeout,
-  log = console.log,
-}) {
-  if (!dmgPath || !env.APPLE_ID || !env.APPLE_PASSWORD || !env.APPLE_TEAM_ID) {
-    throw new Error("DMG path and Apple notarization credentials are required");
+function notarizationAuth(env) {
+  if (!env.APPLE_ID || !env.APPLE_PASSWORD || !env.APPLE_TEAM_ID) {
+    throw new Error("Apple notarization credentials are required");
   }
-  const auth = [
+  return [
     "--apple-id",
     env.APPLE_ID,
     "--password",
@@ -41,6 +40,39 @@ export async function notarizeDmg({
     "json",
     "--no-progress",
   ];
+}
+
+export function preflightNotarization({
+  env = process.env,
+  run = runCommand,
+} = {}) {
+  // Read-only authentication check: no archive is uploaded or resubmitted.
+  const result = run(["notarytool", "history", ...notarizationAuth(env)]);
+  if (result.status === 0 && Array.isArray(readResponse(result)?.history))
+    return;
+  // Never forward Apple's raw output: it may contain account or credential data.
+  const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+  const reason = /\b401\b/.test(output)
+    ? "Apple rejected the credentials (HTTP 401)"
+    : /\b403\b/.test(output)
+      ? "Apple denied access to the developer team (HTTP 403)"
+      : result.error?.code === "ETIMEDOUT" || /timed? out|timeout/i.test(output)
+        ? "Apple's authentication check timed out"
+        : "Apple's submission history could not be verified";
+  throw new Error(
+    `Notarization preflight failed: ${reason}; compilation has not started. Check Apple notarization credentials and connectivity before retrying.`,
+  );
+}
+
+export async function notarizeDmg({
+  dmgPath,
+  env = process.env,
+  run = runCommand,
+  sleep = setTimeout,
+  log = console.log,
+}) {
+  if (!dmgPath) throw new Error("DMG path is required");
+  const auth = notarizationAuth(env);
   const submitted = run([
     "notarytool",
     "submit",
@@ -96,7 +128,8 @@ if (
   import.meta.url === pathToFileURL(resolve(process.argv[1])).href
 ) {
   try {
-    await notarizeDmg({ dmgPath: process.argv[2] });
+    if (process.argv[2] === "--preflight") preflightNotarization();
+    else await notarizeDmg({ dmgPath: process.argv[2] });
   } catch (error) {
     console.error(error.message);
     process.exitCode = 1;
