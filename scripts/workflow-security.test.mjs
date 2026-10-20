@@ -116,35 +116,31 @@ test("pilot signing preflight reports secret names without exposing values", asy
   const directory = await mkdtemp(path.join(os.tmpdir(), "pilot-signing-"));
   const secret = 'sensitive-$(touch injected)`touch injected`"';
   try {
-    const invoke = (mode, secrets = {}, deferred = false) =>
+    const invoke = (secrets = {}, deferred = false) =>
       spawnSync("bash", ["-e", "-c", script], {
         cwd: directory,
         env: {
           PATH: process.env.PATH,
-          SIGNING_MODE: mode,
           DEFER_NOTARIZATION: String(deferred),
           ...secrets,
         },
         encoding: "utf8",
       });
-    const missing = invoke("developer-id");
+    const missing = invoke();
     assert.notEqual(missing.status, 0);
     for (const name of required) assert.ok(missing.stderr.includes(name));
     const provided = Object.fromEntries(required.map((name) => [name, secret]));
-    const signed = invoke("developer-id", provided);
+    const signed = invoke(provided);
     assert.equal(signed.status, 0, signed.stderr);
     assert.ok(!(signed.stdout + signed.stderr).includes(secret));
-    assert.equal(invoke("ad-hoc").status, 0);
-    assert.notEqual(invoke("unsupported").status, 0);
     const signingOnly = Object.fromEntries(
       required
         .filter((name) => !["APPLE_ID", "APPLE_PASSWORD"].includes(name))
         .map((name) => [name, secret]),
     );
-    assert.equal(invoke("developer-id", signingOnly, true).status, 0);
-    assert.notEqual(invoke("developer-id", signingOnly).status, 0);
-    assert.notEqual(invoke("developer-id", {}, true).status, 0);
-    assert.notEqual(invoke("ad-hoc", {}, true).status, 0);
+    assert.equal(invoke(signingOnly, true).status, 0);
+    assert.notEqual(invoke(signingOnly).status, 0);
+    assert.notEqual(invoke({}, true).status, 0);
     await assert.rejects(readFile(path.join(directory, "injected")), {
       code: "ENOENT",
     });
@@ -210,90 +206,54 @@ test("deferred notarization preserves signed checkpoints without publishing a re
   assert.match(find("id: archive-pilot\n"), /spctl --assess/);
 });
 
-test("pilot signing override preserves certificate names as JSON data", async () => {
+test("pilot builds preserve signing data and withhold notarization credentials", async () => {
   const source = await readFile(
     new URL("../.github/workflows/e3_capture_pilot.yaml", import.meta.url),
     "utf8",
   );
-  const script = pilotStepRun(source, "build-pilot");
-  const python = script.match(/python3 - <<'PY'\n([\s\S]*?)\nPY\n/)[1];
-  const directory = await mkdtemp(
-    path.join(os.tmpdir(), "pilot-signing-json-"),
-  );
+  const directory = await mkdtemp(path.join(os.tmpdir(), "pilot-signing-"));
   const identity =
     'Developer ID Application: Test "$(touch injected)`touch injected`';
-  try {
-    for (const mode of ["developer-id", "ad-hoc"]) {
-      const result = spawnSync("python3", ["-c", python], {
-        cwd: directory,
-        env: {
-          PATH: process.env.PATH,
-          RUNNER_TEMP: directory,
-          SIGNING_MODE: mode,
-          SIGNING_IDENTITY: identity,
-        },
-        encoding: "utf8",
-      });
-      assert.equal(result.status, 0, result.stderr);
-      const override = JSON.parse(
-        await readFile(path.join(directory, "e3-pilot-signing.json"), "utf8"),
-      );
-      assert.deepEqual(override, {
-        bundle: {
-          macOS: {
-            signingIdentity: mode === "developer-id" ? identity : "-",
-            hardenedRuntime: true,
-          },
-        },
-      });
-    }
-    await assert.rejects(readFile(path.join(directory, "injected")), {
-      code: "ENOENT",
-    });
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
-test("pilot builds defer notarization credentials until after the signed checkpoint", async () => {
-  const source = await readFile(
-    new URL("../.github/workflows/e3_capture_pilot.yaml", import.meta.url),
-    "utf8",
-  );
-  const directory = await mkdtemp(path.join(os.tmpdir(), "pilot-adhoc-"));
   try {
     await writeFile(
       path.join(directory, "pnpm"),
       `#!/usr/bin/env python3
 import os
 for name in ("APPLE_ID", "APPLE_PASSWORD", "APPLE_TEAM_ID", "APPLE_API_ISSUER", "APPLE_API_KEY", "APPLE_API_KEY_PATH"):
-    assert name not in os.environ, name + " must be unset for ad-hoc signing"
+    assert name not in os.environ, name + " must be unset during packaging"
 `,
       { mode: 0o755 },
     );
-    for (const mode of ["ad-hoc", "developer-id"]) {
-      const result = spawnSync(
-        "bash",
-        ["-e", "-c", pilotStepRun(source, "build-pilot")],
-        {
-          cwd: directory,
-          env: {
-            PATH: directory + path.delimiter + process.env.PATH,
-            RUNNER_TEMP: directory,
-            SIGNING_MODE: mode,
-            SIGNING_IDENTITY: "Developer ID Application: Fixture (TEAM)",
-            APPLE_ID: "",
-            APPLE_PASSWORD: "",
-            APPLE_TEAM_ID: "",
-            APPLE_API_ISSUER: "",
-            APPLE_API_KEY: "",
-            APPLE_API_KEY_PATH: "",
-          },
-          encoding: "utf8",
+    const result = spawnSync(
+      "bash",
+      ["-e", "-c", pilotStepRun(source, "build-pilot")],
+      {
+        cwd: directory,
+        env: {
+          PATH: directory + path.delimiter + process.env.PATH,
+          RUNNER_TEMP: directory,
+          SIGNING_IDENTITY: identity,
+          APPLE_ID: "notary-account",
+          APPLE_PASSWORD: "notary-secret",
+          APPLE_TEAM_ID: "team",
+          APPLE_API_ISSUER: "issuer",
+          APPLE_API_KEY: "key",
+          APPLE_API_KEY_PATH: "key-path",
         },
-      );
-      assert.equal(result.status, 0, result.stderr);
-    }
+        encoding: "utf8",
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const override = JSON.parse(
+      await readFile(path.join(directory, "e3-pilot-signing.json"), "utf8"),
+    );
+    assert.deepEqual(override.bundle.macOS, {
+      signingIdentity: identity,
+      hardenedRuntime: true,
+    });
+    await assert.rejects(readFile(path.join(directory, "injected")), {
+      code: "ENOENT",
+    });
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

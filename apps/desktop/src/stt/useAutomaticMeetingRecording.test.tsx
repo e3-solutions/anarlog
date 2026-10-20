@@ -44,7 +44,7 @@ const meet: MeetingAccessibilityInspection = {
   windowTitle: "Meet - abc-defg-hij",
   remoteScreenShare: false,
   warnings: [],
-  ...{ callIdentity: null },
+  callIdentity: null,
 };
 const slack: MeetingAccessibilityInspection = {
   ...meet,
@@ -165,16 +165,16 @@ describe("automatic local meeting recording", () => {
       windowTitle: null,
       warnings: ["no uniquely scoped meeting AXWindow"],
     };
-    snapshot([{ ...hidden, ...{ openCallIdentities: [identity] } }]);
+    snapshot([{ ...hidden, openCallIdentities: [identity] }]);
     await tick(90_000);
     expect(stop).not.toHaveBeenCalled();
     snapshot([hidden]);
     await tick(90_000);
     expect(stop).not.toHaveBeenCalled();
-    snapshot([{ ...hidden, ...{ openCallIdentities: null } }]);
+    snapshot([{ ...hidden, openCallIdentities: null }]);
     await tick(90_000);
     expect(stop).not.toHaveBeenCalled();
-    snapshot([{ ...hidden, ...{ openCallIdentities: [] } }]);
+    snapshot([{ ...hidden, openCallIdentities: [] }]);
     await tick(14_000);
     expect(stop).not.toHaveBeenCalled();
     await tick(4_000);
@@ -192,7 +192,7 @@ describe("automatic local meeting recording", () => {
       {
         ...meet,
         callIdentity: `${url}:tab:42`,
-        ...{ openCallIdentities: [`${url}:tab:42`] },
+        openCallIdentities: [`${url}:tab:42`],
       },
     ]);
     await tick(90_000);
@@ -204,7 +204,7 @@ describe("automatic local meeting recording", () => {
         activeCall: false,
         platform: "unknown",
         callIdentity: null,
-        ...{ openCallIdentities: [] },
+        openCallIdentities: [],
       },
     ]);
     await tick(18_000);
@@ -221,12 +221,12 @@ describe("automatic local meeting recording", () => {
     const tab = {
       ...meet,
       callIdentity: `${url}:tab:42`,
-      ...{ openCallIdentities: [`${url}:tab:42`] },
+      openCallIdentities: [`${url}:tab:42`],
     };
     snapshot([tab]);
     await tick(90_000);
     expect(mocks.open).toHaveBeenCalledOnce();
-    snapshot([{ ...tab, activeCall: false, ...{ openCallIdentities: [] } }]);
+    snapshot([{ ...tab, activeCall: false, openCallIdentities: [] }]);
     await tick();
     snapshot([tab]);
     await tick();

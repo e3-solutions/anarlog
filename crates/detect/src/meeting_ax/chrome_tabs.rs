@@ -49,11 +49,7 @@ pub(super) fn parse_inventory(output: &str) -> Option<Vec<String>> {
         }
         // Meet home/prejoin without a canonical code is not a captured call.
         if let Some(url) = canonical_meet_url(value) {
-            let identity = format!("{url}:tab:{id}");
-            if identities.contains(&identity) {
-                return None;
-            }
-            identities.push(identity);
+            identities.push(format!("{url}:tab:{id}"));
         }
     }
     (ended && lines.next().is_none()).then_some(identities)
@@ -70,32 +66,32 @@ pub(super) fn unique_identity(url: &str, inventory: &[String]) -> Option<String>
 
 #[cfg(target_os = "macos")]
 const SCRIPT: &str = r#"
-if application id "com.google.Chrome" is not running then return "NOT_RUNNING"
-set resultText to "E3_MEET_TABS_V1" & linefeed
-with timeout of 1 seconds
-    tell application id "com.google.Chrome"
-        repeat with browserWindow in every window
-            repeat with meetingTab in (every tab of browserWindow whose URL starts with "https://meet.google.com/")
-                set resultText to resultText & (id of meetingTab as text) & (character id 9) & (URL of meetingTab as text) & linefeed
-            end repeat
-        end repeat
-    end tell
-end timeout
-return resultText & "E3_MEET_TABS_END"
+function collectMeetTabInventory(pid, application) {
+    var browser = application(pid);
+    if (!browser.running() || browser.id() !== "com.google.Chrome") {
+        throw new Error("Target is not running Chrome");
+    }
+    var records = ["E3_MEET_TABS_V1"];
+    var windows = browser.windows();
+    for (var i = 0; i < windows.length; i++) {
+        var tabs = windows[i].tabs.whose({url: {_beginsWith: "https://meet.google.com/"}})();
+        for (var j = 0; j < tabs.length; j++) {
+            records.push(String(tabs[j].id()) + "\t" + tabs[j].url());
+        }
+    }
+    if (!browser.running()) {
+        throw new Error("Target exited during inventory");
+    }
+    records.push("E3_MEET_TABS_END");
+    return records.join("\n");
+}
+function run(argv) {
+    return collectMeetTabInventory(Number(argv[0]), Application);
+}
 "#;
 
 #[cfg(target_os = "macos")]
-fn sole_chrome_pid(pid: i32) -> bool {
-    let apps = super::running_meeting_apps();
-    let mut chrome = apps.iter().filter(|(app, _)| app.id == "com.google.Chrome");
-    chrome
-        .next()
-        .is_some_and(|(_, running_pid)| *running_pid == pid)
-        && chrome.next().is_none()
-}
-
-#[cfg(target_os = "macos")]
-fn query() -> Result<Vec<String>, &'static str> {
+fn query(pid: i32) -> Result<Vec<String>, &'static str> {
     use std::{
         io::Read,
         process::{Command, Stdio},
@@ -103,8 +99,9 @@ fn query() -> Result<Vec<String>, &'static str> {
         time::{Duration, Instant},
     };
     let mut child = Command::new("/usr/bin/osascript")
-        .arg("-e")
+        .args(["-l", "JavaScript", "-e"])
         .arg(SCRIPT)
+        .arg(pid.to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -146,9 +143,12 @@ pub(super) fn inspect(bundle_id: &str, pid: i32) -> Option<Vec<String>> {
         time::{Duration, Instant},
     };
     static ATTEMPTS: OnceLock<Mutex<HashMap<i32, Instant>>> = OnceLock::new();
-    if bundle_id != "com.google.Chrome" || !sole_chrome_pid(pid) {
+    if bundle_id != "com.google.Chrome" {
         return None;
     }
+    // A kernel birth stamp detects PID reuse without AppKit application caches.
+    // The PID-targeted script separately verifies Chrome's bundle and running state.
+    let before = anlg_bundle::process_identity_for_pid(pid)?;
     let attempts = ATTEMPTS.get_or_init(Default::default);
     {
         let mut attempts = attempts.lock().unwrap_or_else(|error| error.into_inner());
@@ -162,10 +162,12 @@ pub(super) fn inspect(bundle_id: &str, pid: i32) -> Option<Vec<String>> {
         attempts.insert(pid, Instant::now());
     }
     let started = Instant::now();
-    let outcome = query().and_then(|inventory| {
-        sole_chrome_pid(pid)
-            .then_some(inventory)
-            .ok_or("pid_changed")
+    let outcome = query(pid).and_then(|inventory| {
+        let after = anlg_bundle::process_identity_for_pid(pid).ok_or("process_missing")?;
+        if before != after {
+            return Err("process_instance_changed");
+        }
+        Ok(inventory)
     });
     tracing::debug!(
         status = outcome.as_ref().err().copied().unwrap_or("complete"),
@@ -186,6 +188,80 @@ pub(super) fn inspect(bundle_id: &str, pid: i32) -> Option<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn script_targets_the_detected_process_and_rejects_invalid_targets() {
+        // Exercise the actual production entry point with a fake Application factory.
+        // This performs no browser or AppleEvent access.
+        let program = format!(
+            r#"
+function exercise(Application, pid) {{
+    {SCRIPT}
+    return run([String(pid)]);
+}}
+function run() {{
+    var requested = [];
+    function browser(id, url, bundle, stopped) {{
+        var checks = 0;
+        return {{
+            running: function() {{ return !stopped || checks++ === 0; }},
+            id: function() {{ return bundle; }},
+            windows: function() {{ return [{{ tabs: {{ whose: function(filter) {{
+                if (filter.url._beginsWith !== "https://meet.google.com/") {{
+                    throw new Error("Unfiltered tab access");
+                }}
+                return function() {{ return [{{
+                    id: function() {{ return id; }},
+                    url: function() {{ return url; }}
+                }}]; }};
+            }} }} }}]; }}
+        }};
+    }}
+    function application(pid) {{
+        requested.push(pid);
+        if (pid === 11) return browser(1, "https://meet.google.com/aaa-bbbb-ccc", "com.google.Chrome", false);
+        if (pid === 42) return browser(2, "https://meet.google.com/abc-defg-hij?authuser=1", "com.google.Chrome", false);
+        if (pid === 43) return browser(3, "https://meet.google.com/abc-defg-hij", "com.apple.Safari", false);
+        if (pid === 44) return browser(4, "https://meet.google.com/abc-defg-hij", "com.google.Chrome", true);
+        if (pid === 46) return {{ running: function() {{ return false; }} }};
+        if (pid === 47) return {{
+            running: function() {{ return true; }},
+            id: function() {{ return "com.google.Chrome"; }},
+            windows: function() {{ return []; }}
+        }};
+        throw new Error("Application can't be found");
+    }}
+    var result = exercise(application, 42);
+    if (requested.length !== 1 || requested[0] !== 42) throw new Error("Wrong process routed");
+    [43, 44, 45, 46].forEach(function(pid) {{
+        var rejected = false;
+        try {{ exercise(application, pid); }} catch (error) {{ rejected = true; }}
+        if (!rejected) throw new Error("Invalid target returned an inventory");
+    }});
+    var empty = exercise(application, 47);
+    if (empty !== "E3_MEET_TABS_V1\nE3_MEET_TABS_END") throw new Error("Incomplete empty inventory");
+    return result + "\n" + empty;
+}}
+"#
+        );
+        let output = std::process::Command::new("/usr/bin/osascript")
+            .args(["-l", "JavaScript", "-e", &program])
+            .output()
+            .expect("macOS provides osascript");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let text = std::str::from_utf8(&output.stdout).unwrap();
+        let (populated, empty) = text.split_once("\nE3_MEET_TABS_V1\n").unwrap();
+        assert_eq!(
+            parse_inventory(populated),
+            Some(vec!["https://meet.google.com/abc-defg-hij:tab:2".into()])
+        );
+        assert_eq!(parse_inventory(&format!("{HEADER}\n{empty}")), Some(vec![]));
+    }
 
     #[test]
     fn only_complete_success_can_mean_empty_inventory() {

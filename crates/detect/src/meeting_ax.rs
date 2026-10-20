@@ -4,15 +4,8 @@ use cidre::{arc, ax, cf, cg};
 #[cfg(any(test, target_os = "macos"))]
 use std::time::{Duration, Instant};
 
-#[cfg(any(test, target_os = "macos"))]
-#[derive(Clone, Copy)]
-struct BrowserAccessibilityRequest {
-    attempted_at: Instant,
-}
-
 #[cfg(target_os = "macos")]
-type BrowserAccessibilityRequests =
-    std::sync::Mutex<std::collections::HashMap<i32, BrowserAccessibilityRequest>>;
+type BrowserAccessibilityRequests = std::sync::Mutex<std::collections::HashMap<i32, Instant>>;
 
 #[cfg(target_os = "macos")]
 fn browser_accessibility_requests() -> &'static BrowserAccessibilityRequests {
@@ -23,7 +16,7 @@ fn browser_accessibility_requests() -> &'static BrowserAccessibilityRequests {
 #[cfg(any(test, target_os = "macos"))]
 fn should_request_browser_accessibility(
     bundle_id: &str,
-    previous: Option<BrowserAccessibilityRequest>,
+    previous: Option<Instant>,
     now: Instant,
     meeting_web_area_missing: bool,
 ) -> bool {
@@ -54,9 +47,9 @@ fn should_request_browser_accessibility(
             | "net.imput.helium"
     );
     chromium
-        && previous.is_none_or(|request| {
+        && previous.is_none_or(|attempted_at| {
             meeting_web_area_missing
-                && now.saturating_duration_since(request.attempted_at) >= Duration::from_secs(30)
+                && now.saturating_duration_since(attempted_at) >= Duration::from_secs(30)
         })
 }
 
@@ -82,7 +75,7 @@ fn request_browser_accessibility(
         }
         // Reserve before IPC: concurrent inspections must not keep resetting
         // Chromium's two-second activation debounce. Never hold the lock over IPC.
-        requests.insert(pid, BrowserAccessibilityRequest { attempted_at: now });
+        requests.insert(pid, now);
     }
     // Chromium's application handler enables full renderer AX asynchronously.
     // The next normal inspection observes it; no sleep or browser navigation.
@@ -2143,7 +2136,6 @@ fn inspect_app(
     if accessibility_trusted {
         let ax_app = ax::UiElement::with_app_pid(pid);
         let _ = ax_app.set_messaging_timeout_secs(0.6);
-        request_browser_accessibility(&app, pid, &ax_app, false);
         if bundle_platform == MeetingPlatform::Slack {
             let mut roots = collect_slack_huddle_inspection_roots(&ax_app, &mut warnings);
             match roots.len() {

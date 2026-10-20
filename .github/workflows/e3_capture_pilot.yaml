@@ -11,14 +11,6 @@ on:
         description: Produce only a signed NOT NOTARIZED diagnostic checkpoint for local notarization
         type: boolean
         default: false
-      signing_mode:
-        description: macOS signing mode
-        type: choice
-        required: true
-        default: developer-id
-        options:
-          - developer-id
-          - ad-hoc
 
 permissions:
   contents: read
@@ -41,7 +33,6 @@ jobs:
       - id: signing-preflight
         if: inputs.native_checks_only != true
         env:
-          SIGNING_MODE: ${{ inputs.signing_mode }}
           DEFER_NOTARIZATION: ${{ inputs.defer_notarization }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -53,26 +44,20 @@ jobs:
           python3 - <<'PY'
           import os
           import sys
-          mode = os.environ["SIGNING_MODE"]
-          if mode not in ("developer-id", "ad-hoc"):
-              sys.exit("Unsupported signing mode")
           deferred = os.environ.get("DEFER_NOTARIZATION") == "true"
-          if deferred and mode != "developer-id":
-              sys.exit("Deferred notarization requires Developer ID signing")
-          if mode == "developer-id":
-              required = ("APPLE_CERTIFICATE", "APPLE_CERTIFICATE_PASSWORD", "KEYCHAIN_PASSWORD", "APPLE_TEAM_ID")
-              if not deferred:
-                  required += ("APPLE_ID", "APPLE_PASSWORD")
-              missing = [name for name in required if not os.environ.get(name, "").strip()]
-              if missing:
-                  sys.exit("Missing signing secrets: " + ", ".join(missing))
+          required = ("APPLE_CERTIFICATE", "APPLE_CERTIFICATE_PASSWORD", "KEYCHAIN_PASSWORD", "APPLE_TEAM_ID")
+          if not deferred:
+              required += ("APPLE_ID", "APPLE_PASSWORD")
+          missing = [name for name in required if not os.environ.get(name, "").strip()]
+          if missing:
+              sys.exit("Missing signing secrets: " + ", ".join(missing))
           PY
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           lfs: true
           submodules: recursive
           persist-credentials: false
-      - if: inputs.native_checks_only != true && inputs.signing_mode == 'developer-id'
+      - if: inputs.native_checks_only != true
         uses: ./.github/actions/apple_cert # zizmor: ignore[self-repository] -- Validate the signing identity before dependency installation or compilation.
         id: apple-cert
         with:
@@ -80,7 +65,7 @@ jobs:
           apple-certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           keychain-password: ${{ secrets.KEYCHAIN_PASSWORD }}
       - id: notarization-preflight
-        if: inputs.native_checks_only != true && inputs.signing_mode == 'developer-id' && inputs.defer_notarization != true
+        if: inputs.native_checks_only != true && inputs.defer_notarization != true
         timeout-minutes: 2
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -105,6 +90,8 @@ jobs:
           # Manual builds use their branch cache and can restore default-branch entries.
           prefix-key: e3-pilot-native-v3-opt1
           workspaces: . -> apps/desktop/src-tauri/target
+          # Validation must not occupy the immutable full-build cache key.
+          save-if: ${{ inputs.native_checks_only != true }}
           # Preserve compiled dependencies even if Apple's later notarization fails.
           cache-on-failure: ${{ steps.native-format.outcome == 'success' }}
           cache-workspace-crates: true
@@ -112,6 +99,7 @@ jobs:
       - run: echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
       - run: cargo test --locked -p detect browser_inspection
       - run: cargo test --locked -p detect browser_activation
+      - run: cargo test --locked -p bundle proc
       - run: cargo test --locked -p detect chrome_tabs
       - run: cargo test --locked -p detect slack_
       - name: Validate native permission repairs before packaging
@@ -134,7 +122,7 @@ jobs:
       - run: cargo test --locked -p storage
       - if: inputs.native_checks_only != true
         run: cargo xtask prepare-binaries
-      - if: inputs.native_checks_only != true && inputs.signing_mode == 'developer-id'
+      - if: inputs.native_checks_only != true
         env:
           SIGNING_IDENTITY: ${{ steps.apple-cert.outputs.cert-id }}
         run: |
@@ -146,7 +134,6 @@ jobs:
         if: inputs.native_checks_only != true
         env:
           CARGO_PROFILE_RELEASE_OPT_LEVEL: "1"
-          SIGNING_MODE: ${{ inputs.signing_mode }}
           SIGNING_IDENTITY: ${{ steps.apple-cert.outputs.cert-id }}
         run: |
           set -euo pipefail
@@ -154,9 +141,8 @@ jobs:
           import json
           import os
           from pathlib import Path
-          signed = os.environ["SIGNING_MODE"] == "developer-id"
-          identity = os.environ["SIGNING_IDENTITY"] if signed else "-"
-          if signed and not identity.startswith("Developer ID Application:"):
+          identity = os.environ["SIGNING_IDENTITY"]
+          if not identity.startswith("Developer ID Application:"):
               raise SystemExit("A Developer ID Application signing identity is required")
           config = {"bundle": {"macOS": {"signingIdentity": identity, "hardenedRuntime": True}}}
           Path(os.environ["RUNNER_TEMP"], "e3-pilot-signing.json").write_text(json.dumps(config))
@@ -164,16 +150,13 @@ jobs:
           # Submit separately after preserving the signed app, so an Apple queue
           # delay cannot discard a completed native build.
           unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID APPLE_API_ISSUER APPLE_API_KEY APPLE_API_KEY_PATH
-          if [[ "$SIGNING_MODE" == "ad-hoc" ]]; then
-            unset APPLE_SIGNING_IDENTITY APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD
-          fi
           pnpm -F desktop tauri build \
             --target aarch64-apple-darwin \
             --config src-tauri/tauri.e3-pilot.json \
             --config "$RUNNER_TEMP/e3-pilot-signing.json" \
             --bundles app
       - id: checkpoint-signed-pilot
-        if: inputs.native_checks_only != true && inputs.signing_mode == 'developer-id'
+        if: inputs.native_checks_only != true
         env:
           BUILD_COMMIT: ${{ github.sha }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -185,7 +168,7 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent "$app" pilot-signed-checkpoint/E3-Meeting-Capture-Pilot-arm64.zip
           shasum -a 256 pilot-signed-checkpoint/E3-Meeting-Capture-Pilot-arm64.zip > pilot-signed-checkpoint/SHA256SUMS
           printf 'Commit: %s\nSigning: Developer ID signed; NOT NOTARIZED\nDiagnostic checkpoint only. Apple acceptance, stapling and Gatekeeper verification are pending. Do not treat this as the final installation artifact.\n' "$BUILD_COMMIT" > pilot-signed-checkpoint/BUILD.txt
-      - if: inputs.native_checks_only != true && inputs.signing_mode == 'developer-id'
+      - if: inputs.native_checks_only != true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: e3-pilot-signed-NOT-NOTARIZED-${{ github.sha }}
@@ -193,7 +176,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - id: notarize-pilot
-        if: inputs.native_checks_only != true && inputs.signing_mode == 'developer-id' && inputs.defer_notarization != true
+        if: inputs.native_checks_only != true && inputs.defer_notarization != true
         timeout-minutes: 45
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -219,7 +202,7 @@ jobs:
           }});
           JS
           xcrun stapler staple "apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/E3 Meeting Capture Pilot.app"
-      - if: always() && inputs.native_checks_only != true && inputs.signing_mode == 'developer-id' && inputs.defer_notarization != true && steps.checkpoint-signed-pilot.outcome == 'success'
+      - if: always() && inputs.native_checks_only != true && inputs.defer_notarization != true && steps.checkpoint-signed-pilot.outcome == 'success'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: e3-pilot-notary-submission-${{ github.sha }}
@@ -231,26 +214,18 @@ jobs:
         shell: bash
         env:
           BUILD_COMMIT: ${{ github.sha }}
-          SIGNING_MODE: ${{ inputs.signing_mode }}
         run: |
           set -euo pipefail
           app="apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/E3 Meeting Capture Pilot.app"
           test -d "$app"
           codesign --verify --deep --strict --verbose=2 "$app"
-          if [[ "$SIGNING_MODE" == "developer-id" ]]; then
-            xcrun stapler validate "$app"
-            spctl --assess --type execute --verbose=4 "$app"
-            signing_label="Developer ID Application; Apple-notarized and stapled"
-            install_signing="This build is Developer ID signed and notarized. macOS still requires first-run microphone, system-audio, and Accessibility permissions."
-          else
-            signing_label="ad-hoc; not Apple-notarized"
-            install_signing="This explicitly selected ad-hoc build is not notarized; macOS may require System Settings > Privacy & Security > Open Anyway."
-          fi
+          xcrun stapler validate "$app"
+          spctl --assess --type execute --verbose=4 "$app"
           mkdir -p pilot-artifact
           ditto -c -k --sequesterRsrc --keepParent "$app" pilot-artifact/E3-Meeting-Capture-Pilot-arm64.zip
           shasum -a 256 pilot-artifact/E3-Meeting-Capture-Pilot-arm64.zip > pilot-artifact/SHA256SUMS
-          printf 'Commit: %s\nTarget: aarch64-apple-darwin\nRequires: macOS 15 or later on Apple Silicon\nSigning mode: %s\nSigning: %s\nBundle identifier: ai.e3group.meeting-capture-pilot\nRust optimization: level 1 for pilot iteration\nAutomatic updates: disabled\n' "$BUILD_COMMIT" "$SIGNING_MODE" "$signing_label" > pilot-artifact/BUILD.txt
-          printf '%s\n' "Download this Actions artifact, unzip E3-Meeting-Capture-Pilot-arm64.zip, and move the app to Applications. $install_signing" 'Keep the same bundle identifier and Apple Developer team for later signed builds. Changing signing modes, developer teams, or the bundle identifier can require granting macOS permissions again. Quit the app before replacing it; automatic updates are disabled.' 'Enable meeting capture explicitly in app settings. See apps/desktop/E3_RELEASE.md at the recorded commit for setup and manual tests. Google account connectors require a separately configured API; this artifact does not provision a backend.' > pilot-artifact/INSTALL.txt
+          printf 'Commit: %s\nTarget: aarch64-apple-darwin\nRequires: macOS 15 or later on Apple Silicon\nSigning: Developer ID Application; Apple-notarized and stapled\nBundle identifier: ai.e3group.meeting-capture-pilot\nRust optimization: level 1 for pilot iteration\nAutomatic updates: disabled\n' "$BUILD_COMMIT" > pilot-artifact/BUILD.txt
+          printf '%s\n' "Download this Actions artifact, unzip E3-Meeting-Capture-Pilot-arm64.zip, and move the app to Applications. This build is Developer ID signed and notarized. Grant first-run microphone, system-audio, and Accessibility permissions." 'Keep the same bundle identifier and Apple Developer team for later signed builds. Changing developer teams or the bundle identifier can require granting macOS permissions again. Quit the app before replacing it; automatic updates are disabled.' 'Enable meeting capture explicitly in app settings. See apps/desktop/E3_RELEASE.md at the recorded commit for setup and manual tests. Google account connectors require a separately configured API; this artifact does not provision a backend.' > pilot-artifact/INSTALL.txt
       - if: inputs.native_checks_only != true && inputs.defer_notarization != true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
