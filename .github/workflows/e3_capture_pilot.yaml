@@ -130,6 +130,23 @@ jobs:
           path: plugins/detect/js/bindings.gen.ts
           retention-days: 7
           if-no-files-found: error
+      - name: Validate shared recording native queue and source pipeline
+        run: |
+          cargo test --locked -p listener-core --lib
+          cargo test --locked -p tauri-plugin-transcription --lib shared_recording::tests
+      - name: Generate transcription bindings with the owning exporter
+        run: |
+          pnpm exec cargo test --locked -p tauri-plugin-transcription --lib test::export_types -- --exact
+          pnpm exec prettier --check plugins/transcription/js/bindings.gen.ts
+      - name: Preserve generated preview bindings and permissions
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: shared-recording-native-bindings-${{ github.sha }}
+          path: |
+            plugins/transcription/js/bindings.gen.ts
+            plugins/transcription/permissions/
+          retention-days: 7
+          if-no-files-found: error
       - run: pnpm -F ui build
       - run: cargo test --locked -p storage
       - if: inputs.native_checks_only != true
