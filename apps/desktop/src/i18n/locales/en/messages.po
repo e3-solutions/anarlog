@@ -1111,6 +1111,10 @@ msgstr "Checking installed meeting assistants…"
 msgid "Checking migration..."
 msgstr "Checking migration..."
 
+#: src/settings/general/permissions.tsx
+msgid "Checking permission…"
+msgstr "Checking permission…"
+
 #: src/onboarding/account/after-login.tsx
 msgid "Checking trial eligibility..."
 msgstr "Checking trial eligibility..."
@@ -4935,6 +4939,10 @@ msgstr "Retry"
 #: src/settings/automations/google-drive-config.tsx
 msgid "Retry Google Drive export"
 msgstr "Retry Google Drive export"
+
+#: src/settings/general/permissions.tsx
+msgid "Retry permission check: {title}"
+msgstr "Retry permission check: {title}"
 
 #: src/settings/dictation.tsx
 msgid "Retry setup"
