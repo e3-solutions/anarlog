@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -156,7 +156,7 @@ test("pilot signing override preserves certificate names as JSON data", async ()
   }
 });
 
-test("ad-hoc pilot builds omit notarization credentials from the Tauri process", async () => {
+test("pilot builds defer notarization credentials until after the signed checkpoint", async () => {
   const source = await readFile(
     new URL("../.github/workflows/e3_capture_pilot.yaml", import.meta.url),
     "utf8",
@@ -172,29 +172,106 @@ for name in ("APPLE_ID", "APPLE_PASSWORD", "APPLE_TEAM_ID", "APPLE_API_ISSUER", 
 `,
       { mode: 0o755 },
     );
-    const result = spawnSync(
-      "bash",
-      ["-e", "-c", pilotStepRun(source, "build-pilot")],
-      {
-        cwd: directory,
-        env: {
-          PATH: directory + path.delimiter + process.env.PATH,
-          RUNNER_TEMP: directory,
-          SIGNING_MODE: "ad-hoc",
-          SIGNING_IDENTITY: "",
-          APPLE_ID: "",
-          APPLE_PASSWORD: "",
-          APPLE_TEAM_ID: "",
-          APPLE_API_ISSUER: "",
-          APPLE_API_KEY: "",
-          APPLE_API_KEY_PATH: "",
+    for (const mode of ["ad-hoc", "developer-id"]) {
+      const result = spawnSync(
+        "bash",
+        ["-e", "-c", pilotStepRun(source, "build-pilot")],
+        {
+          cwd: directory,
+          env: {
+            PATH: directory + path.delimiter + process.env.PATH,
+            RUNNER_TEMP: directory,
+            SIGNING_MODE: mode,
+            SIGNING_IDENTITY: "Developer ID Application: Fixture (TEAM)",
+            APPLE_ID: "",
+            APPLE_PASSWORD: "",
+            APPLE_TEAM_ID: "",
+            APPLE_API_ISSUER: "",
+            APPLE_API_KEY: "",
+            APPLE_API_KEY_PATH: "",
+          },
+          encoding: "utf8",
         },
-        encoding: "utf8",
-      },
-    );
-    assert.equal(result.status, 0, result.stderr);
+      );
+      assert.equal(result.status, 0, result.stderr);
+    }
   } finally {
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("pilot notarization saves the submission before waiting and staples only accepted results", async () => {
+  const source = await readFile(
+    new URL("../.github/workflows/e3_capture_pilot.yaml", import.meta.url),
+    "utf8",
+  );
+  const id = "a25e8bbd-7dba-4acf-82f4-a97333d46e3e";
+  for (const outcome of ["accepted", "pending", "rerun"]) {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "pilot-notary-"));
+    try {
+      await mkdir(path.join(directory, "scripts"));
+      await mkdir(path.join(directory, "pilot-signed-checkpoint"));
+      await writeFile(
+        path.join(
+          directory,
+          "pilot-signed-checkpoint/E3-Meeting-Capture-Pilot-arm64.zip",
+        ),
+        "signed fixture",
+      );
+      await writeFile(
+        path.join(directory, "scripts/notarize-dmg.mjs"),
+        `
+export async function notarizeDmg({log}) {
+  log("Apple notarization submission: ${id}");
+  if (process.env.TEST_OUTCOME !== "accepted") throw new Error("Still pending");
+}
+`,
+      );
+      await writeFile(
+        path.join(directory, "xcrun"),
+        "#!/bin/sh\ntouch stapled\n",
+        { mode: 0o755 },
+      );
+      const result = spawnSync(
+        "bash",
+        ["-e", "-c", pilotStepRun(source, "notarize-pilot")],
+        {
+          cwd: directory,
+          env: {
+            PATH: directory + path.delimiter + process.env.PATH,
+            GITHUB_RUN_ATTEMPT: outcome === "rerun" ? "2" : "1",
+            GITHUB_SHA: "fixture-commit",
+            TEST_OUTCOME: outcome,
+          },
+          encoding: "utf8",
+        },
+      );
+      assert.equal(result.status === 0, outcome === "accepted", result.stderr);
+      if (outcome === "rerun") {
+        await assert.rejects(
+          readFile(path.join(directory, "pilot-notary-submission.json")),
+          { code: "ENOENT" },
+        );
+      } else {
+        const receipt = JSON.parse(
+          await readFile(
+            path.join(directory, "pilot-notary-submission.json"),
+            "utf8",
+          ),
+        );
+        assert.equal(receipt.submissionId, id);
+        assert.equal(receipt.commit, "fixture-commit");
+        assert.match(receipt.zipSha256, /^[a-f0-9]{64}$/);
+      }
+      if (outcome === "accepted")
+        await readFile(path.join(directory, "stapled"));
+      else
+        await assert.rejects(readFile(path.join(directory, "stapled")), {
+          code: "ENOENT",
+        });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   }
 });
 
@@ -241,6 +318,7 @@ args = sys.argv[1:]
 with Path(os.environ["TEST_DIRECTORY"], "security-arguments").open("a") as log:
     log.write(json.dumps(args) + "\\n")
 if args[0] == "import":
+    assert "-f" in args and args[args.index("-f") + 1] == "pkcs12"
     certificate = Path(args[1])
     assert certificate.read_bytes() == b"private certificate fixture"
     assert stat.S_IMODE(certificate.stat().st_mode) == 0o600
