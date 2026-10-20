@@ -94,22 +94,24 @@ jobs:
       - uses: ./.github/actions/rust_install # zizmor: ignore[self-repository] -- Use the checked-out candidate's toolchain setup.
         with:
           platform: macos
+      - id: native-format
+        name: Validate native formatting before caching
+        run: rustfmt --check --edition 2024 plugins/permissions/src/ext.rs crates/detect/src/meeting_ax.rs
       - name: Cache native desktop build dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           # Separate full workspace caches from the old registry-only entry.
           # Match the pilot optimization below; Rust-cache hashes Cargo.lock/toolchain.
           # Manual builds use their branch cache and can restore default-branch entries.
-          prefix-key: e3-pilot-native-v2-opt1
+          prefix-key: e3-pilot-native-v3-opt1
           workspaces: . -> apps/desktop/src-tauri/target
           # Preserve compiled dependencies even if Apple's later notarization fails.
-          cache-on-failure: true
+          cache-on-failure: ${{ steps.native-format.outcome == 'success' }}
           cache-workspace-crates: true
       - uses: ./.github/actions/pnpm_install # zizmor: ignore[self-repository] -- Use the checked-out candidate's workspace setup.
       - run: echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
       - name: Validate native permission repairs before packaging
         run: |
-          rustfmt --check --edition 2024 plugins/permissions/src/ext.rs crates/detect/src/meeting_ax.rs
           cargo test --locked -p tauri-plugin-permissions --features private-tcc --lib tests::
       - name: Generate detect bindings with the owning exporter
         run: |
