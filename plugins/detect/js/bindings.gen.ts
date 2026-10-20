@@ -232,6 +232,11 @@ export type MeetingAccessibilityInspection = {
   accessibilityTrusted: boolean;
   windowTitle: string | null;
   callIdentity?: string | null;
+  /**
+   * Complete current Chrome Meet-tab inventory. None means unavailable,
+   * never an empty inventory or evidence of departure.
+   */
+  openCallIdentities?: string[] | null;
   remoteScreenShare: boolean;
   warnings: string[];
 };
