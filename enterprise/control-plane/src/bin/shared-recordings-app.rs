@@ -75,7 +75,9 @@ async fn main() -> anyhow::Result<()> {
     println!("shared-recordings-app http://{}", listener.local_addr()?);
     axum::serve(
         listener,
-        recording_app::router(state).merge(provider_routes),
+        recording_app::router(state)
+            .merge(provider_routes)
+            .layer(recording_app::local_preview_cors()),
     )
     .with_graceful_shutdown(async {
         let _ = tokio::signal::ctrl_c().await;

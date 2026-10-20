@@ -44,6 +44,48 @@ fn request(method: &str, url: &str, token: &str, body: Value) -> Request<Body> {
 }
 
 #[tokio::test]
+async fn local_oauth_api_preflight_allows_only_the_isolated_preview_web_origins() {
+    let app = axum::Router::new()
+        .route("/nango/session", axum::routing::post(|| async {}))
+        .layer(recording_app::local_preview_cors());
+    for origin in [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://unrelated.example",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri("/nango/session")
+                    .header(header::ORIGIN, origin)
+                    .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                    .header(
+                        header::ACCESS_CONTROL_REQUEST_HEADERS,
+                        "authorization,content-type",
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let allowed = response.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN);
+        if origin.ends_with(":3000") {
+            assert_eq!(allowed.unwrap(), origin);
+        } else {
+            assert!(allowed.is_none());
+        }
+        assert!(
+            !response
+                .headers()
+                .contains_key(header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
+        );
+    }
+}
+
+#[tokio::test]
 async fn signed_members_share_one_library_without_spoofing_uploader_or_retaining_revoked_access() {
     let upstream = MockServer::start().await;
     Mock::given(method("GET")).and(path("/auth/v1/.well-known/jwks.json")).respond_with(ResponseTemplate::new(200).set_body_json(json!({"keys":[{"kty":"EC","use":"sig","crv":"P-256","kid":"recording-test","x":"w7JAoU_gJbZJvV-zCOvU9yFJq0FNC_edCMRM78P8eQQ","y":"wQg1EytcsEmGrM70Gb53oluoDbVhCZ3Uq3hHMslHVb4","alg":"ES256"}]}))).mount(&upstream).await;

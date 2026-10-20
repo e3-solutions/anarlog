@@ -30,7 +30,7 @@ sqlx = { workspace = true, features = ["chrono", "json", "macros", "migrate", "p
 tempfile = "3"
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
-tower-http = { workspace = true, features = ["limit", "request-id", "trace"] }
+tower-http = { workspace = true, features = ["cors", "limit", "request-id", "trace"] }
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
 url.workspace = true

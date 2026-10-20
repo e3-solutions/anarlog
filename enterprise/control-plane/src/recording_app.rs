@@ -3,13 +3,14 @@ use std::sync::Arc;
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Path, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::Serialize;
+use tower_http::cors::CorsLayer;
 
 use crate::{
     recording_identity::{AdmissionRequest, RecordingIdentityResolver, ResolvedOccurrence},
@@ -29,6 +30,16 @@ pub struct RecordingAppState {
     pub members: RecordingMemberAuth,
     pub identities: Option<RecordingIdentityResolver>,
     pub processor: Option<Arc<RecordingProcessor>>,
+}
+
+pub fn local_preview_cors() -> CorsLayer {
+    CorsLayer::new()
+        .allow_origin([
+            HeaderValue::from_static("http://localhost:3000"),
+            HeaderValue::from_static("http://127.0.0.1:3000"),
+        ])
+        .allow_methods([Method::GET, Method::POST, Method::DELETE])
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
 }
 
 pub fn provider_router(config: anlg_api_nango::NangoConfig) -> Router {
