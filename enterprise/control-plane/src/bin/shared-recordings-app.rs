@@ -25,7 +25,19 @@ async fn main() -> anyhow::Result<()> {
     let supabase_url = env::var("SUPABASE_URL")?;
     let anon_key = env::var("SUPABASE_ANON_KEY")?;
     let members = RecordingMemberAuth::new(&supabase_url, &anon_key)?;
+    let mut provider_routes = axum::Router::new();
     let identities = if let Ok(api_key) = env::var("NANGO_API_KEY") {
+        let config = anlg_api_nango::NangoConfig {
+            nango: serde_json::from_value(serde_json::json!({
+                "nango_api_key": api_key,
+                "nango_api_base": env::var("NANGO_API_BASE").ok(),
+                "nango_webhook_signing_key": env::var("NANGO_WEBHOOK_SIGNING_KEY")?,
+            }))?,
+            supabase_url: supabase_url.clone(),
+            supabase_anon_key: anon_key.clone(),
+            supabase_service_role_key: Some(env::var("SUPABASE_SERVICE_ROLE_KEY")?),
+        };
+        provider_routes = recording_app::provider_router(config.clone());
         let mut builder = anlg_nango::NangoClient::builder().api_key(api_key);
         if let Ok(base) = env::var("NANGO_API_BASE") {
             builder = builder.api_base(base);
@@ -61,10 +73,13 @@ async fn main() -> anyhow::Result<()> {
     };
     let listener = tokio::net::TcpListener::bind(bind).await?;
     println!("shared-recordings-app http://{}", listener.local_addr()?);
-    axum::serve(listener, recording_app::router(state))
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await?;
+    axum::serve(
+        listener,
+        recording_app::router(state).merge(provider_routes),
+    )
+    .with_graceful_shutdown(async {
+        let _ = tokio::signal::ctrl_c().await;
+    })
+    .await?;
     Ok(())
 }

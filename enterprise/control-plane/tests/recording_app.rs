@@ -94,7 +94,36 @@ async fn signed_members_share_one_library_without_spoofing_uploader_or_retaining
         members: RecordingMemberAuth::new(&upstream.uri(), "fixture-anon").unwrap(),
         identities: None,
         processor: None,
-    });
+    })
+    .merge(recording_app::provider_router(
+        anlg_api_nango::NangoConfig {
+            nango: serde_json::from_value(json!({
+                "nango_api_base": upstream.uri(),
+                "nango_api_key": "fixture-api-key",
+                "nango_webhook_signing_key": "fixture-signing-key",
+            }))
+            .unwrap(),
+            supabase_url: upstream.uri(),
+            supabase_anon_key: "fixture-anon".into(),
+            supabase_service_role_key: Some("fixture-service".into()),
+        },
+    ));
+    assert_eq!(
+        app.clone()
+            .oneshot(request("POST", "/nango/session", "invalid", json!({})))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED,
+    );
+    assert_eq!(
+        app.clone()
+            .oneshot(request("GET", "/nango/connections", &a, Value::Null))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK,
+    );
     assert_eq!(
         app.clone()
             .oneshot(request(

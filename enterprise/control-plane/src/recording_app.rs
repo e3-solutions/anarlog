@@ -31,6 +31,20 @@ pub struct RecordingAppState {
     pub processor: Option<Arc<RecordingProcessor>>,
 }
 
+pub fn provider_router(config: anlg_api_nango::NangoConfig) -> Router {
+    let auth = anlg_api_auth::AuthState::new(&config.supabase_url);
+    let authenticated = anlg_api_nango::router(config.clone()).route_layer(
+        middleware::from_fn_with_state(auth, anlg_api_auth::require_auth),
+    );
+    Router::new().nest(
+        "/nango",
+        authenticated.merge(anlg_api_nango::webhook_router(
+            config,
+            anlg_api_nango::ForwardHandlerRegistry::new(),
+        )),
+    )
+}
+
 pub fn router(state: RecordingAppState) -> Router {
     Router::new()
         .route("/v1/shared-recordings/me", get(me))
