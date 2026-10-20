@@ -110,6 +110,10 @@ jobs:
           cache-workspace-crates: true
       - uses: ./.github/actions/pnpm_install # zizmor: ignore[self-repository] -- Use the checked-out candidate's workspace setup.
       - run: echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
+      - run: cargo test --locked -p detect browser_inspection
+      - run: cargo test --locked -p detect browser_activation
+      - run: cargo test --locked -p detect chrome_tabs
+      - run: cargo test --locked -p detect slack_
       - name: Validate native permission repairs before packaging
         run: |
           cargo test --locked -p tauri-plugin-permissions --features private-tcc --lib tests::
@@ -128,10 +132,6 @@ jobs:
           if-no-files-found: error
       - run: pnpm -F ui build
       - run: cargo test --locked -p storage
-      - run: cargo test --locked -p detect browser_activation
-      - run: cargo test --locked -p detect chrome_tabs
-      - run: cargo test --locked -p detect browser_inspection
-      - run: cargo test --locked -p detect slack_
       - if: inputs.native_checks_only != true
         run: cargo xtask prepare-binaries
       - if: inputs.native_checks_only != true && inputs.signing_mode == 'developer-id'
