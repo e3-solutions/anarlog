@@ -4,6 +4,146 @@
 /** user-defined commands **/
 
 export const commands = {
+  async sharedRecordingConfiguration(): Promise<
+    Result<Configuration | null, string>
+  > {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE(
+          "plugin:transcription|shared_recording_configuration",
+        ),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async sharedRecordingConfigure(
+    config: Configuration,
+  ): Promise<Result<Configuration, string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE(
+          "plugin:transcription|shared_recording_configure",
+          { config },
+        ),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async sharedRecordingObserve(
+    sessionId: string,
+    platform: string,
+    callIdentity: string | null,
+    observedAtMs: number,
+    accessToken: string,
+    userId: string,
+  ): Promise<Result<null, string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE(
+          "plugin:transcription|shared_recording_observe",
+          {
+            sessionId,
+            platform,
+            callIdentity,
+            observedAtMs,
+            accessToken,
+            userId,
+          },
+        ),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async sharedRecordingEnqueue(
+    sessionId: string,
+    transcriptId: string,
+    audioPath: string,
+    startedAtMs: number,
+    stoppedAtMs: number,
+  ): Promise<Result<Job | null, string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE(
+          "plugin:transcription|shared_recording_enqueue",
+          { sessionId, transcriptId, audioPath, startedAtMs, stoppedAtMs },
+        ),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async sharedRecordingQueue(userId: string): Promise<Result<Job[], string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE(
+          "plugin:transcription|shared_recording_queue",
+          { userId },
+        ),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async sharedRecordingFlush(
+    accessToken: string,
+    userId: string,
+  ): Promise<Result<null, string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE(
+          "plugin:transcription|shared_recording_flush",
+          { accessToken, userId },
+        ),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async sharedRecordingDownload(
+    apiBaseUrl: string,
+    organizationId: string,
+    occurrenceId: string,
+    revision: string,
+    audioSha256: string,
+    accessToken: string,
+    userId: string,
+  ): Promise<Result<string, string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE(
+          "plugin:transcription|shared_recording_download",
+          {
+            apiBaseUrl,
+            organizationId,
+            occurrenceId,
+            revision,
+            audioSha256,
+            accessToken,
+            userId,
+          },
+        ),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
   async listMicrophoneDevices(): Promise<Result<string[], string>> {
     try {
       return {
@@ -1054,6 +1194,18 @@ export type CompletedTranscription = {
   session_id: string;
   response: BatchResponse;
 };
+export type Configuration = {
+  enabled: boolean;
+  apiBaseUrl: string;
+  organizationId: string;
+  userId: string;
+  connections: Connection[];
+};
+export type Connection = {
+  integrationId: string;
+  connectionId: string;
+  status: string;
+};
 export type DegradedError =
   | { type: "authentication_failed"; provider: string }
   | { type: "upstream_unavailable"; message: string }
@@ -1069,6 +1221,7 @@ export type FinalizedWord = {
   state: WordState;
   speaker_index?: number | null;
 };
+export type Gap = { start: number; end: number };
 export type IdentityAssignment = { human_id: string; scope: IdentityScope };
 export type IdentityScope =
   | { kind: "channel"; channel: ChannelProfile }
@@ -1083,6 +1236,23 @@ export type InheritedCapture = {
   retainAudio?: boolean | null;
   provider?: string | null;
   model?: string | null;
+};
+export type Job = {
+  id: string;
+  sessionId: string;
+  state: string;
+  error: string | null;
+  userId: string;
+  organizationId: string;
+  deviceId?: string;
+  apiBaseUrl: string;
+  transcriptId: string;
+  startedAtMs: number;
+  stoppedAtMs: number;
+  binding: JsonValue | null;
+  segments: Segment[];
+  gaps?: Gap[];
+  rawFrames?: number | null;
 };
 export type JsonValue =
   | null
@@ -1207,6 +1377,7 @@ export type SaveBatchTranscriptRequest = {
   promotion: BatchTranscriptPromotion;
   mark_audio_complete: boolean;
 };
+export type Segment = { sha256: string; frames: number };
 export type SegmentKey = {
   channel: ChannelProfile;
   speaker_index?: number | null;
