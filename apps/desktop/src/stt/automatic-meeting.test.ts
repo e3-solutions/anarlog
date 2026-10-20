@@ -212,7 +212,10 @@ describe("automatic meeting evidence", () => {
       ),
     ).toBeNull();
     for (const value of [undefined, null, ["invalid"], [42]]) {
-      const unavailable = { ...hidden, ...{ openCallIdentities: value } };
+      const unavailable = {
+        ...hidden,
+        ...{ openCallIdentities: value },
+      } as unknown as MeetingAccessibilityInspection;
       expect(automaticMeetingObservation(meeting, [unavailable])).toBe(
         "unknown",
       );
