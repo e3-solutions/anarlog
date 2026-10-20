@@ -12,6 +12,7 @@ export const env = createEnv({
       .default("https://static.anarlog.so"),
     VITE_AI_API_URL: z.string().url().optional(),
     VITE_ENTERPRISE_API_URL: z.string().url().optional(),
+    VITE_SHARED_RECORDINGS_PREVIEW_URL: z.string().url().optional(),
     VITE_SUPABASE_URL: z.string().min(1).optional(),
     VITE_SUPABASE_ANON_KEY: z.string().min(1).optional(),
     VITE_PRO_PRODUCT_ID: z.string().min(1).optional(),

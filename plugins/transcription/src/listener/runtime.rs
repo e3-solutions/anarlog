@@ -42,6 +42,9 @@ impl anlg_storage::StorageRuntime for TauriRuntime {
 }
 
 impl ListenerRuntime for TauriRuntime {
+    fn observe_raw_audio_frames(&self, session_id: &str, frames: u64, captured: bool) {
+        crate::shared_recording::observe_raw(&self.app, session_id, frames, captured);
+    }
     fn emit_lifecycle(&self, event: anlg_transcription_core::listener::SessionLifecycleEvent) {
         use tauri_plugin_tray::TrayPluginExt;
         match &event {
@@ -126,6 +129,13 @@ impl ListenerRuntime for TauriRuntime {
                     })
                     .unwrap_or((None, None));
                 let stopped_at_ms = crate::capture_gaps::unix_now_ms();
+                crate::shared_recording::snapshot_stopped(
+                    &self.app,
+                    &session_id,
+                    audio_path.as_deref(),
+                    started_at_ms,
+                    stopped_at_ms,
+                );
                 self.capture_gap_registry
                     .stopped(&session_id, stopped_at_ms);
                 let duration_seconds = started_at_ms
@@ -208,9 +218,11 @@ impl ListenerRuntime for TauriRuntime {
                 session_id,
                 error,
                 ..
-            } if error.starts_with("audio_storage_") => self
-                .capture_gap_registry
-                .storage_failed(session_id, crate::capture_gaps::unix_now_ms()),
+            } if error.starts_with("audio_storage_") => {
+                self.capture_gap_registry
+                    .storage_failed(session_id, crate::capture_gaps::unix_now_ms());
+                crate::shared_recording::storage_failed(&self.app, session_id);
+            }
             _ => {}
         }
         update_audio_cleanup_status(&self.audio_cleanup_status, &event);

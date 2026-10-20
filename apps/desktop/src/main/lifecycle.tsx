@@ -20,6 +20,7 @@ import { OwnedSharedNotePublisher } from "~/session-sharing/sync";
 import { SharedAttachmentCacheLifecycle } from "~/shared-notes/attachment-cache-lifecycle";
 import { SharedNotePreviewAuthLifecycle } from "~/shared-notes/preview";
 import { DurableSharedNoteCacheSync } from "~/shared-notes/sync";
+import { SharedRecordingLifecycle } from "~/shared-recordings/lifecycle";
 import { useConfigValue } from "~/shared/config";
 import { useDesktopTabLifecycle } from "~/shared/desktop-tab-lifecycle";
 import { folderIdForNewNote, useSidebarNotes } from "~/sidebar/note-filter";
@@ -54,6 +55,7 @@ export function ClassicMainServices() {
   return (
     <>
       <AttachmentTransferLifecycle />
+      <SharedRecordingLifecycle />
       <CloudsyncKeychainRepairToast />
       <CloudApiBackfillLifecycle />
       <DurableSharedNoteCacheSync />

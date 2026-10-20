@@ -221,10 +221,34 @@ async fn get<T: DeserializeOwned>(proxy: &OwnedNangoProxy, path: &str) -> Result
     response.json().await.map_err(|_| provider_error())
 }
 
+pub struct VerifiedMeetOccurrence {
+    pub conference_record: String,
+    pub start_time: String,
+}
+
+pub async fn resolve_verified_active_conference(
+    proxy: OwnedNangoProxy,
+    meeting_code: &str,
+) -> Result<VerifiedMeetOccurrence, PresenceError> {
+    validate_meeting_code(meeting_code)?;
+    let (presence, occurrence) = check_presence_details(proxy, meeting_code).await?;
+    if !presence.present {
+        return Err(provider_error());
+    }
+    occurrence.ok_or_else(provider_error)
+}
+
 async fn check_presence(
     proxy: OwnedNangoProxy,
     meeting_code: &str,
 ) -> Result<MeetPresenceResponse, PresenceError> {
+    Ok(check_presence_details(proxy, meeting_code).await?.0)
+}
+
+async fn check_presence_details(
+    proxy: OwnedNangoProxy,
+    meeting_code: &str,
+) -> Result<(MeetPresenceResponse, Option<VerifiedMeetOccurrence>), PresenceError> {
     let person: Person = get(
         &proxy
             .clone()
@@ -258,7 +282,7 @@ async fn check_presence(
         meeting_uri: space.meeting_uri,
     };
     let Some(active) = space.active_conference else {
-        return Ok(result);
+        return Ok((result, None));
     };
     if !valid_resource(&active.conference_record, "conferenceRecords/") {
         return Err(provider_error());
@@ -271,7 +295,7 @@ async fn check_presence(
     {
         return Err(provider_error());
     }
-    result.conference_start_time = Some(record.start_time);
+    result.conference_start_time = Some(record.start_time.clone());
 
     let self_name = format!("users/{self_id}");
     let mut seen_tokens = HashSet::new();
@@ -293,7 +317,13 @@ async fn check_presence(
                 .is_some_and(|user| user.user == self_name)
         }) {
             result.present = true;
-            return Ok(result);
+            return Ok((
+                result,
+                Some(VerifiedMeetOccurrence {
+                    conference_record: record.name,
+                    start_time: record.start_time,
+                }),
+            ));
         }
         match page.next_page_token {
             Some(token) if !token.is_empty() => {
@@ -302,7 +332,7 @@ async fn check_presence(
                 }
                 page_token = Some(token);
             }
-            _ => return Ok(result),
+            _ => return Ok((result, None)),
         }
     }
     Err(provider_error())

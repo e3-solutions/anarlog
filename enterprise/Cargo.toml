@@ -14,9 +14,13 @@ license-file = "LICENSE"
 
 [workspace.dependencies]
 anlg-agent-access = { path = "../crates/agent-access", package = "agent-access" }
+anlg-api-auth = { path = "../crates/api-auth", package = "api-auth" }
+anlg-api-nango = { path = "../crates/api-nango", package = "api-nango" }
 anlg-db-app = { path = "../crates/db-app", package = "db-app" }
 anlg-db-core = { path = "../crates/db-core", package = "db-core" }
+anlg-http = { path = "../crates/http", package = "anlg-http-utils" }
 anlg-meeting-capture = { path = "../crates/meeting-capture", package = "meeting-capture" }
+anlg-nango = { path = "../crates/nango", package = "nango" }
 anlg-session-ingest = { path = "../crates/session-ingest", package = "session-ingest", default-features = false }
 anlg-shared-recording = { path = "../crates/shared-recording", package = "shared-recording" }
 owhisper-client = { path = "../crates/owhisper-client", package = "owhisper-client" }

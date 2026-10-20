@@ -58,6 +58,8 @@ pub(super) enum DispatchFrameResult {
 }
 
 pub(in crate::actors) struct Pipeline {
+    runtime: Arc<dyn ListenerRuntime>,
+    session_id: String,
     vad_mask: VadMask,
     amplitude: AmplitudeEmitter,
     dropouts: DropoutMonitor,
@@ -70,6 +72,8 @@ pub(in crate::actors) struct Pipeline {
 impl Pipeline {
     pub(super) fn new(runtime: Arc<dyn ListenerRuntime>, session_id: String) -> Self {
         Self {
+            runtime: runtime.clone(),
+            session_id: session_id.clone(),
             amplitude: AmplitudeEmitter::new(runtime.clone(), session_id.clone()),
             dropouts: DropoutMonitor::new(runtime, session_id),
             audio_buffer: AudioBuffer::new(MAX_BUFFER_CHUNKS),
@@ -140,6 +144,15 @@ impl Pipeline {
         listener_routing: &ListenerRouting,
         recorder: Option<&ActorRef<RecMsg>>,
     ) -> Result<DispatchFrameResult, String> {
+        self.runtime.observe_raw_audio_frames(
+            &self.session_id,
+            frame
+                .capture
+                .raw_mic
+                .len()
+                .max(frame.capture.raw_speaker.len()) as u64,
+            frame.captured,
+        );
         if mode != ChannelMode::SpeakerOnly {
             self.dropouts.observe(&frame.capture.raw_mic);
         }

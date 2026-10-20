@@ -14716,6 +14716,7 @@ dependencies = [
 name = "shared-recording"
 version = "0.1.0"
 dependencies = [
+ "audio-sync",
  "hound",
  "serde",
  "serde_json",
@@ -17697,13 +17698,16 @@ dependencies = [
  "db-core",
  "embedding",
  "futures-util",
+ "hound",
  "language",
  "owhisper-client",
  "owhisper-interface",
  "ractor",
+ "reqwest 0.13.2",
  "rodio",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "specta",
  "specta-typescript",
  "sqlx",

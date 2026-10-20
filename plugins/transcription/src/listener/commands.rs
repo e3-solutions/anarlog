@@ -86,6 +86,17 @@ pub async fn delete_transcribed_capture_audio<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     session_id: String,
 ) -> Result<bool, String> {
+    use tauri::Manager;
+    let _audio_guard = app.fs_sync().lock_session_audio(&session_id).await;
+    if app
+        .state::<crate::shared_recording::QueueState>()
+        .pins
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(&session_id)
+    {
+        return Ok(false);
+    }
     tokio::task::spawn_blocking(move || {
         let dir = session_audio_dir(&app, &session_id)?;
         recorder::delete_transcribed_capture_audio(&dir).map_err(|error| error.to_string())
@@ -149,13 +160,24 @@ pub async fn retry_audio_capture<R: tauri::Runtime>(
 #[specta::specta]
 pub async fn start_capture<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
-    params: CaptureParams,
+    mut params: CaptureParams,
 ) -> Result<(), String> {
     use crate::live_journal::{LiveJournalRegistry, register_app_journal};
     use tauri::Manager;
 
     let session_id = params.session_id.clone();
     let _audio_guard = app.fs_sync().lock_session_audio(&session_id).await;
+    let owner_user_id = match params.live_transcript.as_ref() {
+        Some(target) => Some(target.owner_user_id.clone()),
+        None => crate::capture_markers::get_marker(&app, &session_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|marker| marker.owner_user_id),
+    };
+    if crate::shared_recording::start_raw(&app, &session_id, owner_user_id.as_deref()) {
+        params.retain_audio = Some(true);
+    }
     let live_transcript = params.live_transcript.clone();
     let registry = app.state::<LiveJournalRegistry>();
     let registration = live_transcript

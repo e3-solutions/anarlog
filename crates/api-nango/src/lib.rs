@@ -18,6 +18,6 @@ pub use integrations::{
 };
 pub use openapi::openapi;
 pub use routes::{
-    ForwardHandler, ForwardHandlerRegistry, forward_handler, management_router, router,
-    session_router, webhook_router,
+    ForwardHandler, ForwardHandlerRegistry, VerifiedMeetOccurrence, forward_handler,
+    management_router, resolve_verified_active_conference, router, session_router, webhook_router,
 };

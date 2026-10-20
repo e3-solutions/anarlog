@@ -4,6 +4,13 @@ Default permissions for the plugin
 
 #### This default permission set includes the following:
 
+- `allow-shared-recording-configuration`
+- `allow-shared-recording-configure`
+- `allow-shared-recording-observe`
+- `allow-shared-recording-enqueue`
+- `allow-shared-recording-queue`
+- `allow-shared-recording-flush`
+- `allow-shared-recording-download`
 - `allow-list-microphone-devices`
 - `allow-get-current-microphone-device`
 - `allow-start-capture`
@@ -1154,6 +1161,188 @@ Enables the set_mic_muted command without any pre-configured scope.
 <td>
 
 Denies the set_mic_muted command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:allow-shared-recording-configuration`
+
+</td>
+<td>
+
+Enables the shared_recording_configuration command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:deny-shared-recording-configuration`
+
+</td>
+<td>
+
+Denies the shared_recording_configuration command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:allow-shared-recording-configure`
+
+</td>
+<td>
+
+Enables the shared_recording_configure command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:deny-shared-recording-configure`
+
+</td>
+<td>
+
+Denies the shared_recording_configure command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:allow-shared-recording-download`
+
+</td>
+<td>
+
+Enables the shared_recording_download command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:deny-shared-recording-download`
+
+</td>
+<td>
+
+Denies the shared_recording_download command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:allow-shared-recording-enqueue`
+
+</td>
+<td>
+
+Enables the shared_recording_enqueue command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:deny-shared-recording-enqueue`
+
+</td>
+<td>
+
+Denies the shared_recording_enqueue command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:allow-shared-recording-flush`
+
+</td>
+<td>
+
+Enables the shared_recording_flush command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:deny-shared-recording-flush`
+
+</td>
+<td>
+
+Denies the shared_recording_flush command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:allow-shared-recording-observe`
+
+</td>
+<td>
+
+Enables the shared_recording_observe command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:deny-shared-recording-observe`
+
+</td>
+<td>
+
+Denies the shared_recording_observe command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:allow-shared-recording-queue`
+
+</td>
+<td>
+
+Enables the shared_recording_queue command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:deny-shared-recording-queue`
+
+</td>
+<td>
+
+Denies the shared_recording_queue command without any pre-configured scope.
 
 </td>
 </tr>

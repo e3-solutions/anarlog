@@ -14,12 +14,17 @@ export type DesktopScheme =
   | "anarlog-staging"
   | "anarlog-nightly"
   | "e3-meeting-capture-pilot"
+  | "e3-shared-recordings-preview"
+  | "e3-shared-recordings-preview-second"
   | "anarlog-dev";
 
 export const getScheme = async (): Promise<DesktopScheme> => {
   const id = await getIdentifier();
   const schemes: Record<string, DesktopScheme> = {
     "ai.e3group.meeting-capture-pilot": "e3-meeting-capture-pilot",
+    "ai.e3group.meeting-capture-shared-preview": "e3-shared-recordings-preview",
+    "ai.e3group.meeting-capture-shared-preview-second":
+      "e3-shared-recordings-preview-second",
     "com.hyprnote.stable": "anarlog",
     "com.hyprnote.Hyprnote": "anarlog",
     "com.hyprnote.staging": "anarlog-staging",

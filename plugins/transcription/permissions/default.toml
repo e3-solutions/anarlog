@@ -1,6 +1,13 @@
 [default]
 description = "Default permissions for the plugin"
 permissions = [
+    "allow-shared-recording-configuration",
+    "allow-shared-recording-configure",
+    "allow-shared-recording-observe",
+    "allow-shared-recording-enqueue",
+    "allow-shared-recording-queue",
+    "allow-shared-recording-flush",
+    "allow-shared-recording-download",
     "allow-list-microphone-devices",
     "allow-get-current-microphone-device",
     "allow-start-capture",

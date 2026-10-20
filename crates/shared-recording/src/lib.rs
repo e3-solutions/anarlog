@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+mod alignment;
+pub use alignment::align_clock_hints;
+
 use std::io::Cursor;
 
 use serde::{Deserialize, Serialize};

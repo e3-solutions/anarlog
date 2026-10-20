@@ -17,6 +17,7 @@ mod listener;
 mod listener2;
 mod live_journal;
 mod session_transcript;
+mod shared_recording;
 mod stopped_captures;
 mod voiceprint;
 
@@ -140,6 +141,13 @@ fn make_specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
     tauri_specta::Builder::<R>::new()
         .plugin_name(PLUGIN_NAME)
         .commands(tauri_specta::collect_commands![
+            shared_recording::shared_recording_configuration::<tauri::Wry>,
+            shared_recording::shared_recording_configure::<tauri::Wry>,
+            shared_recording::shared_recording_observe::<tauri::Wry>,
+            shared_recording::shared_recording_enqueue::<tauri::Wry>,
+            shared_recording::shared_recording_queue::<tauri::Wry>,
+            shared_recording::shared_recording_flush::<tauri::Wry>,
+            shared_recording::shared_recording_download::<tauri::Wry>,
             listener::commands::list_microphone_devices::<tauri::Wry>,
             listener::commands::get_current_microphone_device::<tauri::Wry>,
             listener::commands::get_mic_muted::<tauri::Wry>,
@@ -216,6 +224,8 @@ pub fn init() -> tauri::plugin::TauriPlugin<tauri::Wry> {
                 app: app_handle.clone(),
             }));
             app.manage(state);
+            app.manage(shared_recording::QueueState::default());
+            shared_recording::prune_playback(&app_handle);
             app.manage(live_journal::LiveJournalRegistry::default());
             let stopped_capture_registry = StoppedCaptureRegistry::default();
             app.manage(stopped_capture_registry.clone());

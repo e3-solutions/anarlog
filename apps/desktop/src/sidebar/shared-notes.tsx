@@ -11,6 +11,7 @@ import {
   useLocalSessionEventKeys,
   useSharedNoteEventKeys,
 } from "~/shared-notes/event-keys";
+import { SharedRecordingsLauncher } from "~/shared-recordings/launcher";
 import { useTabs } from "~/store/zustand/tabs";
 
 export function SharedNotesNav() {
@@ -33,6 +34,7 @@ export function SharedNotesNav() {
 
   return (
     <div className="h-full overflow-y-auto pt-2">
+      <SharedRecordingsLauncher />
       <div>
         {notes.length === 0 ? (
           <div className="text-muted-foreground px-2 py-6 text-center text-sm">

@@ -18,6 +18,7 @@ use crate::state::AppState;
 
 pub use connect::{CreateSessionRequest, SessionMode, SessionResponse};
 pub use disconnect::{DeleteConnectionRequest, DeleteConnectionResponse};
+pub use google_meet_presence::{VerifiedMeetOccurrence, resolve_verified_active_conference};
 pub use status::{ConnectionItem, ListConnectionsResponse};
 pub use webhook::{ForwardHandler, ForwardHandlerRegistry, WebhookResponse, forward_handler};
 pub use whoami::{WhoAmIItem, WhoAmIResponse};

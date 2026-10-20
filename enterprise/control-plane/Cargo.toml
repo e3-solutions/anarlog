@@ -6,7 +6,11 @@ license-file.workspace = true
 
 [dependencies]
 anarlog-enterprise-zoom-rtms-worker = { path = "../zoom-rtms-worker" }
+anlg-api-auth.workspace = true
+anlg-api-nango.workspace = true
+anlg-http.workspace = true
 anlg-meeting-capture.workspace = true
+anlg-nango.workspace = true
 anlg-session-ingest.workspace = true
 anlg-shared-recording.workspace = true
 owhisper-client.workspace = true
@@ -18,6 +22,7 @@ axum = { workspace = true, features = ["json", "query", "tokio"] }
 base64.workspace = true
 chrono = { workspace = true, features = ["serde"] }
 http.workspace = true
+reqwest.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2.workspace = true
@@ -37,6 +42,7 @@ anlg-db-app.workspace = true
 anlg-db-core.workspace = true
 anlg-session-ingest = { workspace = true, features = ["apply"] }
 hmac.workspace = true
-reqwest.workspace = true
+jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 sha2-legacy = { package = "sha2", version = "0.10" }
 tower = { workspace = true, features = ["util"] }
+wiremock = "0.6"
