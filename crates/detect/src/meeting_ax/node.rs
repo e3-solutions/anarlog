@@ -53,6 +53,7 @@ pub(super) fn node_needs_bounds(
         || matches!(
             role.as_deref(),
             Some("AXButton")
+                | Some("AXHeading")
                 | Some("AXMenuItem")
                 | Some("AXPopUpButton")
                 | Some("AXTextArea")

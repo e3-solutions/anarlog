@@ -227,27 +227,140 @@ fn unique_scope_for_search(count: usize, complete: bool) -> UniqueMatch {
 }
 
 #[cfg(any(test, target_os = "macos"))]
-fn browser_inspection_root_match(
-    roots: &[BrowserMeetingRoot],
+fn browser_call_identity(root: &BrowserMeetingRoot) -> Option<String> {
+    if root.platform != MeetingPlatform::GoogleMeet {
+        return None;
+    }
+    let mut url = url::Url::parse(&context::browser_meeting_identity(root)?).ok()?;
+    let code = url.path().trim_matches('/');
+    let code = platform::google_meet_code_from_title(&format!("Meet - {code}"))?;
+    url.set_path(&format!("/{code}"));
+    url.set_query(None);
+    url.set_fragment(None);
+    let window_hash = root
+        .nodes
+        .iter()
+        .find(|node| node.role.as_deref() == Some("AXWindow") && node.tree_path.is_empty())?
+        .element_hash?;
+    Some(format!("{url}:window:{window_hash:x}"))
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn is_meet_departure_node(node: &AxNode) -> bool {
+    node_has_positive_bounds(node)
+        && match node.role.as_deref() {
+            Some("AXHeading") => node_labels(node)
+                .any(|label| label.trim().eq_ignore_ascii_case("You left the meeting")),
+            Some("AXButton") if node.enabled != Some(false) => node_labels(node).any(|label| {
+                matches!(
+                    label.trim().to_ascii_lowercase().as_str(),
+                    "rejoin" | "join now" | "ask to join"
+                )
+            }),
+            _ => false,
+        }
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn browser_inspections_from_roots(
+    app: MeetingApp,
+    pid: i32,
+    accessibility_trusted: bool,
+    roots: Vec<BrowserMeetingRoot>,
     has_unscoped_meeting_window: bool,
-) -> UniqueMatch {
-    if has_unscoped_meeting_window {
-        return UniqueMatch::Ambiguous;
+    mut warnings: Vec<String>,
+) -> Vec<MeetingAccessibilityInspection> {
+    let active_roots = roots
+        .iter()
+        .filter(|root| {
+            root.nodes
+                .iter()
+                .any(|node| is_browser_active_call_control(&root.platform, node))
+        })
+        .count();
+    let uncertain = has_unscoped_meeting_window
+        || warnings.iter().any(|warning| {
+            let warning = warning.to_ascii_lowercase();
+            warning.contains("ambiguous") || warning.contains("incomplete")
+        });
+    if uncertain || active_roots > 1 {
+        warnings.push("browser meeting window scope was ambiguous or incomplete".to_string());
     }
-    // Detection needs the one joined call, not uniqueness among every open
-    // provider page. Keep chat/mutation scoping's stricter selection unchanged.
-    let mut active = roots.iter().enumerate().filter(|(_, root)| {
-        root.nodes
-            .iter()
-            .any(|node| is_browser_active_call_control(&root.platform, node))
-    });
-    match (active.next(), active.next()) {
-        (Some((index, _)), None) => UniqueMatch::One(index),
-        (Some(_), Some(_)) => UniqueMatch::Ambiguous,
-        // A single ended/prejoin page still supplies inactive evidence. Several
-        // inactive pages or an incomplete scope must never manufacture a leave.
-        (None, _) => unique_scope_for_count(roots.len()),
+    let trustworthy = accessibility_trusted && !uncertain && active_roots <= 1;
+    let mut rows: Vec<_> = roots
+        .into_iter()
+        .map(|root| {
+            let joined = root
+                .nodes
+                .iter()
+                .any(|node| is_browser_active_call_control(&root.platform, node));
+            let departed = root.platform == MeetingPlatform::GoogleMeet
+                && root.nodes.iter().any(is_meet_departure_node);
+            let call_identity = (joined || departed)
+                .then(|| browser_call_identity(&root))
+                .flatten();
+            let mut row_warnings = warnings.clone();
+            if root.platform == MeetingPlatform::GoogleMeet
+                && ((!joined && !departed) || call_identity.is_none())
+            {
+                row_warnings.push(
+                    "browser meeting identity or departure evidence was incomplete".to_string(),
+                );
+            }
+            let active_call = trustworthy
+                && joined
+                && (root.platform != MeetingPlatform::GoogleMeet || call_identity.is_some());
+            MeetingAccessibilityInspection {
+                active_call,
+                app: app.clone(),
+                pid,
+                platform: root.platform,
+                surface: MeetingSurface::Web,
+                accessibility_trusted,
+                window_title: root.window_title,
+                call_identity,
+                remote_screen_share: active_call && nodes_show_remote_screen_share(&root.nodes),
+                warnings: row_warnings,
+            }
+        })
+        .collect();
+    if rows.is_empty() {
+        warnings.push(
+            "browser inspection found no uniquely scoped meeting AXWindow and active AXWebArea"
+                .to_string(),
+        );
+        rows.push(MeetingAccessibilityInspection {
+            active_call: false,
+            app,
+            pid,
+            platform: MeetingPlatform::Unknown,
+            surface: MeetingSurface::Web,
+            accessibility_trusted,
+            window_title: None,
+            call_identity: None,
+            remote_screen_share: false,
+            warnings,
+        });
     }
+    rows
+}
+
+#[cfg(target_os = "macos")]
+fn inspect_browser_app(
+    app: MeetingApp,
+    pid: i32,
+    accessibility_trusted: bool,
+) -> Vec<MeetingAccessibilityInspection> {
+    let mut warnings = Vec::new();
+    if !accessibility_trusted {
+        warnings.push("macOS accessibility permission is not trusted".to_string());
+        return browser_inspections_from_roots(app, pid, false, Vec::new(), true, warnings);
+    }
+    let ax_app = ax::UiElement::with_app_pid(pid);
+    let _ = ax_app.set_messaging_timeout_secs(0.6);
+    request_browser_accessibility(&app, pid, &ax_app);
+    let (roots, unscoped) = collect_browser_meeting_roots(&ax_app, &mut warnings);
+    browser_inspections_from_roots(app, pid, true, roots, unscoped, warnings)
 }
 
 #[cfg(any(test, target_os = "macos", target_os = "linux"))]
@@ -356,7 +469,13 @@ pub fn inspect_meeting_accessibility() -> Vec<MeetingAccessibilityInspection> {
         .unwrap_or_else(|error| error.into_inner())
         .retain(|pid, _| apps.iter().any(|(_, running_pid)| running_pid == pid));
     apps.into_iter()
-        .map(|(app, pid)| inspect_app(app, pid, accessibility_trusted))
+        .flat_map(|(app, pid)| {
+            if is_browser_bundle(&app.id) {
+                inspect_browser_app(app, pid, accessibility_trusted)
+            } else {
+                vec![inspect_app(app, pid, accessibility_trusted)]
+            }
+        })
         .collect()
 }
 
@@ -2008,26 +2127,6 @@ fn inspect_app(
                     "Slack exposed {count} active Huddle windows; inspection is scoped to none"
                 )),
             }
-        } else if is_browser_bundle(&app.id) {
-            let (mut roots, has_unscoped_meeting_window) =
-                collect_browser_meeting_roots(&ax_app, &mut warnings);
-            let root_match = browser_inspection_root_match(&roots, has_unscoped_meeting_window);
-            match root_match {
-                UniqueMatch::Missing => warnings.push(
-                    "browser inspection found no uniquely scoped meeting AXWindow and active AXWebArea"
-                        .to_string(),
-                ),
-                UniqueMatch::One(index) => {
-                    let root = roots.remove(index);
-                    scoped_platform = Some(root.platform);
-                    window_title = root.window_title;
-                    nodes = root.nodes;
-                }
-                UniqueMatch::Ambiguous => warnings.push(
-                    "browser meeting window scope was ambiguous; inspection is scoped to none"
-                        .to_string(),
-                ),
-            }
         } else if bundle_platform != MeetingPlatform::Unknown {
             let mut roots = collect_native_meeting_roots(&ax_app, &bundle_platform, &mut warnings);
             match unique_scope_for_count(roots.len()) {
@@ -2073,6 +2172,7 @@ fn inspect_app(
         surface,
         accessibility_trusted,
         window_title,
+        call_identity: None,
         remote_screen_share: active_call && nodes_show_remote_screen_share(&nodes),
         warnings,
     }

@@ -41,12 +41,12 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
       lastAudibleAt: number;
       networkHoldUntil: number | null;
     } | null = null;
-    let suppressed: AutomaticMeeting | null = null;
+    const suppressed = new Map<string, AutomaticMeeting>();
     let retryAfter = 0;
 
     reset.current = () => {
       capture = null;
-      suppressed = null;
+      suppressed.clear();
       ownedSession.current = null;
     };
 
@@ -65,7 +65,7 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
         previous.live.sessionId === capture.sessionId
       ) {
         // A manual stop must stand down until this call has actually ended.
-        suppressed = capture.meeting;
+        suppressed.set(capture.meeting.key, capture.meeting);
         capture = null;
         ownedSession.current = null;
       }
@@ -95,15 +95,17 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
           },
         );
         const now = Date.now();
-        if (suppressed) {
+        for (const [key, meeting] of suppressed) {
           if (
-            automaticMeetingObservation(suppressed, inspection.data) ===
-            "inactive"
-          ) {
-            suppressed = null;
-          } else if (!selected || selected.key === suppressed.key) {
-            return;
-          }
+            automaticMeetingObservation(meeting, inspection.data) ===
+              "inactive" ||
+            (platform() === "macos" &&
+              !inspection.data.some(
+                (entry) =>
+                  entry.app.id === meeting.app.id && entry.pid === meeting.pid,
+              ))
+          )
+            suppressed.delete(key);
         }
 
         const live = store.getState().live;
@@ -207,8 +209,7 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
           retryAfter = now + 5_000;
           return;
         }
-        if (!selected || (suppressed && selected.key === suppressed.key))
-          return;
+        if (!selected || suppressed.has(selected.key)) return;
         if (live.status === "active") {
           if (live.sessionId && live.triggerAppIds?.includes(selected.app.id)) {
             capture = {
@@ -235,8 +236,15 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
             cancelled ||
             !policy.current.enabled ||
             refreshed.status !== "ok" ||
-            automaticMeetingObservation(selected, refreshed.data) !==
-              "active" ||
+            selectAutomaticMeeting(
+              refreshed.data.filter(
+                (entry) => !policy.current.ignored?.includes(entry.app.id),
+              ),
+              {
+                googleMeet: policy.current.enabled,
+                slack: policy.current.enabled,
+              },
+            )?.key !== selected.key ||
             !store.getState().canStartLiveSession(sessionId)
           )
             return;

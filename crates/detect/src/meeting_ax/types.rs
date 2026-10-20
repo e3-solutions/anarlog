@@ -65,6 +65,8 @@ pub struct MeetingAccessibilityInspection {
     pub surface: MeetingSurface,
     pub accessibility_trusted: bool,
     pub window_title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call_identity: Option<String>,
     pub remote_screen_share: bool,
     pub warnings: Vec<String>,
 }

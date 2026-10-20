@@ -18,6 +18,7 @@ const meet: MeetingAccessibilityInspection = {
   windowTitle: "Meet - abc-defg-hij",
   remoteScreenShare: false,
   warnings: [],
+  ...{ callIdentity: null },
 };
 
 describe("automatic meeting evidence", () => {
@@ -94,5 +95,59 @@ describe("automatic meeting evidence", () => {
     expect(
       automaticMeetingObservation(meeting, [{ ...meet, activeCall: false }]),
     ).toBe("inactive");
+  });
+
+  it("tracks distinct call contexts in one browser without confusing home or another departure", () => {
+    const joined = { ...meet, callIdentity: "window-a:meet-a" };
+    const home = { ...meet, platform: "unknown" as const, activeCall: false };
+    const meeting = selectAutomaticMeeting([home, joined], options)!;
+    expect(meeting.callIdentity).toBe(joined.callIdentity);
+    const other = { ...meet, callIdentity: "window-b:meet-b" };
+    expect(selectAutomaticMeeting([joined, other], options)).toBeNull();
+    expect(selectAutomaticMeeting([other], options)?.key).not.toBe(meeting.key);
+    for (const inspections of [
+      [home],
+      [{ ...other, activeCall: false }, home],
+      [other, home],
+    ]) {
+      expect(automaticMeetingObservation(meeting, inspections)).toBe("unknown");
+    }
+    expect(
+      automaticMeetingObservation(meeting, [
+        { ...joined, activeCall: false },
+        home,
+      ]),
+    ).toBe("inactive");
+    expect(automaticMeetingObservation(meeting, [joined, home])).toBe("active");
+  });
+
+  it("honors global ambiguity and unsupported competing calls instead of selecting a supported row", () => {
+    const meeting = selectAutomaticMeeting([meet], options)!;
+    const ambiguous = {
+      ...meet,
+      activeCall: false,
+      platform: "unknown" as const,
+      warnings: ["browser contexts ambiguous"],
+    };
+    expect(selectAutomaticMeeting([meet, ambiguous], options)).toBeNull();
+    expect(
+      automaticMeetingObservation(meeting, [
+        { ...meet, activeCall: false },
+        ambiguous,
+      ]),
+    ).toBe("unknown");
+    expect(
+      selectAutomaticMeeting([meet, { ...meet, platform: "zoom" }], options),
+    ).toBeNull();
+  });
+
+  it("ignores malformed identity fields while preserving legacy app and process identity", () => {
+    const malformed = {
+      ...meet,
+      callIdentity: 42,
+    } as unknown as MeetingAccessibilityInspection;
+    expect(selectAutomaticMeeting([malformed], options)?.key).toBe(
+      selectAutomaticMeeting([meet], options)?.key,
+    );
   });
 });

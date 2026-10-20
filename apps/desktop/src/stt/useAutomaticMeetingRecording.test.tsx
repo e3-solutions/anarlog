@@ -44,6 +44,7 @@ const meet: MeetingAccessibilityInspection = {
   windowTitle: "Meet - abc-defg-hij",
   remoteScreenShare: false,
   warnings: [],
+  ...{ callIdentity: null },
 };
 const slack: MeetingAccessibilityInspection = {
   ...meet,
@@ -112,6 +113,66 @@ afterEach(() => {
 });
 
 describe("automatic local meeting recording", () => {
+  it("preserves hidden silent context A, ignores ended B, then stops only A and records B", async () => {
+    const a = { ...meet, callIdentity: "window-a:meet-a" };
+    const b = { ...meet, callIdentity: "window-b:meet-b" };
+    const presence = {
+      ...meet,
+      activeCall: false,
+      platform: "unknown" as const,
+    };
+    snapshot([a, presence]);
+    const { active, stop } = setup();
+    await tick(0);
+    active();
+    snapshot([presence]);
+    await tick(9 * 60_000);
+    snapshot([presence, { ...b, activeCall: false }]);
+    await tick(90_000);
+    expect(stop).not.toHaveBeenCalled();
+    expect(mocks.open).toHaveBeenCalledOnce();
+    snapshot([presence, { ...a, activeCall: false }, b]);
+    await tick(14_000);
+    expect(stop).not.toHaveBeenCalled();
+    await tick(4_000);
+    expect(stop).toHaveBeenCalledOnce();
+    await tick();
+    expect(mocks.open).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps independent manual stops for contexts A and B until each positively departs", async () => {
+    const a = { ...meet, callIdentity: "window-a:meet-a" };
+    const b = { ...meet, callIdentity: "window-b:meet-b" };
+    snapshot([a]);
+    const { active, stop } = setup();
+    await tick(0);
+    active();
+    stop();
+    snapshot([b]);
+    await tick();
+    expect(mocks.open).toHaveBeenCalledTimes(2);
+    active();
+    stop();
+    snapshot([a]);
+    await tick(70_000);
+    expect(mocks.open).toHaveBeenCalledTimes(2);
+    snapshot([{ ...a, activeCall: false }]);
+    await tick();
+    snapshot([b]);
+    await tick();
+    expect(mocks.open).toHaveBeenCalledTimes(2);
+    snapshot([a]);
+    await tick();
+    expect(mocks.open).toHaveBeenCalledTimes(3);
+    active();
+    stop();
+    snapshot([{ ...b, activeCall: false }]);
+    await tick();
+    snapshot([b]);
+    await tick();
+    expect(mocks.open).toHaveBeenCalledTimes(4);
+  });
+
   it.each([meet, slack])(
     "starts joined $platform ad hoc or muted calls",
     async (inspection) => {
@@ -345,12 +406,17 @@ describe("automatic local meeting recording", () => {
     await tick(0);
     active();
     stop();
-    snapshot([]);
+    const unreadable = {
+      ...meet,
+      activeCall: false,
+      accessibilityTrusted: false,
+    };
+    snapshot([unreadable]);
     await tick(4_000);
     snapshot([meet]);
     await tick();
     expect(mocks.open).toHaveBeenCalledOnce();
-    snapshot([]);
+    snapshot([unreadable]);
     await tick(64_000);
     snapshot([meet]);
     await tick();
@@ -361,6 +427,30 @@ describe("automatic local meeting recording", () => {
     await tick();
     expect(mocks.open).toHaveBeenCalledTimes(2);
   });
+
+  it.each(["macos", "linux", "windows"])(
+    "clears manual-stop suppression on successful process absence only on macOS: %s",
+    async (os) => {
+      mocks.platform.mockReturnValue(os);
+      const { active, stop } = setup();
+      await tick(0);
+      active();
+      stop();
+      mocks.inspect.mockResolvedValue({
+        status: "error",
+        error: "inspection failed",
+      });
+      await tick(64_000);
+      snapshot([meet]);
+      await tick();
+      expect(mocks.open).toHaveBeenCalledOnce();
+      snapshot([]);
+      await tick();
+      snapshot([meet]);
+      await tick();
+      expect(mocks.open).toHaveBeenCalledTimes(os === "macos" ? 2 : 1);
+    },
+  );
 
   it("respects ignored platforms even when their joined-call evidence is valid", async () => {
     mocks.config.mockImplementation((key: string) => {

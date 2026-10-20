@@ -60,6 +60,18 @@ jobs:
           cache-workspace-crates: true
       - uses: ./.github/actions/pnpm_install # zizmor: ignore[self-repository] -- Use the checked-out candidate's workspace setup.
       - run: echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
+      - name: Generate detect bindings with the owning exporter
+        run: |
+          pnpm exec prettier --version
+          pnpm exec cargo test --locked -p tauri-plugin-detect --lib test::export_types -- --exact
+          pnpm exec prettier --check plugins/detect/js/bindings.gen.ts
+      - name: Upload generated detect bindings
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: e3-detect-bindings-${{ github.sha }}
+          path: plugins/detect/js/bindings.gen.ts
+          retention-days: 7
+          if-no-files-found: error
       - run: pnpm -F ui build
       - run: cargo test --locked -p storage
       - run: cargo test --locked -p detect browser_activation
