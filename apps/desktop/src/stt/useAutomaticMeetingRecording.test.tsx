@@ -113,6 +113,44 @@ afterEach(() => {
 });
 
 describe("automatic local meeting recording", () => {
+  it("requires fresh confirmed Meet departure after unreadable polls and resets the grace on reappearance", async () => {
+    const identity = "https://meet.google.com/abc-defg-hij:tab:42";
+    const joined = {
+      ...meet,
+      callIdentity: identity,
+      openCallIdentities: [identity],
+    };
+    snapshot([joined]);
+    const { active, stop } = setup();
+    await tick(0);
+    active();
+    const hidden = {
+      ...meet,
+      activeCall: false,
+      platform: "unknown" as const,
+      callIdentity: null,
+      windowTitle: null,
+      warnings: ["no uniquely scoped meeting AXWindow"],
+    };
+    snapshot([{ ...hidden, openCallIdentities: [] }]);
+    await tick(8_000);
+    snapshot([hidden]);
+    await tick(12_000);
+    expect(stop).not.toHaveBeenCalled();
+
+    snapshot([joined]);
+    await tick(2_000);
+    snapshot([{ ...hidden, openCallIdentities: [] }]);
+    await tick(14_000);
+    expect(stop).not.toHaveBeenCalled();
+    snapshot([hidden]);
+    await tick(4_000);
+    expect(stop).not.toHaveBeenCalled();
+    snapshot([{ ...hidden, openCallIdentities: [] }]);
+    await tick(2_000);
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
   it("uses complete tab inventory to distinguish a hidden Meet from a closed tab while Chrome remains running", async () => {
     const identity = "https://meet.google.com/abc-defg-hij:tab:42";
     snapshot([{ ...meet, callIdentity: identity }]);

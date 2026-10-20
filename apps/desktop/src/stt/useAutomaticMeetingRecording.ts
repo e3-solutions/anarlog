@@ -156,8 +156,13 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
               // A hidden browser tab can lose AX evidence and microphone
               // ownership while its muted call continues. Only confirmed
               // departure can end an established Meet capture.
-              capture.missingSince = null;
-              capture.missingObservation = null;
+              // An unreadable Meet poll cannot stop capture. Preserve a prior
+              // confirmed departure so another fresh inactive poll can finish
+              // its grace; positive attendance resets that evidence.
+              if (observation === "active" || !macMeet) {
+                capture.missingSince = null;
+                capture.missingObservation = null;
+              }
               if (observation === "active") capture.networkHoldUntil = null;
               return;
             }
