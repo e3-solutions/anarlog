@@ -49,11 +49,7 @@ pub(super) fn parse_inventory(output: &str) -> Option<Vec<String>> {
         }
         // Meet home/prejoin without a canonical code is not a captured call.
         if let Some(url) = canonical_meet_url(value) {
-            let identity = format!("{url}:tab:{id}");
-            if identities.contains(&identity) {
-                return None;
-            }
-            identities.push(identity);
+            identities.push(format!("{url}:tab:{id}"));
         }
     }
     (ended && lines.next().is_none()).then_some(identities)

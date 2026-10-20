@@ -19,7 +19,7 @@ const meet: MeetingAccessibilityInspection = {
   windowTitle: "Meet - abc-defg-hij",
   remoteScreenShare: false,
   warnings: [],
-  ...{ callIdentity: null },
+  callIdentity: null,
 };
 
 describe("automatic meeting evidence", () => {
@@ -142,7 +142,7 @@ describe("automatic meeting evidence", () => {
     ).toBeNull();
   });
 
-  it("treats legacy multiple-Huddle scope warnings as uncertainty for stopping and competing starts", () => {
+  it("treats multiple-Huddle scope warnings as uncertainty for stopping and competing starts", () => {
     const slack = {
       ...meet,
       platform: "slack" as const,
@@ -175,7 +175,7 @@ describe("automatic meeting evidence", () => {
     ).toBe("googleMeet");
   });
 
-  it("ignores malformed identity fields while preserving legacy app and process identity", () => {
+  it("ignores malformed identity fields while preserving app and process identity", () => {
     const malformed = {
       ...meet,
       callIdentity: 42,
@@ -189,7 +189,7 @@ describe("automatic meeting evidence", () => {
     const joined = {
       ...meet,
       callIdentity: identity,
-      ...{ openCallIdentities: [identity] },
+      openCallIdentities: [identity],
     };
     const meeting = selectAutomaticMeeting([joined], options)!;
     const hidden = {
@@ -202,19 +202,16 @@ describe("automatic meeting evidence", () => {
     expect(automaticMeetingObservation(meeting, [hidden])).toBe("unknown");
     expect(
       automaticMeetingObservation(meeting, [
-        { ...hidden, ...{ openCallIdentities: [] } },
+        { ...hidden, openCallIdentities: [] },
       ]),
     ).toBe("inactive");
     expect(
-      selectAutomaticMeeting(
-        [{ ...joined, ...{ openCallIdentities: [] } }],
-        options,
-      ),
+      selectAutomaticMeeting([{ ...joined, openCallIdentities: [] }], options),
     ).toBeNull();
     for (const value of [undefined, null, ["invalid"], [42]]) {
       const unavailable = {
         ...hidden,
-        ...{ openCallIdentities: value },
+        openCallIdentities: value,
       } as unknown as MeetingAccessibilityInspection;
       expect(automaticMeetingObservation(meeting, [unavailable])).toBe(
         "unknown",
@@ -223,19 +220,19 @@ describe("automatic meeting evidence", () => {
     const other = "https://meet.google.com/aaa-bbbb-ccc:tab:43";
     expect(
       automaticMeetingObservation(meeting, [
-        { ...hidden, ...{ openCallIdentities: [identity, other] } },
+        { ...hidden, openCallIdentities: [identity, other] },
       ]),
     ).toBe("unknown");
     expect(
       automaticMeetingObservation(meeting, [
-        { ...hidden, ...{ openCallIdentities: [other] } },
+        { ...hidden, openCallIdentities: [other] },
       ]),
     ).toBe("inactive");
   });
 
-  it("preserves ownership across legacy identity upgrades without aliasing distinct tabs", () => {
+  it("preserves ownership across window-to-tab identity upgrades without aliasing distinct tabs", () => {
     const row = (identity: string) => ({ ...meet, callIdentity: identity });
-    const legacy = selectAutomaticMeeting(
+    const windowMeeting = selectAutomaticMeeting(
       [row("https://meet.google.com/abc-defg-hij:window:abc")],
       options,
     )!;
@@ -247,40 +244,36 @@ describe("automatic meeting evidence", () => {
       [row("https://meet.google.com/abc-defg-hij:tab:43")],
       options,
     )!;
-    expect(sameAutomaticMeeting(legacy, stable)).toBe(true);
+    expect(sameAutomaticMeeting(windowMeeting, stable)).toBe(true);
     expect(sameAutomaticMeeting(stable, other)).toBe(false);
     expect(
       automaticMeetingObservation(stable, [
         {
-          ...row(legacy.callIdentity!),
+          ...row(windowMeeting.callIdentity!),
           activeCall: false,
-          ...{
-            openCallIdentities: [stable.callIdentity!, other.callIdentity!],
-          },
+          openCallIdentities: [stable.callIdentity!, other.callIdentity!],
         },
       ]),
     ).toBe("unknown");
     expect(
-      automaticMeetingObservation(legacy, [row(stable.callIdentity!)]),
+      automaticMeetingObservation(windowMeeting, [row(stable.callIdentity!)]),
     ).toBe("active");
     expect(
-      automaticMeetingObservation(stable, [row(legacy.callIdentity!)]),
+      automaticMeetingObservation(stable, [row(windowMeeting.callIdentity!)]),
     ).toBe("active");
     expect(
-      automaticMeetingObservation(legacy, [
-        { ...meet, ...{ openCallIdentities: [] } },
+      automaticMeetingObservation(windowMeeting, [
+        { ...meet, openCallIdentities: [] },
       ]),
     ).toBe("inactive");
     expect(
-      automaticMeetingObservation(legacy, [
+      automaticMeetingObservation(windowMeeting, [
         {
           ...meet,
           activeCall: false,
           callIdentity: null,
           platform: "unknown" as const,
-          ...{
-            openCallIdentities: [stable.callIdentity!, other.callIdentity!],
-          },
+          openCallIdentities: [stable.callIdentity!, other.callIdentity!],
         },
       ]),
     ).toBe("unknown");

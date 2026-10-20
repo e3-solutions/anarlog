@@ -21,7 +21,7 @@ export type AutomaticMeeting = {
 };
 
 function inspectionCallIdentity(inspection: MeetingAccessibilityInspection) {
-  const value = "callIdentity" in inspection ? inspection.callIdentity : null;
+  const value = inspection.callIdentity;
   return typeof value === "string" && value.trim() ? value : null;
 }
 
@@ -65,9 +65,7 @@ function inventoryProvesDeparture(
   if (!identity) return false;
   const inventories = inspections
     .filter((row) => row.app.id === meeting.app.id && row.pid === meeting.pid)
-    .map((row) =>
-      "openCallIdentities" in row ? row.openCallIdentities : undefined,
-    );
+    .map((row) => row.openCallIdentities);
   // Only a complete, valid, consistent inventory can establish absence.
   if (
     !inventories.length ||
@@ -95,7 +93,7 @@ function hasAmbiguousInspection(inspections: MeetingAccessibilityInspection[]) {
   return inspections.some((inspection) =>
     inspection.warnings.some((warning) => {
       if (/ambiguous/i.test(warning)) return true;
-      // Older native builds report competing Huddles without saying ambiguous.
+      // Slack reports competing Huddles without using the word "ambiguous".
       const huddles = warning.match(
         /^Slack exposed (\d+) active Huddle windows; inspection is scoped to none$/i,
       );

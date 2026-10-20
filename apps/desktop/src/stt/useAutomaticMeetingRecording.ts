@@ -153,12 +153,10 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
               observation === "active" ||
               (observation === "unknown" && (macMeet || micActive))
             ) {
-              // A hidden browser tab can lose AX evidence and microphone
-              // ownership while its muted call continues. Only confirmed
-              // departure can end an established Meet capture.
-              // An unreadable Meet poll cannot stop capture. Preserve a prior
-              // confirmed departure so another fresh inactive poll can finish
-              // its grace; positive attendance resets that evidence.
+              // Hidden, muted Meet tabs can lose both AX and mic evidence.
+              // Unknown polls hold capture and preserve any departure clock;
+              // only fresh inactive evidence may finish it, while attendance
+              // resets it.
               if (observation === "active" || !macMeet) {
                 capture.missingSince = null;
                 capture.missingObservation = null;

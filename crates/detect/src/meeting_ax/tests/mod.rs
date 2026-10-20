@@ -104,22 +104,21 @@ fn browser_activation_excludes_non_chromium_and_native_apps() {
 #[test]
 fn browser_activation_retries_missing_web_area_without_churning_healthy_windows() {
     let now = Instant::now();
-    let previous = BrowserAccessibilityRequest { attempted_at: now };
     assert!(!should_request_browser_accessibility(
         "com.google.Chrome",
-        Some(previous),
+        Some(now),
         now + Duration::from_secs(2),
         true,
     ));
     assert!(should_request_browser_accessibility(
         "com.google.Chrome",
-        Some(previous),
+        Some(now),
         now + Duration::from_secs(30),
         true,
     ));
     assert!(!should_request_browser_accessibility(
         "com.google.Chrome",
-        Some(previous),
+        Some(now),
         now + Duration::from_secs(3600),
         false,
     ));
