@@ -15,6 +15,7 @@ COPY packages/supabase ./packages/supabase
 COPY packages/ui ./packages/ui
 COPY packages/user-error ./packages/user-error
 COPY packages/utils ./packages/utils
+COPY plugins/tsconfig.base.json ./plugins/tsconfig.base.json
 COPY plugins/opener2 ./plugins/opener2
 RUN pnpm install --frozen-lockfile --filter @anlg/web...
 
