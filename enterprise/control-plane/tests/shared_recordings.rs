@@ -13,7 +13,7 @@ use anarlog_enterprise_control_plane::{
         TimingBasis, Transcript, router,
     },
 };
-use anlg_shared_recording::{FrameRange, decode_source, encode_wav, sha256};
+use anlg_shared_recording::{FrameRange, SAMPLE_RATE, decode_source, encode_wav, sha256};
 use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode, header},
@@ -361,6 +361,73 @@ async fn immutable_inputs_recover_without_duplicates_and_late_revisions_invalida
             .await,
         Err(RecordingError::NotFound)
     ));
+}
+
+#[tokio::test]
+async fn audio_alignment_extending_a_capture_preserves_its_corrected_tail() {
+    let directory = Directory::new();
+    let service = SharedRecordingService::open(&directory.0).await.unwrap();
+    service
+        .automatic_admit(
+            "workspace",
+            "aligned-tail",
+            Provider::GoogleMeet,
+            "conferenceRecords/aligned-tail",
+            Some(0),
+        )
+        .await
+        .unwrap();
+    let mut state = 42u32;
+    let samples = (0..SAMPLE_RATE as usize * 32)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            (state as i16) / 2
+        })
+        .collect::<Vec<_>>();
+    let reference = encode_wav(&samples[..SAMPLE_RATE as usize * 30]).unwrap();
+    let observed = encode_wav(&samples[SAMPLE_RATE as usize * 8..]).unwrap();
+    let mut reference_metadata = metadata("reference", &reference, 0, vec![]);
+    reference_metadata.timing_basis = TimingBasis::DeviceClockHint;
+    let mut observed_metadata = metadata("observed", &observed, 1, vec![]);
+    observed_metadata.timing_basis = TimingBasis::DeviceClockHint;
+    observed_metadata.offset_frames = SAMPLE_RATE as i64 * 8 - 1000;
+    service
+        .upload(
+            "workspace",
+            "aligned-tail",
+            "reference",
+            reference_metadata,
+            &reference,
+        )
+        .await
+        .unwrap();
+    service
+        .upload(
+            "workspace",
+            "aligned-tail",
+            "observed",
+            observed_metadata,
+            &observed,
+        )
+        .await
+        .unwrap();
+    let revision = service.finalize("workspace", "aligned-tail").await.unwrap();
+    assert_eq!(revision.manifest.duration_frames, samples.len() as u64);
+    let tail = revision.manifest.selections.last().unwrap();
+    assert_eq!(tail.capture_id.as_deref(), Some("observed"));
+    assert_eq!(tail.end_frame, samples.len() as u64);
+    let (_, wav) = service
+        .canonical_audio("workspace", "aligned-tail")
+        .await
+        .unwrap();
+    assert_eq!(
+        decode_source("result".into(), 0, 0, &wav, vec![])
+            .unwrap()
+            .samples,
+        samples
+    );
 }
 
 #[tokio::test]

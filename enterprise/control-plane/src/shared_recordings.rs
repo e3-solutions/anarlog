@@ -619,7 +619,13 @@ impl SharedRecordingService {
             sources.push((source, group, trusted));
         }
         let sources = align_clock_hints(sources);
-        let canonical = render(occurrence.duration_frames, &sources)
+        let duration_frames = sources
+            .iter()
+            .map(|source| (source.offset_frames + source.samples.len() as i64).max(0) as u64)
+            .max()
+            .unwrap_or(0)
+            .max(occurrence.duration_frames);
+        let canonical = render(duration_frames, &sources)
             .map_err(|error| RecordingError::Invalid(error.to_string()))?;
         if let Some(current) = current.filter(|current| current.revision == canonical.revision) {
             let object = format!(
