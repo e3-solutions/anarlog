@@ -1532,6 +1532,7 @@ export function useCaptureLifecycle(sessionId: string) {
   );
 
   return {
+    authenticatedUserId: auth?.session?.user.id ?? null,
     conn,
     connectionReady,
     createCaptureLifecycle,

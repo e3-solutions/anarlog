@@ -28,6 +28,7 @@ function useSharingConfiguration(userId: string) {
       const config = await sharedRecordingConfiguration();
       return config?.userId === userId ? config : null;
     },
+    refetchIntervalInBackground: true,
     refetchInterval: 5_000,
     retry: false,
   });
@@ -63,7 +64,27 @@ function ActiveSharedRecordingLifecycle({ userId }: { userId: string }) {
         return { blocked: false };
       const inspection = await detectCommands.inspectMeetingAccessibility();
       if (inspection.status !== "ok") return { blocked: true };
-      const selected = selectAutomaticMeeting(inspection.data, {
+      const active = inspection.data.filter((row) => row.activeCall);
+      const first = active[0];
+      const meetUrl = (identity: string | null | undefined) =>
+        identity?.match(
+          /^(https:\/\/meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}):(?:window|tab):[a-zA-Z0-9]+$/,
+        )?.[1];
+      const url = first && meetUrl(first.callIdentity);
+      // Multiple account windows may observe one conference, but never merge different calls.
+      const sameConference =
+        url &&
+        active.every(
+          (row) =>
+            row.platform === "googleMeet" &&
+            row.app.id === first.app.id &&
+            row.pid === first.pid &&
+            meetUrl(row.callIdentity) === url,
+        );
+      const rows = sameConference
+        ? inspection.data.filter((row) => !row.activeCall || row === first)
+        : inspection.data;
+      const selected = selectAutomaticMeeting(rows, {
         googleMeet: true,
         slack: true,
       });
@@ -85,6 +106,7 @@ function ActiveSharedRecordingLifecycle({ userId }: { userId: string }) {
     enabled:
       config.data?.enabled === true &&
       config.data.apiBaseUrl === sharedRecordingsPreviewUrl,
+    refetchIntervalInBackground: true,
     refetchInterval: 4_000,
     retry: false,
   });
@@ -101,6 +123,7 @@ function ActiveSharedRecordingLifecycle({ userId }: { userId: string }) {
     enabled:
       config.data?.enabled === true &&
       config.data.apiBaseUrl === sharedRecordingsPreviewUrl,
+    refetchIntervalInBackground: true,
     refetchInterval: 10_000,
     retry: false,
   });
@@ -243,6 +266,7 @@ export function SharedRecordingQueue({ userId }: { userId: string }) {
   const queue = useQuery({
     queryKey: ["shared-recording-queue", userId],
     queryFn: () => sharedRecordingQueue(userId),
+    refetchIntervalInBackground: true,
     refetchInterval: 5_000,
     retry: false,
   });

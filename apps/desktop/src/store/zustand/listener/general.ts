@@ -38,7 +38,7 @@ export type { GeneralState, SessionMode } from "./general-shared";
 
 export type GeneralActions = {
   start: (
-    params: CaptureParams,
+    params: CaptureParams & { authenticated_user_id?: string | null },
     options?: {
       handlePersist?: LiveTranscriptPersistCallback;
       onStopped?: OnStoppedCallback;

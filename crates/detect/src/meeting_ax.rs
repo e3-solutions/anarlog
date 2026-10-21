@@ -283,16 +283,33 @@ fn browser_inspections_from_roots(
                 .iter()
                 .any(|node| is_browser_active_call_control(&root.platform, node))
         })
-        .count();
+        .collect::<Vec<_>>();
+    let first_identity = active_roots
+        .first()
+        .and_then(|root| browser_call_identity(root));
+    let same_meet = first_identity
+        .as_ref()
+        .and_then(|identity| identity.split_once(":window:"))
+        .map(|(url, _)| url);
+    let competing = active_roots.len() > 1
+        && !same_meet.is_some_and(|url| {
+            active_roots.iter().all(|root| {
+                browser_call_identity(root).is_some_and(|identity| {
+                    identity
+                        .split_once(":window:")
+                        .is_some_and(|(other, _)| other == url)
+                })
+            })
+        });
     let uncertain = has_unscoped_meeting_window
         || warnings.iter().any(|warning| {
             let warning = warning.to_ascii_lowercase();
             warning.contains("ambiguous") || warning.contains("incomplete")
         });
-    if uncertain || active_roots > 1 {
+    if uncertain || competing {
         warnings.push("browser meeting window scope was ambiguous or incomplete".to_string());
     }
-    let trustworthy = accessibility_trusted && !uncertain && active_roots <= 1;
+    let trustworthy = accessibility_trusted && !uncertain && !competing;
     let mut rows: Vec<_> = roots
         .into_iter()
         .map(|root| {

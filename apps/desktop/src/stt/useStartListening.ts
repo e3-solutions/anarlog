@@ -60,6 +60,7 @@ export function useStartListeningState(
   { automatic = false }: { automatic?: boolean } = {},
 ) {
   const {
+    authenticatedUserId,
     conn,
     connectionReady,
     createCaptureLifecycle,
@@ -192,6 +193,7 @@ export function useStartListeningState(
       started = await start(
         {
           session_id: sessionId,
+          authenticated_user_id: authenticatedUserId,
           retain_audio: retainAudio,
           languages: liveTranscriptionConfig.languages,
           onboarding: false,
@@ -338,6 +340,7 @@ export function useStartListeningState(
         : {}),
     });
   }, [
+    authenticatedUserId,
     automatic,
     aiLanguage,
     canStartLiveSession,

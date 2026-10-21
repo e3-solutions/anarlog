@@ -446,3 +446,15 @@ fn test_remote_screen_share_ignores_own_share_and_share_controls() {
         assert!(!label_indicates_remote_screen_share(label), "{label}");
     }
 }
+
+#[test]
+fn browser_inspection_accepts_two_account_views_only_for_the_same_known_meet() {
+    for (second, expected) in [
+        (meet_window("abc-defg-hij", 0x3000, true), true),
+        (meet_window("xyz-abcd-efg", 0x3000, true), false),
+        (meet_window("invalid", 0x3000, true), false),
+    ] {
+        let rows = browser_rows(vec![sharing_meet_window(), second]);
+        assert!(rows.iter().all(|row| row.active_call == expected));
+    }
+}

@@ -173,7 +173,10 @@ vi.mock("@anlg/plugin-db", () => ({
 }));
 
 vi.mock("~/auth", () => ({
-  useAuth: () => ({ getSessionForRequest: vi.fn(async () => null) }),
+  useAuth: () => ({
+    session: { user: { id: "auth-user-1" } },
+    getSessionForRequest: vi.fn(async () => null),
+  }),
 }));
 vi.mock("@anlg/plugin-transcription", () => ({
   commands: {
@@ -726,6 +729,7 @@ describe("useStartListening", () => {
     });
     expect(startMock.mock.calls[0]?.[0]).toMatchObject({ retain_audio: false });
     expect(startMock.mock.calls[0]?.[0]).toMatchObject({
+      authenticated_user_id: "auth-user-1",
       live_transcript: expect.objectContaining({
         transcript_id: "generated-id",
         owner_user_id: "user-1",

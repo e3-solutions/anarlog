@@ -156,26 +156,30 @@ pub async fn retry_audio_capture<R: tauri::Runtime>(
         .map_err(|error| error.to_string())
 }
 
+#[derive(serde::Deserialize, specta::Type)]
+pub struct CaptureStartRequest {
+    #[serde(flatten)]
+    pub capture: CaptureParams,
+    #[serde(default)]
+    pub authenticated_user_id: Option<String>,
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn start_capture<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
-    mut params: CaptureParams,
+    params: CaptureStartRequest,
 ) -> Result<(), String> {
     use crate::live_journal::{LiveJournalRegistry, register_app_journal};
     use tauri::Manager;
 
+    let CaptureStartRequest {
+        capture: mut params,
+        authenticated_user_id,
+    } = params;
     let session_id = params.session_id.clone();
     let _audio_guard = app.fs_sync().lock_session_audio(&session_id).await;
-    let owner_user_id = match params.live_transcript.as_ref() {
-        Some(target) => Some(target.owner_user_id.clone()),
-        None => crate::capture_markers::get_marker(&app, &session_id)
-            .await
-            .ok()
-            .flatten()
-            .map(|marker| marker.owner_user_id),
-    };
-    if crate::shared_recording::start_raw(&app, &session_id, owner_user_id.as_deref()) {
+    if crate::shared_recording::start_raw(&app, &session_id, authenticated_user_id.as_deref()) {
         params.retain_audio = Some(true);
     }
     let live_transcript = params.live_transcript.clone();
