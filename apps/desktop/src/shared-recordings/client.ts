@@ -21,6 +21,7 @@ const revisionSchema = z.object({
   manifest: z.object({
     duration_frames: z.number(),
     sample_rate: z.number(),
+    timeline_start_frame: z.number().default(0),
     selections: z.array(
       z.object({
         start_frame: z.number(),

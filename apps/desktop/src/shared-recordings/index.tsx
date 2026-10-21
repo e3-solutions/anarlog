@@ -342,6 +342,7 @@ function RecordingAudio({
 }) {
   const auth = useAuth();
   const { getSessionForRequest } = auth;
+  const [mediaError, setMediaError] = useState<Error | null>(null);
   // Refresh credentials at request time; user IDs define cache ownership.
   // eslint-disable-next-line @tanstack/query/exhaustive-deps
   const audio = useQuery({
@@ -369,12 +370,31 @@ function RecordingAudio({
     retry: false,
     gcTime: 0,
   });
-  if (audio.error)
+  const error = audio.error ?? mediaError;
+  if (error)
     return (
-      <ErrorMessage error={audio.error} retry={() => void audio.refetch()} />
+      <ErrorMessage
+        error={error}
+        retry={() => {
+          setMediaError(null);
+          void audio.refetch();
+        }}
+      />
     );
   return audio.data ? (
-    <audio className="w-full" controls preload="metadata" src={audio.data}>
+    <audio
+      className="w-full"
+      controls
+      preload="metadata"
+      src={audio.data}
+      onError={(event) =>
+        setMediaError(
+          new Error(
+            `Shared audio could not be played (media error ${event.currentTarget.error?.code ?? "unknown"}). Retry loading the recording.`,
+          ),
+        )
+      }
+    >
       <track kind="captions" />
     </audio>
   ) : (

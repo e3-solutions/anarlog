@@ -927,6 +927,9 @@ pub async fn shared_recording_download<R: tauri::Runtime>(
         ))
     ));
     write_private(&path, &bytes)?;
+    app.asset_protocol_scope()
+        .allow_file(&path)
+        .map_err(|error| error.to_string())?;
     let expiring = path.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(86400)).await;
