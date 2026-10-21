@@ -35,7 +35,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: e3-shared-preview-${{ github.ref }}-${{ inputs.backend_only && 'backend' || inputs.preview_instance }}
+  group: e3-shared-preview-${{ github.ref }}-${{ inputs.backend_only && 'backend' || inputs.native_checks_only && 'checks' || inputs.preview_instance }}
   cancel-in-progress: true
 
 jobs:

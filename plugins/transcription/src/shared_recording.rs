@@ -69,6 +69,15 @@ struct Binding {
     platform: String,
     #[serde(default)]
     call_identity: Option<String>,
+    #[serde(default)]
+    verification_pending: bool,
+    #[serde(default)]
+    connection_id: Option<String>,
+}
+impl Binding {
+    fn valid_binding(&self) -> bool {
+        !self.verification_pending && !self.admission.is_null()
+    }
 }
 #[derive(Clone, Serialize, Deserialize, specta::Type)]
 struct Gap {
@@ -87,6 +96,7 @@ struct RawTimeline {
 pub(crate) struct QueueState {
     pub(crate) pins: Mutex<HashSet<String>>,
     serial: tokio::sync::Mutex<()>,
+    observe_serial: tokio::sync::Mutex<()>,
     flush_serial: tokio::sync::Mutex<()>,
     raw: Mutex<HashMap<String, RawTimeline>>,
 }
@@ -381,6 +391,8 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
     access_token: String,
     user_id: String,
 ) -> Result<(), String> {
+    let queue_state = app.state::<QueueState>();
+    let _observation = queue_state.observe_serial.lock().await;
     let dir = directory(&app)?;
     let config: Configuration =
         read(&dir.join("configuration.json"))?.ok_or("Shared recording is not configured")?;
@@ -429,6 +441,18 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
                 "This recording spans different meetings and cannot be shared automatically".into(),
             );
         }
+        binding.verification_pending = true;
+        save(&path, &binding)?;
+        if binding
+            .connection_id
+            .as_ref()
+            .is_some_and(|id| id != &connection.connection_id)
+        {
+            return Err("Meeting connection changed; original stays local".into());
+        }
+        if binding.call_identity.is_some() && call_identity.is_none() {
+            return Err("Meeting identity is unavailable; verification will retry".into());
+        }
     }
     validate_url(&config.api_base_url)?;
     let url = format!(
@@ -440,16 +464,7 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
     let resolved = async {
         json_body(success(client()?.post(url).bearer_auth(access_token).json(&json!({"provider":provider,"roomIdentity":call_identity,"connectionId":connection.connection_id})).send().await.map_err(|e|e.to_string())?).await?).await
     }.await;
-    let mut admission = match resolved {
-        Ok(admission) => admission,
-        Err(error) => {
-            if let Some(mut binding) = existing {
-                binding.admission = Value::Null;
-                save(&path, &binding)?;
-            }
-            return Err(error);
-        }
-    };
+    let mut admission = resolved?;
     let response_at_ms = chrono::Utc::now().timestamp_millis();
     admission["localClockReferenceMs"] = json!(
         request_started_at_ms
@@ -464,6 +479,23 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
     {
         return Err("Provider did not resolve a meeting occurrence".into());
     }
+    let _guard = queue_state.serial.lock().await;
+    let current: Configuration =
+        read(&dir.join("configuration.json"))?.ok_or("Shared recording disabled")?;
+    bound(&current, &user_id)?;
+    let current_connections: Vec<_> = current
+        .connections
+        .iter()
+        .filter(|c| c.status == "connected" && c.integration_id == integration)
+        .collect();
+    if current.organization_id != config.organization_id
+        || current.api_base_url != config.api_base_url
+        || current_connections.len() != 1
+        || current_connections[0].connection_id != connection.connection_id
+    {
+        return Err("Account configuration changed during admission".into());
+    }
+    let connection_id = connection.connection_id.clone();
     if let Some(mut binding) = existing {
         if binding.admission["occurrenceId"] != admission["occurrenceId"] {
             binding.admission = Value::Null;
@@ -472,17 +504,11 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
                 "Provider occurrence changed during this recording; original stays local".into(),
             );
         }
+        binding.verification_pending = false;
+        binding.connection_id = Some(connection_id);
+        binding.call_identity = call_identity;
+        save(&path, &binding)?;
         return Ok(());
-    }
-    let queue_state = app.state::<QueueState>();
-    let _guard = queue_state.serial.lock().await;
-    let current: Configuration =
-        read(&dir.join("configuration.json"))?.ok_or("Shared recording disabled")?;
-    bound(&current, &user_id)?;
-    if current.organization_id != config.organization_id
-        || current.api_base_url != config.api_base_url
-    {
-        return Err("Account configuration changed during admission".into());
     }
     save(
         &path,
@@ -495,6 +521,8 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
             observed_at_ms,
             platform,
             call_identity,
+            verification_pending: false,
+            connection_id: Some(connection_id),
         },
     )
 }
@@ -628,7 +656,7 @@ pub async fn shared_recording_enqueue<R: tauri::Runtime>(
                 && b.organization_id == config.organization_id
                 && b.api_base_url == config.api_base_url
         })
-        .and_then(|b| (!b.admission.is_null()).then_some(b.admission));
+        .and_then(|b| b.valid_binding().then_some(b.admission));
     let gaps = app
         .state::<QueueState>()
         .raw
@@ -721,6 +749,7 @@ pub async fn shared_recording_flush<R: tauri::Runtime>(
     let _guard = queue_state.flush_serial.lock().await;
     let dir = directory(&app)?;
     let jobs = shared_recording_queue(app.clone(), user_id.clone()).await?;
+    let mut pending_attempts = HashSet::new();
     for mut job in jobs {
         if queue_state
             .pins
@@ -765,15 +794,57 @@ pub async fn shared_recording_flush<R: tauri::Runtime>(
                 }
             }
         }
+        let binding_path = dir.join(format!("binding-{}.json", key(&job.session_id)));
+        if let Some(binding) = read::<Binding>(&binding_path)?.filter(|binding| {
+            binding.verification_pending
+                && !binding.admission.is_null()
+                && binding.user_id == user_id
+                && binding.organization_id == config.organization_id
+                && binding.api_base_url == config.api_base_url
+        }) {
+            if !pending_attempts.insert(job.session_id.clone()) {
+                continue;
+            }
+            let integration = match binding.platform.as_str() {
+                "googleMeet" => "google-meet",
+                "slack" => "slack",
+                _ => continue,
+            };
+            let connections: Vec<_> = config
+                .connections
+                .iter()
+                .filter(|connection| {
+                    connection.status == "connected" && connection.integration_id == integration
+                })
+                .collect();
+            if connections.len() != 1
+                || binding.connection_id.as_deref() != Some(connections[0].connection_id.as_str())
+            {
+                continue;
+            }
+            if shared_recording_observe(
+                app.clone(),
+                job.session_id.clone(),
+                binding.platform,
+                binding.call_identity,
+                chrono::Utc::now().timestamp_millis(),
+                access_token.clone(),
+                user_id.clone(),
+            )
+            .await
+            .is_err()
+            {
+                continue;
+            }
+        }
         if job.binding.is_none() {
-            job.binding =
-                read::<Binding>(&dir.join(format!("binding-{}.json", key(&job.session_id))))?
-                    .filter(|b| {
-                        b.user_id == user_id
-                            && b.organization_id == config.organization_id
-                            && b.api_base_url == config.api_base_url
-                    })
-                    .and_then(|b| (!b.admission.is_null()).then_some(b.admission));
+            job.binding = read::<Binding>(&binding_path)?
+                .filter(|b| {
+                    b.user_id == user_id
+                        && b.organization_id == config.organization_id
+                        && b.api_base_url == config.api_base_url
+                })
+                .and_then(|b| b.valid_binding().then_some(b.admission));
         }
         if job.binding.is_none() {
             continue;
@@ -791,6 +862,42 @@ pub async fn shared_recording_flush<R: tauri::Runtime>(
         save(&job_path(&dir, &job.id), &job)?;
         if job.state == "uploaded" {
             cleanup_uploaded_audio(&dir, &job)?;
+        }
+    }
+    Ok(())
+}
+fn verify_upload_binding(dir: &Path, job: &Job) -> Result<(), String> {
+    let latest = read::<Binding>(&dir.join(format!("binding-{}.json", key(&job.session_id))))?
+        .ok_or("Meeting admission is unavailable; original retained")?;
+    let admission = job.binding.as_ref().ok_or("Meeting identity unresolved")?;
+    if !latest.valid_binding()
+        || latest.user_id != job.user_id
+        || latest.organization_id != job.organization_id
+        || latest.api_base_url != job.api_base_url
+        || latest.admission["occurrenceId"] != admission["occurrenceId"]
+    {
+        return Err("Meeting admission changed; original retained".into());
+    }
+    let config: Configuration = read(&dir.join("configuration.json"))?.ok_or("Sharing disabled")?;
+    bound(&config, &job.user_id)?;
+    if config.organization_id != job.organization_id || config.api_base_url != job.api_base_url {
+        return Err("Sharing account changed".into());
+    }
+    if let Some(connection_id) = latest.connection_id.as_ref() {
+        let integration = match latest.platform.as_str() {
+            "googleMeet" => "google-meet",
+            "slack" => "slack",
+            _ => return Err("Meeting provider changed; original retained".into()),
+        };
+        let connections: Vec<_> = config
+            .connections
+            .iter()
+            .filter(|connection| {
+                connection.status == "connected" && connection.integration_id == integration
+            })
+            .collect();
+        if connections.len() != 1 || &connections[0].connection_id != connection_id {
+            return Err("Meeting connection changed; original retained".into());
         }
     }
     Ok(())
@@ -822,22 +929,7 @@ async fn upload(dir: &Path, job: &Job, token: &str) -> Result<(), String> {
         .saturating_sub(provider_started)
         .saturating_mul(16);
     for (sequence, segment) in job.segments.iter().enumerate() {
-        let latest = read::<Binding>(&dir.join(format!("binding-{}.json", key(&job.session_id))))?
-            .ok_or("Meeting admission is unavailable; original retained")?;
-        if latest.user_id != job.user_id
-            || latest.organization_id != job.organization_id
-            || latest.api_base_url != job.api_base_url
-            || latest.admission["occurrenceId"] != binding["occurrenceId"]
-        {
-            return Err("Meeting admission changed; original retained".into());
-        }
-        let config: Configuration =
-            read(&dir.join("configuration.json"))?.ok_or("Sharing disabled")?;
-        bound(&config, &job.user_id)?;
-        if config.organization_id != job.organization_id || config.api_base_url != job.api_base_url
-        {
-            return Err("Sharing account changed".into());
-        }
+        verify_upload_binding(dir, job)?;
         let bytes = std::fs::read(dir.join(&job.id).join(format!("{sequence}.wav")))
             .map_err(|e| e.to_string())?;
         if digest(&bytes) != segment.sha256 {
@@ -857,6 +949,7 @@ async fn upload(dir: &Path, job: &Job, token: &str) -> Result<(), String> {
         offset += segment.frames as i64;
         segment_start += segment.frames;
     }
+    verify_upload_binding(dir, job)?;
     success(
         client()?
             .post(format!("{base}/process"))
@@ -1031,6 +1124,208 @@ mod tests {
             }],
             raw_frames: Some(16000),
         }
+    }
+
+    #[tokio::test]
+    async fn temporary_admission_failure_blocks_uploads_until_the_same_meeting_is_reverified() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let server = std::thread::spawn(move || {
+            for (status, body, expected) in [
+                (200, r#"{"occurrenceId":"first"}"#, "/admit"),
+                (503, "{}", "/admit"),
+                (503, "{}", "/admit"),
+                (200, r#"{"occurrenceId":"first"}"#, "/admit"),
+                (200, "{}", "/captures/"),
+                (200, "{}", "/process"),
+                (200, "{}", "/captures/"),
+                (200, "{}", "/process"),
+                (200, r#"{"occurrenceId":"first"}"#, "/admit"),
+                (200, r#"{"occurrenceId":"different"}"#, "/admit"),
+            ] {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(std::time::Instant::now() < deadline, "missing request");
+                            std::thread::sleep(std::time::Duration::from_millis(1));
+                        }
+                        Err(error) => panic!("{error}"),
+                    }
+                };
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0u8; 4096];
+                loop {
+                    let length = stream.read(&mut buffer).unwrap();
+                    assert!(length > 0);
+                    request.extend_from_slice(&buffer[..length]);
+                    if let Some(end) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&request[..end]);
+                        let content_length = headers
+                            .lines()
+                            .find_map(|line| {
+                                let (name, value) = line.split_once(':')?;
+                                name.eq_ignore_ascii_case("content-length")
+                                    .then(|| value.trim().parse::<usize>().unwrap())
+                            })
+                            .unwrap_or(0);
+                        if request.len() >= end + 4 + content_length {
+                            break;
+                        }
+                    }
+                }
+                assert!(
+                    String::from_utf8_lossy(&request)
+                        .lines()
+                        .next()
+                        .unwrap()
+                        .contains(expected)
+                );
+                write!(stream, "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+        });
+        let root =
+            std::env::temp_dir().join(format!("shared-revalidation-{}", uuid::Uuid::new_v4()));
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let session_dir = root.join("sessions").join(&session_id);
+        private_directory(&session_dir).unwrap();
+        let audio = session_dir.join("audio.wav");
+        let mut writer = hound::WavWriter::create(
+            &audio,
+            hound::WavSpec {
+                channels: 1,
+                sample_rate: 16000,
+                bits_per_sample: 16,
+                sample_format: hound::SampleFormat::Int,
+            },
+        )
+        .unwrap();
+        for _ in 0..16000 {
+            writer.write_sample(1000i16).unwrap();
+        }
+        writer.finalize().unwrap();
+        let mut context = tauri::test::mock_context(tauri::test::noop_assets());
+        context.config_mut().identifier = format!(
+            "ai.e3group.shared-revalidation-test-{}",
+            uuid::Uuid::new_v4()
+        );
+        let app = tauri::test::mock_builder()
+            .manage(tauri_plugin_fs_sync::SessionAudioLocks::default())
+            .manage(tauri_plugin_settings::StartupSnapshot::new(root.clone()))
+            .manage(QueueState::default())
+            .build(context)
+            .unwrap();
+        let handle = app.handle().clone();
+        shared_recording_configure(
+            handle.clone(),
+            Configuration {
+                enabled: true,
+                user_id: "user".into(),
+                organization_id: "org".into(),
+                api_base_url: format!("http://{address}"),
+                connections: vec![Connection {
+                    integration_id: "slack".into(),
+                    connection_id: "connection".into(),
+                    status: "connected".into(),
+                }],
+            },
+        )
+        .await
+        .unwrap();
+        assert!(start_raw(&handle, &session_id, Some("user")));
+        observe_raw(&handle, &session_id, 16000, true);
+        let observe = |call_identity| {
+            shared_recording_observe(
+                handle.clone(),
+                session_id.clone(),
+                "slack".into(),
+                call_identity,
+                0,
+                "token".into(),
+                "user".into(),
+            )
+        };
+        observe(None).await.unwrap();
+        let before = shared_recording_enqueue(
+            handle.clone(),
+            session_id.clone(),
+            "before".into(),
+            audio.to_string_lossy().into_owned(),
+            0,
+            1000,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(before.state, "pending");
+        assert!(observe(Some("slack://room/first".into())).await.is_err());
+        let path = directory(&handle)
+            .unwrap()
+            .join(format!("binding-{}.json", key(&session_id)));
+        let held: Binding = read(&path).unwrap().unwrap();
+        assert!(held.verification_pending);
+        assert_eq!(held.admission["occurrenceId"], "first");
+        let after = shared_recording_enqueue(
+            handle.clone(),
+            session_id.clone(),
+            "after".into(),
+            audio.to_string_lossy().into_owned(),
+            0,
+            1000,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(after.state, "awaiting_identity");
+        assert!(after.binding.is_none());
+        shared_recording_flush(handle.clone(), "token".into(), "user".into())
+            .await
+            .unwrap();
+        assert!(
+            shared_recording_queue(handle.clone(), "user".into())
+                .await
+                .unwrap()
+                .iter()
+                .all(|job| job.state != "uploaded")
+        );
+        shared_recording_flush(handle.clone(), "token".into(), "user".into())
+            .await
+            .unwrap();
+        assert!(
+            !read::<Binding>(&path)
+                .unwrap()
+                .unwrap()
+                .verification_pending
+        );
+        assert!(
+            shared_recording_queue(handle.clone(), "user".into())
+                .await
+                .unwrap()
+                .iter()
+                .all(|job| job.state == "uploaded")
+        );
+        observe(Some("slack://room/first".into())).await.unwrap();
+        assert_eq!(
+            read::<Binding>(&path)
+                .unwrap()
+                .unwrap()
+                .call_identity
+                .as_deref(),
+            Some("slack://room/first")
+        );
+        assert!(observe(Some("slack://room/first".into())).await.is_err());
+        assert!(read::<Binding>(&path).unwrap().unwrap().admission.is_null());
+        assert!(observe(Some("slack://room/first".into())).await.is_err());
+        server.join().unwrap();
+        std::fs::remove_dir_all(directory(&handle).unwrap().parent().unwrap()).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
