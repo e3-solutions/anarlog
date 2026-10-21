@@ -166,6 +166,8 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       - run: pnpm -F @anlg/ui build
+      - name: Validate desktop against the generated native contracts
+        run: pnpm -F @anlg/desktop typecheck
       - run: cargo test --locked -p storage
       - name: Build isolated local shared-recording backend
         if: inputs.native_checks_only != true && inputs.preview_instance != 'second'
