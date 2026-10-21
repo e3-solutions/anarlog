@@ -576,32 +576,19 @@ pub async fn shared_recording_enqueue<R: tauri::Runtime>(
     }
     let queue_state = app.state::<QueueState>();
     let _guard = queue_state.serial.lock().await;
-    if crate::capture_markers::get_marker(&app, &session_id)
-        .await?
-        .is_some_and(|marker| marker.owner_user_id != config.user_id)
-    {
-        return Err("Capture belongs to another account".into());
-    }
     let capture_owner = queue_state
         .raw
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .get(&session_id)
         .and_then(|t| t.owner.clone());
-    if let Some(owner) = capture_owner {
-        if owner.user_id != config.user_id
-            || owner.organization_id != config.organization_id
-            || owner.api_base_url != config.api_base_url
-        {
-            return Err("Capture started under a different sharing account".into());
-        }
-    } else {
-        let marker = crate::capture_markers::get_marker(&app, &session_id)
-            .await?
-            .ok_or("Capture sharing was not enabled when this recording started")?;
-        if marker.owner_user_id != config.user_id {
-            return Err("Capture belongs to another account".into());
-        }
+    let owner =
+        capture_owner.ok_or("Capture sharing was not enabled when this recording started")?;
+    if owner.user_id != config.user_id
+        || owner.organization_id != config.organization_id
+        || owner.api_base_url != config.api_base_url
+    {
+        return Err("Capture started under a different sharing account".into());
     }
     let device_id = match read::<String>(&dir.join("device-id.json"))? {
         Some(id) => id,
@@ -1041,6 +1028,101 @@ mod tests {
             }],
             raw_frames: Some(16000),
         }
+    }
+
+    #[tokio::test]
+    async fn enqueue_uses_the_authenticated_capture_owner_without_a_local_note_owner() {
+        let root = std::env::temp_dir().join(format!("shared-owner-{}", uuid::Uuid::new_v4()));
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let session_dir = root.join("sessions").join(&session_id);
+        private_directory(&session_dir).unwrap();
+        let audio = session_dir.join("audio.wav");
+        let mut writer = hound::WavWriter::create(
+            &audio,
+            hound::WavSpec {
+                channels: 1,
+                sample_rate: 16000,
+                bits_per_sample: 16,
+                sample_format: hound::SampleFormat::Int,
+            },
+        )
+        .unwrap();
+        for _ in 0..16000 {
+            writer.write_sample(1000i16).unwrap();
+        }
+        writer.finalize().unwrap();
+        let mut context = tauri::test::mock_context(tauri::test::noop_assets());
+        context.config_mut().identifier =
+            format!("ai.e3group.shared-owner-test-{}", uuid::Uuid::new_v4());
+        let app = tauri::test::mock_builder()
+            .manage(tauri_plugin_fs_sync::SessionAudioLocks::default())
+            .manage(tauri_plugin_settings::StartupSnapshot::new(root.clone()))
+            .manage(QueueState::default())
+            .build(context)
+            .unwrap();
+        let handle = app.handle().clone();
+        let config = Configuration {
+            enabled: true,
+            user_id: "auth-user".into(),
+            organization_id: "org".into(),
+            api_base_url: "http://localhost:8789".into(),
+            connections: Vec::new(),
+        };
+        shared_recording_configure(handle.clone(), config.clone())
+            .await
+            .unwrap();
+        assert!(
+            shared_recording_enqueue(
+                handle.clone(),
+                session_id.clone(),
+                "transcript".into(),
+                audio.to_string_lossy().into_owned(),
+                0,
+                1000
+            )
+            .await
+            .is_err()
+        );
+        assert!(start_raw(&handle, &session_id, Some("auth-user")));
+        observe_raw(&handle, &session_id, 16000, true);
+        let job = shared_recording_enqueue(
+            handle.clone(),
+            session_id.clone(),
+            "transcript".into(),
+            audio.to_string_lossy().into_owned(),
+            0,
+            1000,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(job.user_id, "auth-user");
+        assert_eq!(job.state, "awaiting_identity");
+        shared_recording_configure(
+            handle.clone(),
+            Configuration {
+                user_id: "another-account".into(),
+                ..config
+            },
+        )
+        .await
+        .unwrap();
+        assert!(
+            shared_recording_enqueue(
+                handle.clone(),
+                session_id,
+                "transcript".into(),
+                audio.to_string_lossy().into_owned(),
+                0,
+                1000
+            )
+            .await
+            .err()
+            .unwrap()
+            .contains("different sharing account")
+        );
+        std::fs::remove_dir_all(directory(&handle).unwrap().parent().unwrap()).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
