@@ -6,12 +6,13 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   userId: "account-one",
   downloadAudio: vi.fn(),
   readRecording: vi.fn(),
+  urls: new Map<string, Blob>(),
 }));
 
 vi.mock("~/auth", () => ({
@@ -58,11 +59,30 @@ vi.mock("./client", () => ({
 
 import { SharedRecordingsAccount } from "./index";
 
+beforeEach(() => {
+  let sequence = 0;
+  vi.stubGlobal(
+    "URL",
+    class extends URL {
+      static createObjectURL(blob: Blob) {
+        const url = `blob:shared-audio-${++sequence}`;
+        mocks.urls.set(url, blob);
+        return url;
+      }
+      static revokeObjectURL(url: string) {
+        mocks.urls.delete(url);
+      }
+    },
+  );
+});
+
 afterEach(() => {
   cleanup();
   mocks.userId = "account-one";
   mocks.downloadAudio.mockReset();
   mocks.readRecording.mockReset();
+  mocks.urls.clear();
+  vi.unstubAllGlobals();
 });
 
 it("removes the previous account's recording list when the signed-in account changes", async () => {
@@ -89,7 +109,9 @@ it("removes the previous account's recording list when the signed-in account cha
 });
 
 it("shows media delivery failures and reloads shared audio when retried", async () => {
-  mocks.downloadAudio.mockResolvedValue("asset://localhost/shared.wav");
+  mocks.downloadAudio.mockResolvedValue(
+    new Blob(["RIFF"], { type: "audio/wav" }),
+  );
   mocks.readRecording.mockResolvedValue({
     occurrence: { provider: "slack_huddle" },
     captures: [],
@@ -120,16 +142,22 @@ it("shows media delivery failures and reloads shared audio when retried", async 
     expect(view.container.querySelector("audio")).toBeTruthy(),
   );
   const audio = view.container.querySelector("audio")!;
+  expect(audio.src).toBe("blob:shared-audio-1");
+  expect(mocks.urls.size).toBe(1);
   Object.defineProperty(audio, "error", { value: { code: 4 } });
   fireEvent.error(audio);
   expect(screen.getByRole("alert").textContent).toContain("media error 4");
   expect(view.container.querySelector("audio")).toBeNull();
+  expect(mocks.urls.size).toBe(0);
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   await waitFor(() =>
     expect(view.container.querySelector("audio")?.src).toBe(
-      "asset://localhost/shared.wav",
+      "blob:shared-audio-2",
     ),
   );
+  expect(mocks.urls.size).toBe(1);
+  view.unmount();
+  expect(mocks.urls.size).toBe(0);
   client.clear();
 });

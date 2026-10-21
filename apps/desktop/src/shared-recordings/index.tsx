@@ -1,8 +1,9 @@
 import { Trans } from "@lingui/react/macro";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useId, useRef, useState } from "react";
 
 import { Button } from "@anlg/ui/components/ui/button";
+import { useMountEffect } from "@anlg/ui/hooks/use-mount-effect";
 import { cn } from "@anlg/utils";
 
 import {
@@ -343,6 +344,19 @@ function RecordingAudio({
   const auth = useAuth();
   const { getSessionForRequest } = auth;
   const [mediaError, setMediaError] = useState<Error | null>(null);
+  const playbackId = useId();
+  const resource = useRef<{ url: string | null; disposed: boolean }>({
+    url: null,
+    disposed: false,
+  });
+  useMountEffect(() => {
+    resource.current.disposed = false;
+    return () => {
+      resource.current.disposed = true;
+      if (resource.current.url) URL.revokeObjectURL(resource.current.url);
+      resource.current.url = null;
+    };
+  });
   // Refresh credentials at request time; user IDs define cache ownership.
   // eslint-disable-next-line @tanstack/query/exhaustive-deps
   const audio = useQuery({
@@ -353,22 +367,34 @@ function RecordingAudio({
       occurrenceId,
       revision.revision,
       revision.audioSha256,
+      playbackId,
     ],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const session = await getSessionForRequest();
       if (!session || session.user.id !== userId)
         throw new Error("Account changed.");
-      return downloadSharedRecordingAudio({
-        userId,
-        organizationId,
-        occurrenceId,
-        revision: revision.revision,
-        audioSha256: revision.audioSha256,
-        accessToken: session.access_token,
-      });
+      const blob = await downloadSharedRecordingAudio(
+        {
+          userId,
+          organizationId,
+          occurrenceId,
+          revision: revision.revision,
+          audioSha256: revision.audioSha256,
+          accessToken: session.access_token,
+        },
+        signal,
+      );
+      signal.throwIfAborted();
+      if (resource.current.disposed)
+        throw new Error("Shared audio playback was closed.");
+      const url = URL.createObjectURL(blob);
+      if (resource.current.url) URL.revokeObjectURL(resource.current.url);
+      resource.current.url = url;
+      return url;
     },
     retry: false,
     gcTime: 0,
+    staleTime: Infinity,
   });
   const error = audio.error ?? mediaError;
   if (error)
@@ -381,19 +407,21 @@ function RecordingAudio({
         }}
       />
     );
-  return audio.data ? (
+  return audio.data && !audio.isFetching ? (
     <audio
       className="w-full"
       controls
       preload="metadata"
       src={audio.data}
-      onError={(event) =>
+      onError={(event) => {
+        if (resource.current.url) URL.revokeObjectURL(resource.current.url);
+        resource.current.url = null;
         setMediaError(
           new Error(
             `Shared audio could not be played (media error ${event.currentTarget.error?.code ?? "unknown"}). Retry loading the recording.`,
           ),
-        )
-      }
+        );
+      }}
     >
       <track kind="captions" />
     </audio>

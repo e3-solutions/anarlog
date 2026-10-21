@@ -60,17 +60,51 @@ export function observeSharedRecording(input: {
   return invoke<unknown>(command("observe"), input);
 }
 
-export async function downloadSharedRecordingAudio(input: {
-  userId: string;
-  organizationId: string;
-  occurrenceId: string;
-  revision: string;
-  audioSha256: string;
-  accessToken: string;
-}) {
+export async function downloadSharedRecordingAudio(
+  input: {
+    userId: string;
+    organizationId: string;
+    occurrenceId: string;
+    revision: string;
+    audioSha256: string;
+    accessToken: string;
+  },
+  signal: AbortSignal,
+) {
+  signal.throwIfAborted();
   const path = await invoke<string>(command("download"), {
     ...input,
     apiBaseUrl: sharedRecordingsPreviewUrl,
   });
-  return convertFileSrc(path);
+  signal.throwIfAborted();
+  const response = await fetch(convertFileSrc(path), { signal });
+  if (!response.ok || !response.body)
+    throw new Error(
+      "Shared audio could not be loaded from its verified cache.",
+    );
+  const limit = 512 * 1024 * 1024;
+  if (Number(response.headers.get("content-length")) > limit) {
+    await response.body.cancel();
+    throw new Error("Shared audio exceeds the playback size limit.");
+  }
+  const reader = response.body.getReader();
+  const chunks: BlobPart[] = [];
+  let length = 0;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > limit) {
+        await reader.cancel();
+        throw new Error("Shared audio exceeds the playback size limit.");
+      }
+      chunks.push(new Uint8Array(value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  signal.throwIfAborted();
+  if (length === 0) throw new Error("Shared audio is empty.");
+  return new Blob(chunks, { type: "audio/wav" });
 }
