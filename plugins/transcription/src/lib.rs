@@ -140,6 +140,7 @@ pub enum BatchTerminalState {
 fn make_specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
     tauri_specta::Builder::<R>::new()
         .plugin_name(PLUGIN_NAME)
+        .typ::<CaptureParams>()
         .commands(tauri_specta::collect_commands![
             shared_recording::shared_recording_configuration::<tauri::Wry>,
             shared_recording::shared_recording_configure::<tauri::Wry>,
