@@ -31,11 +31,11 @@ fn mono_stream_encoder_f32_roundtrips_across_multiple_chunks() -> TestResult {
 }
 
 #[test]
-fn stereo_stream_encoder_f32_roundtrips_across_multiple_chunks() -> TestResult {
+fn stereo_stream_encoder_flush_preserves_the_final_partial_pcm_frame() -> TestResult {
     let case = Case {
         channels: 2,
         frames: 7_000,
-        sample_rate: 48_000,
+        sample_rate: 16_000,
     };
     let left = fixture_channel_f32(case.frames, 0);
     let right = fixture_channel_f32(case.frames, 1);
@@ -51,6 +51,7 @@ fn stereo_stream_encoder_f32_roundtrips_across_multiple_chunks() -> TestResult {
 
     let (decoded_spec, decoded_samples) = decode_mp3_bytes(&output)?;
     assert_decoded_matches_case(case, case.frames * 2, &decoded_spec, &decoded_samples);
+    assert!(decoded_samples.len() / usize::from(case.channels) >= case.frames);
     Ok(())
 }
 

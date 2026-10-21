@@ -114,7 +114,7 @@ jobs:
           platform: macos
       - id: native-format
         name: Validate native formatting before caching
-        run: rustfmt --check --edition 2024 plugins/permissions/src/ext.rs crates/detect/src/meeting_ax.rs plugins/transcription/src/listener/commands.rs plugins/transcription/src/shared_recording.rs
+        run: rustfmt --check --edition 2024 plugins/permissions/src/ext.rs crates/detect/src/meeting_ax.rs plugins/transcription/src/listener/commands.rs plugins/transcription/src/shared_recording.rs crates/mp3/src/encoder.rs crates/mp3/tests/stream_encoder.rs
       - name: Cache native desktop build dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
@@ -128,6 +128,8 @@ jobs:
           cache-workspace-crates: true
       - uses: ./.github/actions/pnpm_install # zizmor: ignore[self-repository] -- Use the checked-out candidate's workspace setup.
       - run: echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
+      - name: Verify MP3 finalization preserves captured audio
+        run: cargo test --locked -p mp3
       - run: cargo test --locked -p detect browser_inspection
       - run: cargo test --locked -p detect browser_activation
       - run: cargo test --locked -p detect chrome_tabs
