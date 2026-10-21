@@ -7,6 +7,10 @@ on:
         description: Validate the isolated hosted backend container without deployment
         type: boolean
         default: false
+      hosted_preview:
+        description: Use the isolated hosted API and sign-in URLs instead of local services
+        type: boolean
+        default: false
       backend_only:
         description: Build only the isolated local backend
         type: boolean
@@ -45,7 +49,7 @@ concurrency:
 jobs:
   preview_container:
     if: inputs.container_only == true && github.repository == 'e3-solutions/anarlog' && github.ref == 'refs/heads/chore/shared-meeting-recordings'
-    uses: ./.github/workflows/e3_shared_preview_container.yaml
+    uses: ./.github/workflows/e3_shared_preview_container.yaml # zizmor: ignore[self-repository] -- Validate the reusable workflow from this exact isolated candidate.
 
   build:
     if: inputs.container_only != true && inputs.backend_only != true && github.repository == 'e3-solutions/anarlog' && github.ref == 'refs/heads/chore/shared-meeting-recordings'
@@ -55,15 +59,30 @@ jobs:
       TAURI_ENV_TARGET_TRIPLE: aarch64-apple-darwin
       CARGO_TARGET_DIR: ${{ github.workspace }}/apps/desktop/src-tauri/target
       NODE_OPTIONS: --max-old-space-size=4096
-      VITE_API_URL: http://localhost:8789
-      VITE_APP_URL: http://localhost:3000
-      VITE_SHARED_RECORDINGS_PREVIEW_URL: http://localhost:8789
+      VITE_API_URL: ${{ inputs.hosted_preview && vars.ANARLOG_SHARED_PREVIEW_API_URL || 'http://localhost:8789' }}
+      VITE_APP_URL: ${{ inputs.hosted_preview && vars.ANARLOG_SHARED_PREVIEW_APP_URL || 'http://localhost:3000' }}
+      VITE_SHARED_RECORDINGS_PREVIEW_URL: ${{ inputs.hosted_preview && vars.ANARLOG_SHARED_PREVIEW_API_URL || 'http://localhost:8789' }}
       VITE_SUPABASE_URL: ${{ vars.ANARLOG_SHARED_PREVIEW_SUPABASE_URL }}
       VITE_SUPABASE_ANON_KEY: ${{ vars.ANARLOG_SHARED_PREVIEW_SUPABASE_PUBLISHABLE_KEY }}
       PREVIEW_CONFIG: ${{ inputs.preview_instance == 'second' && 'tauri.shared-recordings-preview-second.json' || 'tauri.shared-recordings-preview.json' }}
       PREVIEW_PRODUCT: ${{ inputs.preview_instance == 'second' && 'E3 Shared Recordings Preview Second' || 'E3 Shared Recordings Preview' }}
       PREVIEW_BUNDLE_ID: ${{ inputs.preview_instance == 'second' && 'ai.e3group.meeting-capture-shared-preview-second' || 'ai.e3group.meeting-capture-shared-preview' }}
     steps:
+      - if: inputs.hosted_preview == true
+        env:
+          HOSTED_API_URL: ${{ vars.ANARLOG_SHARED_PREVIEW_API_URL }}
+          HOSTED_APP_URL: ${{ vars.ANARLOG_SHARED_PREVIEW_APP_URL }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from urllib.parse import urlsplit
+          for name in ("HOSTED_API_URL", "HOSTED_APP_URL"):
+              url = urlsplit(os.environ[name])
+              if (url.scheme != "https" or not url.hostname or url.username or url.password
+                  or url.query or url.fragment or url.path not in ("", "/")
+                  or url.hostname in ("localhost", "127.0.0.1", "::1")):
+                  raise SystemExit(f"Configure {name} as the isolated hosted HTTPS origin before building")
+          PY
       - id: signing-preflight
         if: inputs.native_checks_only != true
         env:
@@ -315,8 +334,8 @@ jobs:
           mkdir -p preview-artifact
           ditto -c -k --sequesterRsrc --keepParent "$app" preview-artifact/E3-Shared-Recordings-Preview-arm64.zip
           shasum -a 256 preview-artifact/E3-Shared-Recordings-Preview-arm64.zip > preview-artifact/SHA256SUMS
-          printf 'Commit: %s\nTarget: aarch64-apple-darwin\nRequires: macOS 15 or later on Apple Silicon\nSigning mode: %s\nSigning: %s\nBundle identifier: %s\nRust optimization: level 1 for preview iteration\nAutomatic updates: disabled\n' "$BUILD_COMMIT" "$SIGNING_MODE" "$signing_label" "$PREVIEW_BUNDLE_ID" > preview-artifact/BUILD.txt
-          printf '%s\n' "Download this Actions artifact, unzip E3-Shared-Recordings-Preview-arm64.zip, and move the app to Applications. $install_signing" 'Install alongside the existing pilot; do not replace or quit the pilot. Preview apps use separate bundle IDs, storage, and login callbacks. Automatic updates are disabled.' 'The isolated local auth service must run on localhost:3000 and the shared-recording API on localhost:8789. Enable sharing explicitly after signing in to the test organization.' > preview-artifact/INSTALL.txt
+          printf 'Commit: %s\nTarget: aarch64-apple-darwin\nRequires: macOS 15 or later on Apple Silicon\nSigning mode: %s\nSigning: %s\nBundle identifier: %s\nRust optimization: level 1 for preview iteration\nAutomatic updates: disabled\nAPI: %s\nSign-in: %s\n' "$BUILD_COMMIT" "$SIGNING_MODE" "$signing_label" "$PREVIEW_BUNDLE_ID" "$VITE_API_URL" "$VITE_APP_URL" > preview-artifact/BUILD.txt
+          printf '%s\n' "Download this Actions artifact, unzip E3-Shared-Recordings-Preview-arm64.zip, and move the app to Applications. $install_signing" 'Install alongside the existing pilot; do not replace or quit the pilot. Preview apps use separate bundle IDs, storage, and login callbacks. Automatic updates are disabled.' "Sign-in service: $VITE_APP_URL. Shared-recording service: $VITE_API_URL. These services must be reachable from this Mac. Enable sharing explicitly after signing in to the test organization." > preview-artifact/INSTALL.txt
       - if: inputs.native_checks_only != true && inputs.defer_notarization != true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

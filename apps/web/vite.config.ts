@@ -11,6 +11,9 @@ import { publishedChangelogs } from "./changelog-build.ts";
 import { getSitemap } from "./src/utils/sitemap";
 import { vercelBuildConfig } from "./vercel-build-config";
 
+const sharedRecordingsPreview =
+  process.env.ANARLOG_SHARED_RECORDINGS_PREVIEW === "1";
+
 const config = defineConfig(async ({ command }): Promise<UserConfig> => {
   const generateSourceMaps = Boolean(
     process.env.SENTRY_BUILD_SOURCEMAPS === "1" && process.env.VITE_APP_VERSION,
@@ -22,7 +25,7 @@ const config = defineConfig(async ({ command }): Promise<UserConfig> => {
       rolldownOptions: { external: ["sharp"] },
     },
     plugins: [
-      await publishedChangelogs(command),
+      await publishedChangelogs(sharedRecordingsPreview ? "serve" : command),
       contentCollections(),
       tailwindcss(),
       tanstackStart({
@@ -30,7 +33,7 @@ const config = defineConfig(async ({ command }): Promise<UserConfig> => {
           host: "https://anarlog.so",
         },
         prerender: {
-          enabled: true,
+          enabled: !sharedRecordingsPreview,
           concurrency: 3,
           crawlLinks: true,
           autoStaticPathsDiscovery: true,
@@ -52,6 +55,7 @@ const config = defineConfig(async ({ command }): Promise<UserConfig> => {
       viteReact(),
       generateSitemap(getSitemap()),
       nitro({
+        ...(sharedRecordingsPreview ? { preset: "node-server" as const } : {}),
         sourcemap: generateSourceMaps,
         vercel: {
           config: vercelBuildConfig,

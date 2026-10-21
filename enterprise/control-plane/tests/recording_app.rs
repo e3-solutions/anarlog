@@ -45,45 +45,60 @@ fn request(method: &str, url: &str, token: &str, body: Value) -> Request<Body> {
 
 #[tokio::test]
 async fn local_oauth_api_preflight_allows_only_the_isolated_preview_clients() {
-    let app = axum::Router::new()
-        .route("/nango/session", axum::routing::post(|| async {}))
-        .layer(recording_app::local_preview_cors());
-    for origin in [
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "tauri://localhost",
-        "http://tauri.localhost",
-        "https://unrelated.example",
+    for invalid in [
+        "http://shared-preview.example",
+        "https://user:password@shared-preview.example",
+        "https://shared-preview.example/path",
+        "https://shared-preview.example/",
+        "https://shared-preview.example?query=1",
+        "https://shared-preview.example#fragment",
+        "https://*.example",
+        "*",
     ] {
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("OPTIONS")
-                    .uri("/nango/session")
-                    .header(header::ORIGIN, origin)
-                    .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
-                    .header(
-                        header::ACCESS_CONTROL_REQUEST_HEADERS,
-                        "authorization,content-type",
-                    )
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let allowed = response.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN);
-        if origin != "https://unrelated.example" {
-            assert_eq!(allowed.unwrap(), origin);
-        } else {
-            assert!(allowed.is_none());
+        assert!(recording_app::local_preview_cors(Some(invalid)).is_err());
+    }
+    for web_origin in [None, Some("https://shared-preview.example")] {
+        let app = axum::Router::new()
+            .route("/nango/session", axum::routing::post(|| async {}))
+            .layer(recording_app::local_preview_cors(web_origin).unwrap());
+        for origin in [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "tauri://localhost",
+            "http://tauri.localhost",
+            "https://shared-preview.example",
+            "https://unrelated.example",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("OPTIONS")
+                        .uri("/nango/session")
+                        .header(header::ORIGIN, origin)
+                        .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                        .header(
+                            header::ACCESS_CONTROL_REQUEST_HEADERS,
+                            "authorization,content-type",
+                        )
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let allowed = response.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN);
+            if !origin.starts_with("https://") || Some(origin) == web_origin {
+                assert_eq!(allowed.unwrap(), origin);
+            } else {
+                assert!(allowed.is_none());
+            }
+            assert!(
+                !response
+                    .headers()
+                    .contains_key(header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
+            );
         }
-        assert!(
-            !response
-                .headers()
-                .contains_key(header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
-        );
     }
 }
 

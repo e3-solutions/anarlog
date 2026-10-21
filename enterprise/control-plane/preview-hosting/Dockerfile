@@ -5,7 +5,8 @@ FROM ${RUST_IMAGE} AS builder
 RUN apt-get update && apt-get install --no-install-recommends -y cmake g++ pkg-config libssl-dev libclang-dev ca-certificates curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /source
 COPY . .
-RUN cargo build --locked --manifest-path enterprise/Cargo.toml --package anarlog-enterprise-control-plane --bin shared-recordings-app --release
+RUN cargo build --locked --manifest-path enterprise/Cargo.toml --package anarlog-enterprise-control-plane --bin shared-recordings-app --release \
+    && cargo test --locked --manifest-path enterprise/Cargo.toml --package anarlog-enterprise-control-plane --release --test recording_app
 
 WORKDIR /whisper
 RUN curl --fail --location --retry 3 --max-time 180 https://codeload.github.com/ggml-org/whisper.cpp/tar.gz/refs/tags/v1.8.1 -o source.tar.gz \

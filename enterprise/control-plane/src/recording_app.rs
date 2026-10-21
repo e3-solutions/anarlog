@@ -32,16 +32,32 @@ pub struct RecordingAppState {
     pub processor: Option<Arc<RecordingProcessor>>,
 }
 
-pub fn local_preview_cors() -> CorsLayer {
-    CorsLayer::new()
-        .allow_origin([
-            HeaderValue::from_static("http://localhost:3000"),
-            HeaderValue::from_static("http://127.0.0.1:3000"),
-            HeaderValue::from_static("tauri://localhost"),
-            HeaderValue::from_static("http://tauri.localhost"),
-        ])
+pub fn local_preview_cors(web_origin: Option<&str>) -> anyhow::Result<CorsLayer> {
+    let mut origins = vec![
+        HeaderValue::from_static("http://localhost:3000"),
+        HeaderValue::from_static("http://127.0.0.1:3000"),
+        HeaderValue::from_static("tauri://localhost"),
+        HeaderValue::from_static("http://tauri.localhost"),
+    ];
+    if let Some(origin) = web_origin {
+        let url: url::Url = origin.parse()?;
+        anyhow::ensure!(
+            url.scheme() == "https"
+                && url.host_str().is_some_and(|host| !host.contains('*'))
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.path() == "/"
+                && url.query().is_none()
+                && url.fragment().is_none()
+                && url.origin().ascii_serialization() == origin,
+            "preview web origin must be an exact HTTPS origin without credentials, path, query or fragment"
+        );
+        origins.push(origin.parse()?);
+    }
+    Ok(CorsLayer::new()
+        .allow_origin(origins)
         .allow_methods([Method::GET, Method::POST, Method::DELETE])
-        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]))
 }
 
 pub fn provider_router(config: anlg_api_nango::NangoConfig) -> Router {

@@ -22,6 +22,8 @@ async fn main() -> anyhow::Result<()> {
         bind.ip().is_loopback(),
         "local app preview binds only to loopback"
     );
+    let web_origin = env::var("ANARLOG_SHARED_RECORDINGS_WEB_ORIGIN").ok();
+    let cors = recording_app::local_preview_cors(web_origin.as_deref())?;
     let supabase_url = env::var("SUPABASE_URL")?;
     let anon_key = env::var("SUPABASE_ANON_KEY")?;
     let members = RecordingMemberAuth::new(&supabase_url, &anon_key)?;
@@ -77,7 +79,7 @@ async fn main() -> anyhow::Result<()> {
         listener,
         recording_app::router(state)
             .merge(provider_routes)
-            .layer(recording_app::local_preview_cors()),
+            .layer(cors),
     )
     .with_graceful_shutdown(async {
         let _ = tokio::signal::ctrl_c().await;
