@@ -194,7 +194,9 @@ export const commands = {
       else return { status: "error", error: e as any };
     }
   },
-  async startCapture(params: CaptureParams): Promise<Result<null, string>> {
+  async startCapture(
+    params: CaptureStartRequest,
+  ): Promise<Result<null, string>> {
     try {
       return {
         status: "ok",
@@ -1175,6 +1177,21 @@ export type CaptureSnapshot = {
   degraded?: DegradedError | null;
   captureHealth?: CaptureHealth | null;
 };
+export type CaptureStartRequest = {
+  session_id: string;
+  live_transcript?: LiveTranscriptTarget | null;
+  retain_audio?: boolean | null;
+  languages: string[];
+  onboarding: boolean;
+  model: string;
+  base_url: string;
+  api_key: string;
+  keywords: string[];
+  mic_device?: string | null;
+  transcription_mode?: TranscriptionMode | null;
+  participant_human_ids?: string[];
+  self_human_id?: string | null;
+} & { authenticated_user_id?: string | null };
 export type CaptureState = "active" | "finalizing" | "inactive";
 export type CaptureStatusEvent =
   | { type: "audio_initializing"; session_id: string }
