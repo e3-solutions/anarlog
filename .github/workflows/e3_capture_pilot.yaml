@@ -3,6 +3,10 @@ name: E3 Shared Recordings Preview
 on:
   workflow_dispatch:
     inputs:
+      container_only:
+        description: Validate the isolated hosted backend container without deployment
+        type: boolean
+        default: false
       backend_only:
         description: Build only the isolated local backend
         type: boolean
@@ -35,12 +39,16 @@ permissions:
   contents: read
 
 concurrency:
-  group: e3-shared-preview-${{ github.ref }}-${{ inputs.backend_only && 'backend' || inputs.native_checks_only && 'checks' || inputs.preview_instance }}
+  group: e3-shared-preview-${{ github.ref }}-${{ inputs.container_only && 'container' || inputs.backend_only && 'backend' || inputs.native_checks_only && 'checks' || inputs.preview_instance }}
   cancel-in-progress: true
 
 jobs:
+  preview_container:
+    if: inputs.container_only == true && github.repository == 'e3-solutions/anarlog' && github.ref == 'refs/heads/chore/shared-meeting-recordings'
+    uses: ./.github/workflows/e3_shared_preview_container.yaml
+
   build:
-    if: inputs.backend_only != true && github.repository == 'e3-solutions/anarlog' && github.ref == 'refs/heads/chore/shared-meeting-recordings'
+    if: inputs.container_only != true && inputs.backend_only != true && github.repository == 'e3-solutions/anarlog' && github.ref == 'refs/heads/chore/shared-meeting-recordings'
     runs-on: macos-26
     timeout-minutes: 120
     env:
@@ -318,7 +326,7 @@ jobs:
           retention-days: 14
 
   preview_backend:
-    if: inputs.backend_only == true && github.repository == 'e3-solutions/anarlog' && github.ref == 'refs/heads/chore/shared-meeting-recordings'
+    if: inputs.container_only != true && inputs.backend_only == true && github.repository == 'e3-solutions/anarlog' && github.ref == 'refs/heads/chore/shared-meeting-recordings'
     runs-on: macos-26
     timeout-minutes: 45
     env:

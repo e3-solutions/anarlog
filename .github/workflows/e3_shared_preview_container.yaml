@@ -2,6 +2,7 @@ name: E3 Shared Preview Container
 
 on:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
