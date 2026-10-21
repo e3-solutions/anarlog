@@ -1,5 +1,4 @@
 import { listConnections } from "@anlg/api-client";
-import { createClient } from "@anlg/api-client/client";
 import { commands as detectCommands } from "@anlg/plugin-detect";
 import { parseEventInstant } from "@anlg/utils";
 
@@ -7,6 +6,7 @@ import { selectAutomaticMeeting } from "./automatic-meeting";
 import type { ScheduledMeetingRow } from "./scheduled-auto-start";
 
 import { env } from "~/env";
+import { createDesktopApiClient as createClient } from "~/shared/api-client";
 
 // Server attendance may be on a phone; require a call surface on this device.
 export async function hasLocalScheduledMeet(): Promise<boolean> {
