@@ -181,5 +181,9 @@ it("recovers identity and uploads while two account views of the same Meet are i
     await vi.advanceTimersByTimeAsync(12_000);
   });
   expect(mocks.uploaded).toBe(true);
+  expect(mocks.observe.mock.lastCall?.[0]).toMatchObject({
+    userId: "account-one",
+    callIdentity: "https://meet.google.com/abc-defg-hij",
+  });
   client.clear();
 });

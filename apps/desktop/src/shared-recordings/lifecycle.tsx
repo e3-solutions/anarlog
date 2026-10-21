@@ -96,7 +96,10 @@ function ActiveSharedRecordingLifecycle({ userId }: { userId: string }) {
       await observeSharedRecording({
         sessionId: live.sessionId,
         platform: selected.platform,
-        callIdentity: selected.callIdentity,
+        callIdentity:
+          selected.platform === "googleMeet"
+            ? (url ?? selected.callIdentity)
+            : selected.callIdentity,
         observedAtMs: Date.now(),
         accessToken: session.access_token,
         userId,
