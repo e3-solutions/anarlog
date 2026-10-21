@@ -14,6 +14,7 @@ import { TemplatesNav } from "./templates";
 import { TimelineView } from "./timeline";
 import { hasOwnSidebarHeaderTab } from "./use-custom-sidebar";
 
+import { SharedRecordingsLauncher } from "~/shared-recordings/launcher";
 import { usesTitleBarSidebarActions } from "~/shared/hooks/useWindowControlsGutter";
 import { useTabs } from "~/store/zustand/tabs";
 
@@ -106,6 +107,7 @@ export function LeftSidebar({
           )}
         </div>
       </div>
+      <SharedRecordingsLauncher />
     </div>
   );
 }

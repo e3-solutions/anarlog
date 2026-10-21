@@ -35,7 +35,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: e3-shared-preview-${{ github.ref }}-${{ inputs.preview_instance }}
+  group: e3-shared-preview-${{ github.ref }}-${{ inputs.backend_only && 'backend' || inputs.preview_instance }}
   cancel-in-progress: true
 
 jobs:
@@ -333,6 +333,7 @@ jobs:
           prefix-key: e3-shared-preview-backend
       - run: rustfmt --check --edition 2024 crates/api-nango/src/integrations.rs
       - run: cargo test --locked -p api-nango --lib
+      - run: cargo test --manifest-path enterprise/Cargo.toml --locked -p anarlog-enterprise-control-plane --test recording_app local_oauth_api_preflight_allows_only_the_isolated_preview_clients
       - run: cargo build --manifest-path enterprise/Cargo.toml --locked -p anarlog-enterprise-control-plane --bin shared-recordings-app --target aarch64-apple-darwin
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

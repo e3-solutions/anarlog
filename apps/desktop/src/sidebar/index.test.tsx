@@ -6,6 +6,10 @@ const mocks = vi.hoisted(() => ({
   platform: "macos",
 }));
 
+vi.mock("~/env", () => ({
+  env: { VITE_SHARED_RECORDINGS_PREVIEW_URL: "http://localhost:8789" },
+}));
+
 vi.mock("@tauri-apps/plugin-os", () => ({
   platform: () => mocks.platform,
 }));
@@ -86,6 +90,14 @@ describe("LeftSidebar", () => {
       screen.getByTestId("folder-materials").getAttribute("data-folder-path"),
     ).toBe("CS 101");
     expect(screen.queryByTestId("shared-notes-nav")).toBeNull();
+  });
+
+  it("keeps organization recordings reachable from the default personal notes view", () => {
+    render(<LeftSidebar />);
+
+    expect(
+      screen.getByRole("button", { name: "Organization recordings" }),
+    ).toBeTruthy();
   });
 
   it("hides folder materials when viewing all notes", () => {

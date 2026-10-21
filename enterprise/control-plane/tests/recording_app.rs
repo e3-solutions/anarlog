@@ -44,13 +44,15 @@ fn request(method: &str, url: &str, token: &str, body: Value) -> Request<Body> {
 }
 
 #[tokio::test]
-async fn local_oauth_api_preflight_allows_only_the_isolated_preview_web_origins() {
+async fn local_oauth_api_preflight_allows_only_the_isolated_preview_clients() {
     let app = axum::Router::new()
         .route("/nango/session", axum::routing::post(|| async {}))
         .layer(recording_app::local_preview_cors());
     for origin in [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "tauri://localhost",
+        "http://tauri.localhost",
         "https://unrelated.example",
     ] {
         let response = app
@@ -72,7 +74,7 @@ async fn local_oauth_api_preflight_allows_only_the_isolated_preview_web_origins(
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let allowed = response.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN);
-        if origin.ends_with(":3000") {
+        if origin != "https://unrelated.example" {
             assert_eq!(allowed.unwrap(), origin);
         } else {
             assert!(allowed.is_none());
