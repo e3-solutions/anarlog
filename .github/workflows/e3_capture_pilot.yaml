@@ -331,7 +331,7 @@ jobs:
             . -> apps/desktop/src-tauri/target
             enterprise -> ../apps/desktop/src-tauri/target
           prefix-key: e3-shared-preview-backend
-      - run: rustfmt --check --edition 2024 crates/api-nango/src/integrations.rs
+      - run: rustfmt --check --edition 2024 crates/api-nango/src/integrations.rs crates/api-nango/src/routes/google_meet_presence.rs
       - run: cargo test --locked -p api-nango --lib
       - run: cargo test --manifest-path enterprise/Cargo.toml --locked -p anarlog-enterprise-control-plane --test recording_app local_oauth_api_preflight_allows_only_the_isolated_preview_clients
       - run: cargo build --manifest-path enterprise/Cargo.toml --locked -p anarlog-enterprise-control-plane --bin shared-recordings-app --target aarch64-apple-darwin
