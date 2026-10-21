@@ -3,6 +3,10 @@ name: E3 Shared Recordings Preview
 on:
   workflow_dispatch:
     inputs:
+      backend_only:
+        description: Build only the isolated local backend
+        type: boolean
+        default: false
       preview_instance:
         description: Isolated app identity for the two-account test
         type: choice
@@ -36,7 +40,7 @@ concurrency:
 
 jobs:
   build:
-    if: github.repository == 'e3-solutions/anarlog' && github.ref == 'refs/heads/chore/shared-meeting-recordings'
+    if: inputs.backend_only != true && github.repository == 'e3-solutions/anarlog' && github.ref == 'refs/heads/chore/shared-meeting-recordings'
     runs-on: macos-26
     timeout-minutes: 120
     env:
@@ -307,3 +311,32 @@ jobs:
           path: preview-artifact/
           if-no-files-found: error
           retention-days: 14
+
+  preview_backend:
+    if: inputs.backend_only == true && github.repository == 'e3-solutions/anarlog' && github.ref == 'refs/heads/chore/shared-meeting-recordings'
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/apps/desktop/src-tauri/target
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/rust_install # zizmor: ignore[self-repository] -- Use the checked-out preview toolchain.
+        with:
+          platform: macos
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            . -> apps/desktop/src-tauri/target
+            enterprise -> ../apps/desktop/src-tauri/target
+          prefix-key: e3-shared-preview-backend
+      - run: rustfmt --check --edition 2024 crates/api-nango/src/integrations.rs
+      - run: cargo test --locked -p api-nango --lib
+      - run: cargo build --manifest-path enterprise/Cargo.toml --locked -p anarlog-enterprise-control-plane --bin shared-recordings-app --target aarch64-apple-darwin
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: e3-shared-preview-local-backend-${{ github.sha }}
+          path: apps/desktop/src-tauri/target/aarch64-apple-darwin/debug/shared-recordings-app
+          retention-days: 7
+          if-no-files-found: error
