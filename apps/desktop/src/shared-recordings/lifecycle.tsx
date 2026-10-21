@@ -1,8 +1,14 @@
 import { Trans } from "@lingui/react/macro";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  skipToken,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 
 import { commands as detectCommands } from "@anlg/plugin-detect";
 import { Button } from "@anlg/ui/components/ui/button";
+import { useMountEffect } from "@anlg/ui/hooks/use-mount-effect";
 
 import {
   sharedRecordingsPreviewUrl,
@@ -54,17 +60,32 @@ function ActiveSharedRecordingLifecycle({ userId }: { userId: string }) {
   const auth = useAuth();
   const { getSessionForRequest } = auth;
   const config = useSharingConfiguration(userId);
+  useMountEffect(() => () => {
+    const live = listenerStore.getState().live;
+    if (live.status === "active" && live.sessionId) {
+      void observeSharedRecording({
+        sessionId: live.sessionId,
+        platform: "unverified",
+        callIdentity: null,
+        observedAtMs: Date.now(),
+        accessToken: "",
+        userId,
+      }).catch(() => {});
+    }
+  });
   // Refresh credentials at request time; user IDs define cache ownership.
   // eslint-disable-next-line @tanstack/query/exhaustive-deps
   useQuery({
     queryKey: ["shared-recording-observation", userId],
     queryFn: async () => {
       const live = listenerStore.getState().live;
-      if (live.status !== "active" || !live.sessionId)
-        return { blocked: false };
-      const inspection = await detectCommands.inspectMeetingAccessibility();
-      if (inspection.status !== "ok") return { blocked: true };
-      const active = inspection.data.filter((row) => row.activeCall);
+      const sessionId = live.sessionId;
+      if (live.status !== "active" || !sessionId) return { blocked: false };
+      const inspection = await detectCommands
+        .inspectMeetingAccessibility()
+        .catch(() => null);
+      const inspected = inspection?.status === "ok" ? inspection.data : [];
+      const active = inspected.filter((row) => row.activeCall);
       const first = active[0];
       const meetUrl = (identity: string | null | undefined) =>
         identity?.match(
@@ -82,19 +103,34 @@ function ActiveSharedRecordingLifecycle({ userId }: { userId: string }) {
             meetUrl(row.callIdentity) === url,
         );
       const rows = sameConference
-        ? inspection.data.filter((row) => !row.activeCall || row === first)
-        : inspection.data;
+        ? inspected.filter((row) => !row.activeCall || row === first)
+        : inspected;
       const selected = selectAutomaticMeeting(rows, {
         googleMeet: true,
         slack: true,
       });
-      if (!selected) return { blocked: true };
-      const session = await getSessionForRequest();
-      if (!session || session.user.id !== userId) return { blocked: true };
-      if (listenerStore.getState().live.sessionId !== live.sessionId)
+      const quarantine = async () => {
+        const current = listenerStore.getState().live;
+        if (current.status !== "active" || current.sessionId !== sessionId)
+          return { blocked: false };
+        await observeSharedRecording({
+          sessionId,
+          platform: "unverified",
+          callIdentity: null,
+          observedAtMs: Date.now(),
+          accessToken: "",
+          userId,
+        });
+        return { blocked: true, quarantined: true };
+      };
+      if (!selected) return quarantine();
+      const session = await getSessionForRequest().catch(() => null);
+      if (!session || session.user.id !== userId) return quarantine();
+      const current = listenerStore.getState().live;
+      if (current.status !== "active" || current.sessionId !== sessionId)
         return { blocked: false };
       await observeSharedRecording({
-        sessionId: live.sessionId,
+        sessionId,
         platform: selected.platform,
         callIdentity:
           selected.platform === "googleMeet"
@@ -262,8 +298,9 @@ export function SharedRecordingPreferences({
 export function SharedRecordingQueue({ userId }: { userId: string }) {
   const auth = useAuth();
   const { getSessionForRequest } = auth;
-  const observation = useQuery<{ blocked: boolean }>({
+  const observation = useQuery<{ blocked: boolean; quarantined?: boolean }>({
     queryKey: ["shared-recording-observation", userId],
+    queryFn: skipToken,
     enabled: false,
   });
   const queue = useQuery({
@@ -283,6 +320,11 @@ export function SharedRecordingQueue({ userId }: { userId: string }) {
     onSettled: () => queue.refetch(),
   });
   const pending = queue.data?.filter((job) => job.state !== "uploaded") ?? [];
+  const quarantined = pending.filter((job) => job.state.startsWith("blocked_"));
+  const retryable = pending.filter((job) => !job.state.startsWith("blocked_"));
+  const reasons = [
+    ...new Set(quarantined.map((job) => job.error).filter(Boolean)),
+  ];
   if (queue.error)
     return (
       <p role="alert" className="text-sm">
@@ -294,10 +336,14 @@ export function SharedRecordingQueue({ userId }: { userId: string }) {
   if (!pending.length)
     return observation.error || observation.data?.blocked ? (
       <p role="status" className="text-muted-foreground text-sm">
-        <Trans>
-          Meeting identity could not be verified. Recording stays local; sharing
-          will retry while the call is active.
-        </Trans>
+        {observation.data?.quarantined ? (
+          "Meeting activity could not be verified throughout this recording. Original audio stays local; start a new recording in a new note with one verified call to share."
+        ) : (
+          <Trans>
+            Meeting identity could not be verified. Recording stays local;
+            sharing will retry while the call is active.
+          </Trans>
+        )}
       </p>
     ) : null;
   return (
@@ -306,19 +352,38 @@ export function SharedRecordingQueue({ userId }: { userId: string }) {
       role="status"
     >
       <span>
-        {pending.length} <Trans>recordings waiting to share</Trans>
-        {pending.some((job) => job.state === "error")
+        {retryable.length > 0 ? (
+          <>
+            {retryable.length} <Trans>recordings waiting to share</Trans>
+          </>
+        ) : null}
+        {retryable.some((job) => job.state === "error")
           ? " · upload will retry"
           : ""}
+        {quarantined.length > 0 ? (
+          <span className="block" role="alert">
+            {quarantined.length}{" "}
+            {quarantined.length === 1
+              ? "recording kept locally."
+              : "recordings kept locally."}
+            {reasons.map((reason) => (
+              <span key={reason} className="block">
+                {reason}
+              </span>
+            ))}
+          </span>
+        ) : null}
       </span>
-      <Button
-        variant="outline"
-        size="sm"
-        disabled={retry.isPending}
-        onClick={() => retry.mutate()}
-      >
-        <Trans>Retry uploads</Trans>
-      </Button>
+      {retryable.length > 0 ? (
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={retry.isPending}
+          onClick={() => retry.mutate()}
+        >
+          <Trans>Retry uploads</Trans>
+        </Button>
+      ) : null}
     </div>
   );
 }

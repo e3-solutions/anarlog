@@ -23,7 +23,8 @@ export type SharedRecordingJob = {
     | "uploaded"
     | "error"
     | "blocked_storage"
-    | "blocked_timeline";
+    | "blocked_timeline"
+    | "blocked_identity";
   error: string | null;
 };
 
@@ -50,7 +51,7 @@ export function flushSharedRecordings(accessToken: string, userId: string) {
 
 export function observeSharedRecording(input: {
   sessionId: string;
-  platform: "googleMeet" | "slack";
+  platform: "googleMeet" | "slack" | "unverified";
   callIdentity: string | null;
   observedAtMs: number;
   accessToken: string;

@@ -20,20 +20,26 @@ const mocks = vi.hoisted(() => ({
   flush: vi.fn(),
   inspection: vi.fn(),
   uploaded: false,
+  quarantined: false,
+  authUnavailable: false,
+  live: { status: "active", sessionId: "session-one" },
 }));
 
 vi.mock("~/auth", () => ({
   useAuth: () => ({
     session: { user: { id: "account-one" } },
-    getSessionForRequest: async () => ({
-      user: { id: "account-one" },
-      access_token: "token",
-    }),
+    getSessionForRequest: async () => {
+      if (mocks.authUnavailable) throw new Error("offline");
+      return {
+        user: { id: "account-one" },
+        access_token: "token",
+      };
+    },
   }),
 }));
 vi.mock("~/store/zustand/listener/instance", () => ({
   listenerStore: {
-    getState: () => ({ live: { status: "active", sessionId: "session-one" } }),
+    getState: () => ({ live: mocks.live }),
   },
 }));
 vi.mock("@anlg/plugin-detect", () => ({
@@ -53,6 +59,7 @@ vi.mock("./native", () => ({
     mocks.saved = config;
     return config;
   },
+  sharedRecordingQueue: async () => [],
 }));
 vi.mock("./client", () => ({
   sharedRecordingsPreviewUrl: "http://localhost:8789",
@@ -61,14 +68,114 @@ vi.mock("./client", () => ({
 import {
   SharedRecordingLifecycle,
   SharedRecordingPreferences,
+  SharedRecordingQueue,
 } from "./lifecycle";
 
 afterEach(() => {
   cleanup();
   mocks.saved = null;
   mocks.openIntegration.mockReset();
+  mocks.live = { status: "active", sessionId: "session-one" };
+  mocks.quarantined = false;
+  mocks.authUnavailable = false;
+  mocks.observe.mockReset();
+  mocks.flush.mockReset();
+  mocks.inspection.mockReset();
   focusManager.setFocused(undefined);
   vi.useRealTimers();
+});
+
+it("keeps unverified active captures local without quarantining a stopped capture from a stale inspection", async () => {
+  mocks.saved = {
+    enabled: true,
+    userId: "account-one",
+    organizationId: "organization-one",
+    apiBaseUrl: "http://localhost:8789",
+    connections: [],
+  };
+  mocks.observe.mockImplementation(async (input) => {
+    if (input.platform === "unverified") mocks.quarantined = true;
+  });
+  mocks.authUnavailable = true;
+  mocks.inspection.mockResolvedValue({
+    status: "error",
+    error: "AX unavailable",
+  });
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const view = render(
+    <QueryClientProvider client={client}>
+      <SharedRecordingLifecycle />
+      <SharedRecordingQueue userId="account-one" />
+    </QueryClientProvider>,
+  );
+  await waitFor(() => expect(mocks.quarantined).toBe(true));
+  await waitFor(() =>
+    expect(screen.getByRole("status").textContent).toContain(
+      "start a new recording",
+    ),
+  );
+  view.unmount();
+  client.clear();
+  mocks.quarantined = false;
+  let finishInspection!: (inspection: {
+    status: "error";
+    error: string;
+  }) => void;
+  let inspectionStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    inspectionStarted = resolve;
+  });
+  mocks.inspection.mockImplementationOnce(() => {
+    inspectionStarted();
+    return new Promise((resolve) => {
+      finishInspection = resolve;
+    });
+  });
+  render(
+    <QueryClientProvider client={client}>
+      <SharedRecordingLifecycle />
+    </QueryClientProvider>,
+  );
+  await started;
+  mocks.live = { status: "inactive", sessionId: "session-one" };
+  await act(async () => {
+    finishInspection({ status: "error", error: "AX unavailable" });
+  });
+  await waitFor(() =>
+    expect(
+      client.getQueryData(["shared-recording-observation", "account-one"]),
+    ).toEqual({ blocked: false }),
+  );
+  expect(mocks.quarantined).toBe(false);
+  cleanup();
+  client.clear();
+  mocks.live = { status: "active", sessionId: "session-two" };
+  mocks.inspection.mockResolvedValue({
+    status: "ok",
+    data: [
+      {
+        activeCall: true,
+        accessibilityTrusted: true,
+        warnings: [],
+        platform: "googleMeet",
+        app: { id: "com.google.Chrome", name: "Chrome" },
+        pid: 123,
+        callIdentity: "https://meet.google.com/abc-defg-hij:window:aaa",
+      },
+    ],
+  });
+  const authFailure = render(
+    <QueryClientProvider client={client}>
+      <SharedRecordingLifecycle />
+    </QueryClientProvider>,
+  );
+  await waitFor(() => expect(mocks.quarantined).toBe(true));
+  mocks.quarantined = false;
+  authFailure.unmount();
+  expect(mocks.quarantined).toBe(true);
+  client.clear();
 });
 
 it("newly connected Slack accounts can enable sharing for their selected organization", async () => {

@@ -12,6 +12,8 @@ use tauri::Manager;
 use tauri_plugin_fs_sync::FsSyncPluginExt;
 use tauri_plugin_settings::SettingsPluginExt;
 
+const QUARANTINED_MESSAGE: &str = "Meeting activity could not be verified throughout this recording. Original audio stays local; start a new recording in a new note with one verified call to share.";
+
 #[derive(Clone, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Connection {
@@ -91,11 +93,23 @@ struct RawTimeline {
     owner: Option<Configuration>,
     started_at_ms: i64,
     storage_failed: bool,
+    stopped_at_ms: Option<i64>,
+}
+impl RawTimeline {
+    fn owned_by(&self, config: &Configuration) -> bool {
+        self.owner.as_ref().is_some_and(|owner| {
+            owner.user_id == config.user_id
+                && owner.organization_id == config.organization_id
+                && owner.api_base_url == config.api_base_url
+        })
+    }
 }
 #[derive(Default)]
 pub(crate) struct QueueState {
     pub(crate) pins: Mutex<HashSet<String>>,
     serial: tokio::sync::Mutex<()>,
+    // Quarantine cannot wait behind audio preparation or provider requests.
+    bindings: Mutex<()>,
     observe_serial: tokio::sync::Mutex<()>,
     flush_serial: tokio::sync::Mutex<()>,
     raw: Mutex<HashMap<String, RawTimeline>>,
@@ -117,6 +131,11 @@ pub(crate) fn start_raw<R: tauri::Runtime>(
     session_id: &str,
     owner_user_id: Option<&str>,
 ) -> bool {
+    let state = app.state::<QueueState>();
+    let _binding = state
+        .bindings
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let owner = directory(app)
         .ok()
         .and_then(|d| {
@@ -331,6 +350,102 @@ fn bound(config: &Configuration, user: &str) -> Result<(), String> {
 fn job_path(dir: &Path, id: &str) -> PathBuf {
     dir.join(id).join("job.json")
 }
+fn quarantine_binding(
+    dir: &Path,
+    config: &Configuration,
+    session_id: &str,
+    platform: &str,
+    observed_at_ms: i64,
+) -> Result<(), String> {
+    let path = dir.join(format!("binding-{}.json", key(session_id)));
+    let mut binding = read::<Binding>(&path)?.unwrap_or(Binding {
+        session_id: session_id.into(),
+        user_id: config.user_id.clone(),
+        organization_id: config.organization_id.clone(),
+        api_base_url: config.api_base_url.clone(),
+        admission: Value::Null,
+        observed_at_ms,
+        platform: platform.into(),
+        call_identity: None,
+        verification_pending: false,
+        connection_id: None,
+    });
+    if binding.user_id != config.user_id
+        || binding.organization_id != config.organization_id
+        || binding.api_base_url != config.api_base_url
+    {
+        return Err("Capture belongs to another sharing account".into());
+    }
+    binding.admission = Value::Null;
+    binding.verification_pending = false;
+    save(&path, &binding)
+}
+fn quarantine_configuration_change(
+    dir: &Path,
+    state: &QueueState,
+    config: &Configuration,
+    changed_at_ms: i64,
+) -> Result<(), String> {
+    if let Some(previous) = read::<Configuration>(&dir.join("configuration.json"))? {
+        let connections = |config: &Configuration| {
+            config
+                .connections
+                .iter()
+                .map(|connection| {
+                    (
+                        connection.integration_id.clone(),
+                        connection.connection_id.clone(),
+                        connection.status.clone(),
+                    )
+                })
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        if previous.enabled
+            && (!config.enabled
+                || previous.user_id != config.user_id
+                || previous.organization_id != config.organization_id
+                || previous.api_base_url != config.api_base_url
+                || connections(&previous) != connections(config))
+        {
+            let captures = state
+                .raw
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .iter()
+                .filter(|(_, timeline)| {
+                    timeline
+                        .stopped_at_ms
+                        .is_none_or(|stopped| stopped >= changed_at_ms)
+                        && timeline.owned_by(&previous)
+                })
+                .map(|(session_id, _)| session_id.clone())
+                .collect::<Vec<_>>();
+            for session_id in captures {
+                quarantine_binding(dir, &previous, &session_id, "unverified", changed_at_ms)?;
+            }
+        }
+    }
+    Ok(())
+}
+fn quarantine_unadmitted(
+    dir: &Path,
+    state: &QueueState,
+    config: &Configuration,
+    session_id: &str,
+    platform: &str,
+    observed_at_ms: i64,
+) -> Result<(), String> {
+    if state
+        .raw
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .get(session_id)
+        .is_some_and(|timeline| timeline.owned_by(config))
+    {
+        quarantine_binding(dir, config, session_id, platform, observed_at_ms)?;
+    }
+    Ok(())
+}
 
 pub(crate) fn prune_playback<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let Ok(base) = app.path().app_data_dir() else {
@@ -371,13 +486,27 @@ pub async fn shared_recording_configure<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     config: Configuration,
 ) -> Result<Configuration, String> {
+    let changed_at_ms = chrono::Utc::now().timestamp_millis();
     validate_url(&config.api_base_url)?;
     if config.organization_id.is_empty() || config.user_id.is_empty() {
         return Err("Choose an organization and signed-in account".into());
     }
     let queue_state = app.state::<QueueState>();
+    let dir = directory(&app)?;
+    {
+        let _binding = queue_state
+            .bindings
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        quarantine_configuration_change(&dir, &queue_state, &config, changed_at_ms)?;
+    }
     let _guard = queue_state.serial.lock().await;
-    save(&directory(&app)?.join("configuration.json"), &config)?;
+    let _binding = queue_state
+        .bindings
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    quarantine_configuration_change(&dir, &queue_state, &config, changed_at_ms)?;
+    save(&dir.join("configuration.json"), &config)?;
     Ok(config)
 }
 #[tauri::command]
@@ -392,11 +521,33 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
     user_id: String,
 ) -> Result<(), String> {
     let queue_state = app.state::<QueueState>();
-    let _observation = queue_state.observe_serial.lock().await;
     let dir = directory(&app)?;
-    let config: Configuration =
-        read(&dir.join("configuration.json"))?.ok_or("Shared recording is not configured")?;
-    bound(&config, &user_id)?;
+    if platform == "unverified" {
+        let _binding = queue_state
+            .bindings
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let config: Configuration =
+            read(&dir.join("configuration.json"))?.ok_or("Shared recording is not configured")?;
+        bound(&config, &user_id)?;
+        let active_owner = queue_state
+            .raw
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(&session_id)
+            .is_some_and(|timeline| {
+                timeline.owned_by(&config)
+                    && observed_at_ms >= timeline.started_at_ms
+                    && timeline
+                        .stopped_at_ms
+                        .is_none_or(|stopped| observed_at_ms <= stopped)
+            });
+        if !active_owner {
+            return Err("Capture is no longer active under this sharing account".into());
+        }
+        return quarantine_binding(&dir, &config, &session_id, &platform, observed_at_ms);
+    }
+    let _observation = queue_state.observe_serial.lock().await;
     let provider = match platform.as_str() {
         "googleMeet" => "google_meet",
         "slack" => "slack_huddle",
@@ -407,53 +558,90 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
     } else {
         "slack"
     };
-    let connections: Vec<_> = config
-        .connections
-        .iter()
-        .filter(|c| c.status == "connected" && c.integration_id == integration)
-        .collect();
-    if connections.len() != 1 {
-        return Err("Connect exactly one account for this meeting provider".into());
-    }
-    let connection = connections[0];
     let path = dir.join(format!("binding-{}.json", key(&session_id)));
-    let existing = read::<Binding>(&path)?;
-    if let Some(mut binding) = existing.clone() {
-        if binding.user_id != user_id
-            || binding.organization_id != config.organization_id
-            || binding.api_base_url != config.api_base_url
-        {
-            return Err("Capture is already bound to a different account".into());
-        }
-        if binding.platform != platform
-            || (binding.call_identity.is_some()
-                && call_identity.is_some()
-                && binding.call_identity != call_identity)
-        {
-            binding.admission = Value::Null;
+    let (config, connection_id, first_admission) = {
+        let _preparation = queue_state.serial.lock().await;
+        let _binding = queue_state
+            .bindings
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let config: Configuration =
+            read(&dir.join("configuration.json"))?.ok_or("Shared recording is not configured")?;
+        bound(&config, &user_id)?;
+        let existing = read::<Binding>(&path)?;
+        if let Some(mut binding) = existing.clone() {
+            if binding.user_id != user_id
+                || binding.organization_id != config.organization_id
+                || binding.api_base_url != config.api_base_url
+            {
+                return Err("Capture is already bound to a different account".into());
+            }
+            if binding.platform != platform
+                || (binding.call_identity.is_some()
+                    && call_identity.is_some()
+                    && binding.call_identity != call_identity)
+            {
+                binding.admission = Value::Null;
+                save(&path, &binding)?;
+                return Err(
+                    "Meeting changed during this recording; start a new recording to share it"
+                        .into(),
+                );
+            }
+            if binding.admission.is_null() {
+                return Err(QUARANTINED_MESSAGE.into());
+            }
+            binding.verification_pending = true;
             save(&path, &binding)?;
-            return Err(
-                "Meeting changed during this recording; start a new recording to share it".into(),
-            );
         }
-        if binding.admission.is_null() {
-            return Err(
-                "This recording spans different meetings and cannot be shared automatically".into(),
-            );
+        let first_admission = existing.is_none();
+        let connections: Vec<_> = config
+            .connections
+            .iter()
+            .filter(|c| c.status == "connected" && c.integration_id == integration)
+            .collect();
+        if connections.len() != 1 {
+            if first_admission {
+                quarantine_unadmitted(
+                    &dir,
+                    &queue_state,
+                    &config,
+                    &session_id,
+                    &platform,
+                    observed_at_ms,
+                )?;
+            }
+            return Err("Connect exactly one account for this meeting provider".into());
         }
-        binding.verification_pending = true;
-        save(&path, &binding)?;
-        if binding
-            .connection_id
-            .as_ref()
-            .is_some_and(|id| id != &connection.connection_id)
-        {
-            return Err("Meeting connection changed; original stays local".into());
+        let connection = connections[0];
+        if let Some(binding) = existing.as_ref() {
+            if binding
+                .connection_id
+                .as_ref()
+                .is_some_and(|id| id != &connection.connection_id)
+            {
+                return Err("Meeting connection changed; original stays local".into());
+            }
+            if binding.call_identity.is_some() && call_identity.is_none() {
+                return Err("Meeting identity is unavailable; verification will retry".into());
+            }
         }
-        if binding.call_identity.is_some() && call_identity.is_none() {
-            return Err("Meeting identity is unavailable; verification will retry".into());
+        if access_token.is_empty() {
+            if first_admission {
+                quarantine_unadmitted(
+                    &dir,
+                    &queue_state,
+                    &config,
+                    &session_id,
+                    &platform,
+                    observed_at_ms,
+                )?;
+            }
+            return Err("Sign in again to verify this meeting; original audio stays local".into());
         }
-    }
+        let connection_id = connection.connection_id.clone();
+        (config, connection_id, first_admission)
+    };
     validate_url(&config.api_base_url)?;
     let url = format!(
         "{}/v1/orgs/{}/shared-recordings/admit",
@@ -462,9 +650,39 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
     );
     let request_started_at_ms = chrono::Utc::now().timestamp_millis();
     let resolved = async {
-        json_body(success(client()?.post(url).bearer_auth(access_token).json(&json!({"provider":provider,"roomIdentity":call_identity,"connectionId":connection.connection_id})).send().await.map_err(|e|e.to_string())?).await?).await
+        json_body(success(client()?.post(url).bearer_auth(access_token).json(&json!({"provider":provider,"roomIdentity":call_identity,"connectionId":connection_id})).send().await.map_err(|e|e.to_string())?).await?).await
     }.await;
-    let mut admission = resolved?;
+    let resolved = resolved.and_then(|admission| {
+        if admission
+            .get("occurrenceId")
+            .and_then(Value::as_str)
+            .is_some_and(|id| !id.is_empty())
+        {
+            Ok(admission)
+        } else {
+            Err("Provider did not resolve a meeting occurrence".into())
+        }
+    });
+    let mut admission = match resolved {
+        Ok(admission) => admission,
+        Err(error) => {
+            let _binding = queue_state
+                .bindings
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if first_admission {
+                quarantine_unadmitted(
+                    &dir,
+                    &queue_state,
+                    &config,
+                    &session_id,
+                    &platform,
+                    observed_at_ms,
+                )?;
+            }
+            return Err(error);
+        }
+    };
     let response_at_ms = chrono::Utc::now().timestamp_millis();
     admission["localClockReferenceMs"] = json!(
         request_started_at_ms
@@ -472,14 +690,11 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
     );
     admission["clockUncertaintyMs"] =
         json!(response_at_ms.saturating_sub(request_started_at_ms).max(0) / 2);
-    if admission
-        .get("occurrenceId")
-        .and_then(Value::as_str)
-        .is_none()
-    {
-        return Err("Provider did not resolve a meeting occurrence".into());
-    }
     let _guard = queue_state.serial.lock().await;
+    let _binding = queue_state
+        .bindings
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let current: Configuration =
         read(&dir.join("configuration.json"))?.ok_or("Shared recording disabled")?;
     bound(&current, &user_id)?;
@@ -491,12 +706,17 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
     if current.organization_id != config.organization_id
         || current.api_base_url != config.api_base_url
         || current_connections.len() != 1
-        || current_connections[0].connection_id != connection.connection_id
+        || current_connections[0].connection_id != connection_id
     {
         return Err("Account configuration changed during admission".into());
     }
-    let connection_id = connection.connection_id.clone();
+    let existing = read::<Binding>(&path)?;
     if let Some(mut binding) = existing {
+        if binding.admission.is_null() {
+            return Err(
+                "Meeting activity became unverified during admission; original stays local".into(),
+            );
+        }
         if binding.admission["occurrenceId"] != admission["occurrenceId"] {
             binding.admission = Value::Null;
             save(&path, &binding)?;
@@ -650,13 +870,16 @@ pub async fn shared_recording_enqueue<R: tauri::Runtime>(
     }
     private_directory(&job_dir)?;
     copy_private(&path, &job_dir.join("original.audio"))?;
-    let binding = read::<Binding>(&dir.join(format!("binding-{}.json", key(&session_id))))?
-        .filter(|b| {
+    let observed_binding =
+        read::<Binding>(&dir.join(format!("binding-{}.json", key(&session_id))))?.filter(|b| {
             b.user_id == config.user_id
                 && b.organization_id == config.organization_id
                 && b.api_base_url == config.api_base_url
-        })
-        .and_then(|b| b.valid_binding().then_some(b.admission));
+        });
+    let identity_quarantined = observed_binding
+        .as_ref()
+        .is_some_and(|binding| binding.admission.is_null());
+    let binding = observed_binding.and_then(|b| b.valid_binding().then_some(b.admission));
     let gaps = app
         .state::<QueueState>()
         .raw
@@ -681,8 +904,19 @@ pub async fn shared_recording_enqueue<R: tauri::Runtime>(
     let mut job = Job {
         id,
         session_id,
-        state: if storage_failed { "blocked_storage" } else { "preparing" }.into(),
-        error: storage_failed.then(|| "Audio storage reported a failure. Original retained; sharing is blocked until its timeline can be verified.".into()),
+        state: if storage_failed {
+            "blocked_storage"
+        } else if identity_quarantined {
+            "blocked_identity"
+        } else {
+            "preparing"
+        }
+        .into(),
+        error: if storage_failed {
+            Some("Audio storage reported a failure. Original retained; sharing is blocked until its timeline can be verified.".into())
+        } else {
+            identity_quarantined.then(|| QUARANTINED_MESSAGE.into())
+        },
         user_id: config.user_id,
         organization_id: config.organization_id,
         device_id,
@@ -697,7 +931,7 @@ pub async fn shared_recording_enqueue<R: tauri::Runtime>(
     };
     save(&job_path(&dir, &job.id), &job)?;
     drop(_audio);
-    if storage_failed {
+    if storage_failed || identity_quarantined {
         return Ok(Some(job));
     }
     let target = job_dir.clone();
@@ -765,9 +999,23 @@ pub async fn shared_recording_flush<R: tauri::Runtime>(
         }
         if job.state == "blocked_storage"
             || job.state == "blocked_timeline"
+            || job.state == "blocked_identity"
             || job.organization_id != config.organization_id
             || job.api_base_url != config.api_base_url
         {
+            continue;
+        }
+        let binding_path = dir.join(format!("binding-{}.json", key(&job.session_id)));
+        if read::<Binding>(&binding_path)?.is_some_and(|binding| {
+            binding.admission.is_null()
+                && binding.user_id == user_id
+                && binding.organization_id == config.organization_id
+                && binding.api_base_url == config.api_base_url
+        }) {
+            job.state = "blocked_identity".into();
+            job.binding = None;
+            job.error = Some(QUARANTINED_MESSAGE.into());
+            save(&job_path(&dir, &job.id), &job)?;
             continue;
         }
         if job.segments.is_empty() {
@@ -794,7 +1042,6 @@ pub async fn shared_recording_flush<R: tauri::Runtime>(
                 }
             }
         }
-        let binding_path = dir.join(format!("binding-{}.json", key(&job.session_id)));
         if let Some(binding) = read::<Binding>(&binding_path)?.filter(|binding| {
             binding.verification_pending
                 && !binding.admission.is_null()
@@ -849,7 +1096,7 @@ pub async fn shared_recording_flush<R: tauri::Runtime>(
         if job.binding.is_none() {
             continue;
         }
-        match upload(&dir, &job, &access_token).await {
+        match upload(&dir, &job, &access_token, &queue_state).await {
             Ok(()) => {
                 job.state = "uploaded".into();
                 job.error = None;
@@ -866,7 +1113,11 @@ pub async fn shared_recording_flush<R: tauri::Runtime>(
     }
     Ok(())
 }
-fn verify_upload_binding(dir: &Path, job: &Job) -> Result<(), String> {
+fn verify_upload_binding(dir: &Path, job: &Job, state: &QueueState) -> Result<(), String> {
+    let _binding = state
+        .bindings
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let latest = read::<Binding>(&dir.join(format!("binding-{}.json", key(&job.session_id))))?
         .ok_or("Meeting admission is unavailable; original retained")?;
     let admission = job.binding.as_ref().ok_or("Meeting identity unresolved")?;
@@ -902,7 +1153,7 @@ fn verify_upload_binding(dir: &Path, job: &Job) -> Result<(), String> {
     }
     Ok(())
 }
-async fn upload(dir: &Path, job: &Job, token: &str) -> Result<(), String> {
+async fn upload(dir: &Path, job: &Job, token: &str, state: &QueueState) -> Result<(), String> {
     let binding = job.binding.as_ref().ok_or("Meeting identity unresolved")?;
     let occurrence = binding["occurrenceId"]
         .as_str()
@@ -929,7 +1180,7 @@ async fn upload(dir: &Path, job: &Job, token: &str) -> Result<(), String> {
         .saturating_sub(provider_started)
         .saturating_mul(16);
     for (sequence, segment) in job.segments.iter().enumerate() {
-        verify_upload_binding(dir, job)?;
+        verify_upload_binding(dir, job, state)?;
         let bytes = std::fs::read(dir.join(&job.id).join(format!("{sequence}.wav")))
             .map_err(|e| e.to_string())?;
         if digest(&bytes) != segment.sha256 {
@@ -945,11 +1196,13 @@ async fn upload(dir: &Path, job: &Job, token: &str) -> Result<(), String> {
             })
             .collect();
         let metadata = json!({"uploaderId":job.user_id,"deviceId":job.device_id,"localCaptureId":job.id,"segmentSequence":sequence,"localSessionId":job.session_id,"localTranscriptId":job.transcript_id,"sha256":segment.sha256,"offsetFrames":offset,"rank":0,"gaps":gaps,"timingBasis":"device_clock_hint"});
-        success(client()?.post(format!("{base}/captures/{}:{sequence}",job.id)).bearer_auth(token).json(&json!({"metadata":metadata,"wavBase64":base64::engine::general_purpose::STANDARD.encode(bytes)})).send().await.map_err(|e|e.to_string())?).await?;
+        let request = client()?.post(format!("{base}/captures/{}:{sequence}",job.id)).bearer_auth(token).json(&json!({"metadata":metadata,"wavBase64":base64::engine::general_purpose::STANDARD.encode(bytes)}));
+        verify_upload_binding(dir, job, state)?;
+        success(request.send().await.map_err(|e| e.to_string())?).await?;
         offset += segment.frames as i64;
         segment_start += segment.frames;
     }
-    verify_upload_binding(dir, job)?;
+    verify_upload_binding(dir, job, state)?;
     success(
         client()?
             .post(format!("{base}/process"))
@@ -1031,13 +1284,22 @@ pub async fn shared_recording_download<R: tauri::Runtime>(
     Ok(path.to_string_lossy().to_string())
 }
 
-pub(crate) fn snapshot_stopped(
-    app: &tauri::AppHandle,
+pub(crate) fn snapshot_stopped<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
     session_id: &str,
     audio_path: Option<&str>,
     started_at_ms: Option<i64>,
     stopped_at_ms: i64,
 ) {
+    if let Some(timeline) = app
+        .state::<QueueState>()
+        .raw
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .get_mut(session_id)
+    {
+        timeline.stopped_at_ms = Some(stopped_at_ms);
+    }
     let Some(audio_path) = audio_path.map(str::to_string) else {
         return;
     };
@@ -1124,6 +1386,230 @@ mod tests {
             }],
             raw_frames: Some(16000),
         }
+    }
+
+    #[tokio::test]
+    async fn unverified_capture_quarantine_survives_a_late_admission_and_blocks_cached_uploads() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let api_base_url = format!("http://{}", listener.local_addr().unwrap());
+        let mut context = tauri::test::mock_context(tauri::test::noop_assets());
+        context.config_mut().identifier =
+            format!("ai.e3group.shared-quarantine-test-{}", uuid::Uuid::new_v4());
+        let app = tauri::test::mock_builder()
+            .manage(QueueState::default())
+            .build(context)
+            .unwrap();
+        let handle = app.handle().clone();
+        let config = Configuration {
+            enabled: true,
+            user_id: "user".into(),
+            organization_id: "org".into(),
+            api_base_url: api_base_url.clone(),
+            connections: vec![Connection {
+                integration_id: "slack".into(),
+                connection_id: "connection".into(),
+                status: "connected".into(),
+            }],
+        };
+        shared_recording_configure(handle.clone(), config.clone())
+            .await
+            .unwrap();
+        let observe = |session: &str, platform: &str| {
+            shared_recording_observe(
+                handle.clone(),
+                session.into(),
+                platform.into(),
+                None,
+                chrono::Utc::now().timestamp_millis(),
+                "token".into(),
+                "user".into(),
+            )
+        };
+        assert!(start_raw(&handle, "unconnected-provider", Some("user")));
+        assert!(observe("unconnected-provider", "googleMeet").await.is_err());
+        assert!(observe("unconnected-provider", "slack").await.is_err());
+        assert!(start_raw(&handle, "before-identity", Some("user")));
+        observe("before-identity", "unverified").await.unwrap();
+        assert!(observe("before-identity", "slack").await.is_err());
+        assert!(start_raw(&handle, "stopped", Some("user")));
+        let stopped_at_ms = chrono::Utc::now().timestamp_millis();
+        snapshot_stopped(&handle, "stopped", None, None, stopped_at_ms);
+        assert!(
+            shared_recording_observe(
+                handle.clone(),
+                "stopped".into(),
+                "unverified".into(),
+                None,
+                stopped_at_ms + 1,
+                "".into(),
+                "user".into()
+            )
+            .await
+            .is_err()
+        );
+        let dir = directory(&handle).unwrap();
+        assert!(
+            read::<Binding>(&dir.join(format!("binding-{}.json", key("stopped"))))
+                .unwrap()
+                .is_none()
+        );
+        assert!(start_raw(&handle, "stopping", Some("user")));
+        let observed_at_ms = chrono::Utc::now().timestamp_millis();
+        snapshot_stopped(&handle, "stopping", None, None, observed_at_ms + 1);
+        shared_recording_observe(
+            handle.clone(),
+            "stopping".into(),
+            "unverified".into(),
+            None,
+            observed_at_ms,
+            "".into(),
+            "user".into(),
+        )
+        .await
+        .unwrap();
+        assert!(start_raw(&handle, "disabled", Some("user")));
+        let state = handle.state::<QueueState>();
+        let gate = state.serial.lock().await;
+        let disable = shared_recording_configure(
+            handle.clone(),
+            Configuration {
+                enabled: false,
+                ..config.clone()
+            },
+        );
+        let check_configuration_boundary = async {
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    if read::<Binding>(&dir.join(format!("binding-{}.json", key("disabled"))))
+                        .unwrap()
+                        .is_some_and(|binding| binding.admission.is_null())
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                }
+            })
+            .await
+            .unwrap();
+            drop(gate);
+        };
+        let (disabled, ()) = tokio::join!(disable, check_configuration_boundary);
+        disabled.unwrap();
+        shared_recording_configure(handle.clone(), config)
+            .await
+            .unwrap();
+        assert!(observe("disabled", "slack").await.is_err());
+        assert!(start_raw(&handle, "in-flight", Some("user")));
+        assert!(start_raw(&handle, "first-failure", Some("user")));
+        let (ready, received) = tokio::sync::oneshot::channel();
+        let (release, wait) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let mut ready = Some(ready);
+            for status in [503, 200] {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                let mut headers = Vec::new();
+                while !headers.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0];
+                    stream.read_exact(&mut byte).unwrap();
+                    headers.push(byte[0]);
+                }
+                let length = String::from_utf8_lossy(&headers)
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap_or(0);
+                stream.read_exact(&mut vec![0; length]).unwrap();
+                if status == 200 {
+                    ready.take().unwrap().send(()).unwrap();
+                    wait.recv_timeout(std::time::Duration::from_secs(5))
+                        .unwrap();
+                }
+                let body = if status == 200 {
+                    r#"{"occurrenceId":"late"}"#
+                } else {
+                    "{}"
+                };
+                write!(stream, "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+        });
+        assert!(observe("first-failure", "slack").await.is_err());
+        assert!(
+            read::<Binding>(&dir.join(format!("binding-{}.json", key("first-failure"))))
+                .unwrap()
+                .unwrap()
+                .admission
+                .is_null()
+        );
+        assert!(observe("first-failure", "slack").await.is_err());
+        let mut job = job_fixture();
+        job.session_id = "in-flight".into();
+        job.api_base_url = api_base_url;
+        job.binding = Some(json!({"occurrenceId":"late"}));
+        private_directory(&dir.join(&job.id)).unwrap();
+        write_private(
+            &dir.join(&job.id).join("original.audio"),
+            b"original retained",
+        )
+        .unwrap();
+        save(&job_path(&dir, &job.id), &job).unwrap();
+        let quarantine = async {
+            tokio::time::timeout(std::time::Duration::from_secs(5), received)
+                .await
+                .unwrap()
+                .unwrap();
+            let gate = state.serial.lock().await;
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                observe("in-flight", "unverified"),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert!(
+                read::<Binding>(&dir.join(format!("binding-{}.json", key("in-flight"))))
+                    .unwrap()
+                    .unwrap()
+                    .admission
+                    .is_null()
+            );
+            shared_recording_flush(handle.clone(), "token".into(), "user".into())
+                .await
+                .unwrap();
+            assert_eq!(
+                shared_recording_queue(handle.clone(), "user".into())
+                    .await
+                    .unwrap()[0]
+                    .state,
+                "blocked_identity"
+            );
+            release.send(()).unwrap();
+            drop(gate);
+        };
+        let (admission, ()) = tokio::join!(observe("in-flight", "slack"), quarantine);
+        assert!(admission.is_err());
+        assert!(observe("in-flight", "slack").await.is_err());
+        let jobs = shared_recording_queue(handle.clone(), "user".into())
+            .await
+            .unwrap();
+        assert_eq!(jobs[0].state, "blocked_identity");
+        assert!(jobs[0].binding.is_none());
+        assert!(
+            jobs[0]
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("start a new recording")
+        );
+        assert!(dir.join(&job.id).join("original.audio").exists());
+        server.join().unwrap();
+        std::fs::remove_dir_all(dir.parent().unwrap()).unwrap();
     }
 
     #[tokio::test]

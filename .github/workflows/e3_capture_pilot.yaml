@@ -152,7 +152,8 @@ jobs:
           if-no-files-found: error
       - name: Validate shared recording native queue and source pipeline
         run: |
-          cargo test --locked -p listener-core --lib
+          # Writer latency checks must not compete with other tests' MP3 encoders.
+          cargo test --locked -p listener-core --lib -- --test-threads=1
           cargo test --locked -p tauri-plugin-transcription --lib shared_recording::tests
       - name: Generate transcription bindings with the owning exporter
         run: |
