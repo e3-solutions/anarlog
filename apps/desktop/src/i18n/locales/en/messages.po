@@ -1576,8 +1576,12 @@ msgid "Connect Google Drive"
 msgstr "Connect Google Drive"
 
 #: src/shared-recordings/lifecycle.tsx
-msgid "Connect Google Meet or Slack in Settings before enabling sharing."
-msgstr "Connect Google Meet or Slack in Settings before enabling sharing."
+msgid "Connect Google Meet"
+msgstr "Connect Google Meet"
+
+#: src/shared-recordings/lifecycle.tsx
+msgid "Connect Google Meet or Slack before enabling sharing."
+msgstr "Connect Google Meet or Slack before enabling sharing."
 
 #: src/auth/connect-local-library-dialog.tsx
 #: src/auth/context.tsx
@@ -1602,6 +1606,7 @@ msgstr "Connect Outlook"
 
 #: src/session-sharing/delivery-panel.tsx
 #: src/settings/automations/starter-config.tsx
+#: src/shared-recordings/lifecycle.tsx
 msgid "Connect Slack"
 msgstr "Connect Slack"
 
@@ -6410,6 +6415,10 @@ msgstr "Turn assigned follow-ups into Linear issue drafts."
 #: src/shared-recordings/lifecycle.tsx
 msgid "Turn off"
 msgstr "Turn off"
+
+#: src/shared-recordings/lifecycle.tsx
+msgid "Turn off sharing before connecting another provider."
+msgstr "Turn off sharing before connecting another provider."
 
 #: src/calendar/components/apple/permission.tsx
 msgid "Turn on Anarlog in System Settings → Privacy & Security → Calendars, then return here."

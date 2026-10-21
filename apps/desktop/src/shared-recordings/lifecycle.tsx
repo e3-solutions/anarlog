@@ -17,6 +17,7 @@ import {
 } from "./native";
 
 import { useAuth } from "~/auth";
+import { useOpenIntegrationUrl } from "~/shared/integration";
 import { listenerStore } from "~/store/zustand/listener/instance";
 import { selectAutomaticMeeting } from "~/stt/automatic-meeting";
 
@@ -115,6 +116,7 @@ export function SharedRecordingPreferences({
 }) {
   const config = useSharingConfiguration(account.userId);
   const queryClient = useQueryClient();
+  const { openIntegration, openingAction } = useOpenIntegrationUrl();
   const enabled =
     config.data?.enabled === true &&
     config.data.organizationId === organizationId;
@@ -156,11 +158,52 @@ export function SharedRecordingPreferences({
             published shared transcript.
           </Trans>
         </p>
-        {!account.connections.length ? (
+        {!account.connections.some(
+          (connection) => connection.status === "connected",
+        ) ? (
           <p className="text-muted-foreground">
-            <Trans>
-              Connect Google Meet or Slack in Settings before enabling sharing.
-            </Trans>
+            <Trans>Connect Google Meet or Slack before enabling sharing.</Trans>
+          </p>
+        ) : null}
+        <div className="flex gap-2">
+          {(["google-meet", "slack"] as const).map((integrationId) => {
+            const connection = account.connections.find(
+              (connection) => connection.integrationId === integrationId,
+            );
+            if (connection?.status === "connected") return null;
+            return (
+              <Button
+                key={integrationId}
+                variant="outline"
+                disabled={openingAction !== null || enabled}
+                onClick={() =>
+                  openIntegration({
+                    nangoIntegrationId: integrationId,
+                    connectionId: connection?.connectionId,
+                    action: connection ? "reconnect" : "connect",
+                  })
+                }
+              >
+                {integrationId === "google-meet" ? (
+                  <Trans>Connect Google Meet</Trans>
+                ) : (
+                  <Trans>Connect Slack</Trans>
+                )}
+              </Button>
+            );
+          })}
+        </div>
+        {enabled &&
+        ["google-meet", "slack"].some(
+          (integrationId) =>
+            !account.connections.some(
+              (connection) =>
+                connection.integrationId === integrationId &&
+                connection.status === "connected",
+            ),
+        ) ? (
+          <p className="text-muted-foreground">
+            <Trans>Turn off sharing before connecting another provider.</Trans>
           </p>
         ) : null}
         {config.error || update.error ? (
@@ -177,7 +220,10 @@ export function SharedRecordingPreferences({
         disabled={
           config.isPending ||
           update.isPending ||
-          (!enabled && !account.connections.length)
+          (!enabled &&
+            !account.connections.some(
+              (connection) => connection.status === "connected",
+            ))
         }
         onClick={() => update.mutate()}
       >

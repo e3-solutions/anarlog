@@ -35,6 +35,7 @@ export function SharedRecordingsAccount() {
       return result;
     },
     enabled: !!session && session.user.is_anonymous !== true,
+    refetchInterval: 5_000,
     retry: false,
   });
   const signIn = useMutation({ mutationFn: () => auth.signIn() });
