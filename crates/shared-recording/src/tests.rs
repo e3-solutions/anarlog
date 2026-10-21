@@ -50,12 +50,38 @@ fn unused_late_inputs_do_not_change_revision_but_new_coverage_does() {
 }
 
 #[test]
-fn negative_offset_clips_leading_frames_and_rank_ties_use_capture_identity() {
+fn negative_capture_starts_preserve_prefixes_and_rebase_late_revisions_consistently() {
     let z = source("z", 0, -2, &[1, 2, 3, 4], vec![]);
     let a = source("a", 0, 1, &[8, 9], vec![]);
-    let result = render(4, &[z, a]).unwrap();
-    assert_eq!(decoded(&result.wav), vec![3, 8, 9, 0]);
-    assert_eq!(result.manifest.selections[0].source_start_frame, Some(2));
+    let zero_origin = render(4, std::slice::from_ref(&a)).unwrap();
+    let legacy_manifest = serde_json::to_value(&zero_origin.manifest).unwrap();
+    assert!(legacy_manifest.get("timeline_start_frame").is_none());
+    assert_eq!(
+        serde_json::from_value::<Manifest>(legacy_manifest)
+            .unwrap()
+            .timeline_start_frame,
+        0
+    );
+
+    let result = render(4, &[z.clone(), a.clone()]).unwrap();
+    assert_eq!(decoded(&result.wav), vec![1, 2, 3, 8, 9, 0]);
+    assert_eq!(result.manifest.timeline_start_frame, -2);
+    assert_eq!(result.manifest.duration_frames, 6);
+    assert_eq!(result.manifest.selections[0].source_start_frame, Some(0));
+    let earlier = source("earlier", 0, -4, &[5, 6], vec![]);
+    let revised = render(4, &[a.clone(), earlier.clone(), z.clone()]).unwrap();
+    assert_eq!(decoded(&revised.wav), vec![5, 6, 1, 2, 3, 8, 9, 0]);
+    assert_eq!(revised.manifest.timeline_start_frame, -4);
+    assert_eq!(revised.manifest.duration_frames, 8);
+    assert_ne!(result.revision, revised.revision);
+    assert_eq!(
+        revised.revision,
+        render(4, &[z.clone(), earlier, a.clone()])
+            .unwrap()
+            .revision
+    );
+    assert_eq!(result.revision, render(4, &[z, a]).unwrap().revision);
+    assert!(render(MAX_FRAMES, &[source("early", 0, -1, &[1], vec![])]).is_err());
 }
 
 #[test]

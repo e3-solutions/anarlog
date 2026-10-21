@@ -337,7 +337,8 @@ jobs:
           prefix-key: e3-shared-preview-backend
       - run: rustfmt --check --edition 2024 crates/api-nango/src/integrations.rs crates/api-nango/src/routes/google_meet_presence.rs
       - run: cargo test --locked -p api-nango --lib
-      - run: cargo test --manifest-path enterprise/Cargo.toml --locked -p anarlog-enterprise-control-plane --test recording_app local_oauth_api_preflight_allows_only_the_isolated_preview_clients
+      - run: cargo test --locked -p shared-recording
+      - run: cargo test --manifest-path enterprise/Cargo.toml --locked -p anarlog-enterprise-control-plane --test recording_app --test shared_recordings --test recording_transcription
       - run: cargo build --manifest-path enterprise/Cargo.toml --locked -p anarlog-enterprise-control-plane --bin shared-recordings-app --target aarch64-apple-darwin
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

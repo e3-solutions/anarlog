@@ -43,7 +43,14 @@ pub struct Manifest {
     pub version: u32,
     pub sample_rate: u32,
     pub duration_frames: u64,
+    // Identity may arrive after capture starts, so playback can precede the provider epoch.
+    #[serde(default, skip_serializing_if = "is_zero_frame")]
+    pub timeline_start_frame: i64,
     pub selections: Vec<Selection>,
+}
+
+fn is_zero_frame(frame: &i64) -> bool {
+    *frame == 0
 }
 
 #[derive(Debug)]
@@ -144,14 +151,26 @@ pub fn render(duration_frames: u64, sources: &[Source]) -> Result<CanonicalRecor
     let mut ordered = sources.iter().collect::<Vec<_>>();
     ordered.sort_by(|a, b| (a.rank, &a.capture_id).cmp(&(b.rank, &b.capture_id)));
     let mut ids = std::collections::BTreeSet::new();
-    let mut boundaries = vec![0, duration_frames];
-    let mut gap_runs = Vec::with_capacity(ordered.len());
     for source in &ordered {
         validate_source(source)?;
         if !ids.insert(source.capture_id.as_str()) {
             return Err(Error::InvalidSource);
         }
-        let offset = source.offset_frames;
+    }
+    let timeline_start_frame = ordered
+        .iter()
+        .map(|source| source.offset_frames)
+        .min()
+        .unwrap_or(0)
+        .min(0);
+    let duration_frames = duration_frames
+        .checked_add(timeline_start_frame.unsigned_abs())
+        .filter(|duration| *duration <= MAX_FRAMES)
+        .ok_or(Error::Limit)?;
+    let mut boundaries = vec![0, duration_frames];
+    let mut gap_runs = Vec::with_capacity(ordered.len());
+    for source in &ordered {
+        let offset = source.offset_frames - timeline_start_frame;
         let mut add_boundary = |frame: u64| {
             boundaries.push((offset + frame as i64).clamp(0, duration_frames as i64) as u64);
         };
@@ -182,8 +201,9 @@ pub fn render(duration_frames: u64, sources: &[Source]) -> Result<CanonicalRecor
     for interval in boundaries.windows(2) {
         let (start, end) = (interval[0], interval[1]);
         let selected = ordered.iter().enumerate().find_map(|(index, source)| {
-            let local_start = start as i64 - source.offset_frames;
-            let local_end = end as i64 - source.offset_frames;
+            let offset = source.offset_frames - timeline_start_frame;
+            let local_start = start as i64 - offset;
+            let local_end = end as i64 - offset;
             if local_start < 0 || local_end > source.samples.len() as i64 {
                 return None;
             }
@@ -233,6 +253,7 @@ pub fn render(duration_frames: u64, sources: &[Source]) -> Result<CanonicalRecor
         version: 1,
         sample_rate: SAMPLE_RATE,
         duration_frames,
+        timeline_start_frame,
         selections,
     };
     let revision = sha256(&serde_json::to_vec(&manifest)?);
