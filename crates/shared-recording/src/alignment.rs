@@ -59,35 +59,44 @@ fn alignment(reference: &Source, observed: &Source) -> Option<i64> {
     if end - start < (window * 3) as i64 {
         return None;
     }
+    let energy = |samples: &[i16]| {
+        samples.iter().map(|&x| (x as f64).powi(2)).sum::<f64>() / samples.len() as f64
+    };
+    // Locate informative, independent windows before bounding the FFT work;
+    // uniform probes can otherwise miss speech between long silent intervals.
+    let positions = (start..=end - window as i64)
+        .step_by(window)
+        .filter(|&position| {
+            let a = (position - reference.offset_frames) as usize;
+            let b = (position - observed.offset_frames) as usize;
+            !has_gap(reference, a, window)
+                && !has_gap(observed, b, window)
+                && energy(&reference.samples[a..a + window]) >= 10000.0
+                && energy(&observed.samples[b..b + window]) >= 10000.0
+        })
+        .collect::<Vec<_>>();
+    if positions.len() < 2 {
+        return None;
+    }
     let mut estimator = GccPhatLagEstimator::new(window, search);
     let mut lags = Vec::new();
-    for position in [
-        start,
-        start + (end - start - window as i64) / 2,
-        end - window as i64,
-    ] {
+    let anchors = positions.len().min(32);
+    for index in 0..anchors {
+        let position = positions[index * (positions.len() - 1) / (anchors - 1)];
         let reference_start = (position - reference.offset_frames) as usize;
         let observed_start = (position - observed.offset_frames) as usize;
-        if has_gap(reference, reference_start, window) || has_gap(observed, observed_start, window)
-        {
-            continue;
-        }
         let a = &reference.samples[reference_start..reference_start + window];
         let b = &observed.samples[observed_start..observed_start + window];
-        let energy = |samples: &[i16]| {
-            samples.iter().map(|&x| (x as f64).powi(2)).sum::<f64>() / samples.len() as f64
-        };
-        if energy(a) < 10000.0 || energy(b) < 10000.0 {
-            continue;
-        }
         let a = a.iter().map(|&x| x as f32 / 32768.0).collect::<Vec<_>>();
         let b = b.iter().map(|&x| x as f32 / 32768.0).collect::<Vec<_>>();
-        let estimate = estimator.estimate(&a, &b)?;
+        let Some(estimate) = estimator.estimate(&a, &b) else {
+            continue;
+        };
         if estimate.peak_ratio < 12.0
             || estimate.distinctiveness < 2.0
             || estimate.lag_samples.unsigned_abs() >= search
         {
-            return None;
+            continue;
         }
         let lag = estimate.lag_samples;
         let (a, b) = if lag >= 0 {
@@ -99,7 +108,7 @@ fn alignment(reference: &Source, observed: &Source) -> Option<i64> {
         let ea: f64 = a.iter().map(|&a| (a as f64).powi(2)).sum();
         let eb: f64 = b.iter().map(|&b| (b as f64).powi(2)).sum();
         if dot / (ea * eb).sqrt().max(f64::EPSILON) < 0.85 {
-            return None;
+            continue;
         }
         lags.push(lag as i64);
     }
@@ -160,6 +169,71 @@ mod tests {
             align_clock_hints(vec![
                 (reference, "a".into(), false),
                 (observed, "b".into(), false)
+            ])
+            .len(),
+            1
+        );
+    }
+    #[test]
+    fn silent_overlap_edges_do_not_discard_complementary_speech() {
+        let rate = SAMPLE_RATE as usize;
+        let mut state = 42u32;
+        let samples = (0..rate * 96)
+            .map(|index| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                if index < rate * 12
+                    || (rate * 36..rate * 52).contains(&index)
+                    || (rate * 70..rate * 82).contains(&index)
+                {
+                    (state as i16) / 2
+                } else {
+                    0
+                }
+            })
+            .collect::<Vec<_>>();
+        let earlier = crate::decode_source(
+            "a".into(),
+            0,
+            5000,
+            &crate::encode_wav(&samples[..rate * 60]).unwrap(),
+            vec![],
+        )
+        .unwrap();
+        let later = crate::decode_source(
+            "b".into(),
+            0,
+            (rate * 30) as i64,
+            &crate::encode_wav(&samples[rate * 30..]).unwrap(),
+            vec![],
+        )
+        .unwrap();
+        let selected = align_clock_hints(vec![
+            (earlier.clone(), "a".into(), false),
+            (later.clone(), "b".into(), false),
+        ]);
+        assert_eq!(selected.len(), 2);
+        assert_eq!(selected[0].offset_frames, 0);
+        let canonical = crate::render(samples.len() as u64, &selected).unwrap();
+        let rendered = hound::WavReader::new(std::io::Cursor::new(canonical.wav))
+            .unwrap()
+            .samples::<i16>()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(rendered, samples);
+
+        let mut unrelated = earlier;
+        for sample in &mut unrelated.samples {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            *sample = (state as i16) / 2;
+        }
+        assert_eq!(
+            align_clock_hints(vec![
+                (unrelated, "a".into(), false),
+                (later, "b".into(), false),
             ])
             .len(),
             1
