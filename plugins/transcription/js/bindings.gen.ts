@@ -118,36 +118,6 @@ export const commands = {
       else return { status: "error", error: e as any };
     }
   },
-  async sharedRecordingDownload(
-    apiBaseUrl: string,
-    organizationId: string,
-    occurrenceId: string,
-    revision: string,
-    audioSha256: string,
-    accessToken: string,
-    userId: string,
-  ): Promise<Result<string, string>> {
-    try {
-      return {
-        status: "ok",
-        data: await TAURI_INVOKE(
-          "plugin:transcription|shared_recording_download",
-          {
-            apiBaseUrl,
-            organizationId,
-            occurrenceId,
-            revision,
-            audioSha256,
-            accessToken,
-            userId,
-          },
-        ),
-      };
-    } catch (e) {
-      if (e instanceof Error) throw e;
-      else return { status: "error", error: e as any };
-    }
-  },
   async listMicrophoneDevices(): Promise<Result<string[], string>> {
     try {
       return {

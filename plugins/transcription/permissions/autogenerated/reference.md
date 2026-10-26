@@ -10,7 +10,6 @@ Default permissions for the plugin
 - `allow-shared-recording-enqueue`
 - `allow-shared-recording-queue`
 - `allow-shared-recording-flush`
-- `allow-shared-recording-download`
 - `allow-list-microphone-devices`
 - `allow-get-current-microphone-device`
 - `allow-start-capture`
@@ -1213,32 +1212,6 @@ Enables the shared_recording_configure command without any pre-configured scope.
 <td>
 
 Denies the shared_recording_configure command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`transcription:allow-shared-recording-download`
-
-</td>
-<td>
-
-Enables the shared_recording_download command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`transcription:deny-shared-recording-download`
-
-</td>
-<td>
-
-Denies the shared_recording_download command without any pre-configured scope.
 
 </td>
 </tr>
