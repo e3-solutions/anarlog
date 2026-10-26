@@ -213,6 +213,19 @@ async fn signed_members_share_one_library_without_spoofing_uploader_or_retaining
     let manifest = service.manifest("org", "meeting").await.unwrap();
     assert_eq!(manifest.captures[0].metadata.uploader_id, "member-a");
     assert_eq!(manifest.captures[0].metadata.rank, 0);
+    assert_eq!(
+        app.clone()
+            .oneshot(request(
+                "GET",
+                "/v1/orgs/org/shared-recordings/meeting/transcript",
+                &a,
+                Value::Null
+            ))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
     let original = format!("{source}/audio");
     for reader in [&a, &b] {
         let response = app

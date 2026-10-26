@@ -158,7 +158,6 @@ async fn each_original_is_transcribed_independently_and_partial_asr_retries_keep
     assert_eq!(partial.captures[1].transcript_status, "pending");
     mode.store(5, Ordering::SeqCst);
     let ready = processor.process("workspace", "meeting").await.unwrap();
-    assert!(ready.current.is_none());
     assert_eq!(
         ready.captures[0].transcript.as_ref().unwrap().result,
         json!({"text":"source A"})

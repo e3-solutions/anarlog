@@ -104,4 +104,5 @@ JSON endpoint; `ANARLOG_SHARED_RECORDINGS_TRANSCRIPTION_KEY` is optional. Withou
 an endpoint, source transcripts remain pending. Each immutable uploaded audio source
 has its own cached transcript, capture identity, and verified meeting identity.
 There is no audio stitching or transcript consolidation. No extra listener or
-Supabase schema is required; existing files and historical revisions stay readable.
+Supabase schema is required. Historical consolidated artifacts have no read route;
+the store retains only compatibility cleanup for deleting earlier preview artifacts.

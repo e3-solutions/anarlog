@@ -20,8 +20,7 @@ use crate::{
     },
     recording_transcription::RecordingProcessor,
     shared_recordings::{
-        CaptureUpload, OccurrenceManifest, RecordingError, Revision, SharedRecordingService,
-        TimingBasis,
+        CaptureUpload, OccurrenceManifest, RecordingError, SharedRecordingService, TimingBasis,
     },
 };
 
@@ -33,13 +32,12 @@ pub struct RecordingAppState {
     pub processor: Option<Arc<RecordingProcessor>>,
 }
 
-const PATHS: [&str; 9] = [
+const PATHS: [&str; 8] = [
     "/v1/shared-recordings/me",
     "/v1/orgs/{workspace}/shared-recordings",
     "/v1/orgs/{workspace}/shared-recordings/admit",
     "/v1/orgs/{workspace}/shared-recordings/{id}",
     "/v1/orgs/{workspace}/shared-recordings/{id}/captures/{source}/audio",
-    "/v1/orgs/{workspace}/shared-recordings/{id}/transcript",
     "/v1/orgs/{workspace}/shared-recordings/{id}/captures/{source}",
     "/v1/orgs/{workspace}/shared-recordings/{id}/process",
     "/v1/orgs/{workspace}/shared-recordings/{id}/seal",
@@ -58,7 +56,6 @@ pub fn router(state: RecordingAppState, auth: AuthState) -> Router {
         admission,
         occurrence,
         original_audio,
-        text,
         capture,
         processing,
         sealing,
@@ -69,7 +66,6 @@ pub fn router(state: RecordingAppState, auth: AuthState) -> Router {
         .route(admission, post(admit))
         .route(occurrence, get(manifest).delete(delete_occurrence))
         .route(original_audio, get(audio))
-        .route(text, get(transcript))
         .route(capture, post(upload).delete(delete_capture))
         .route(processing, post(process))
         .route(sealing, post(seal))
@@ -184,22 +180,6 @@ async fn manifest(
             .manifest(&workspace, &id)
             .await
             .map_err(storage_error)?,
-    ))
-}
-async fn transcript(
-    State(state): State<RecordingAppState>,
-    Path((workspace, id)): Path<(String, String)>,
-    Extension(auth): Extension<AuthContext>,
-) -> Result<Json<Revision>, MemberError> {
-    state.members.authorize(&auth, &workspace).await?;
-    Ok(Json(
-        state
-            .service
-            .manifest(&workspace, &id)
-            .await
-            .map_err(storage_error)?
-            .current
-            .ok_or(MemberError::NotFound)?,
     ))
 }
 async fn audio(

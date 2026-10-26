@@ -63,7 +63,7 @@ fn validate_wav(wav: &[u8], gaps: &[FrameRange]) -> Result<u64> {
 pub enum RecordingError {
     #[error("invalid recording request: {0}")]
     Invalid(String),
-    #[error("recording identity or revision conflict")]
+    #[error("recording identity conflict")]
     Conflict,
     #[error("recording not found")]
     NotFound,
@@ -135,25 +135,6 @@ pub struct Transcript {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Revision {
-    pub number: u64,
-    pub revision: String,
-    #[serde(default = "legacy_kind")]
-    pub kind: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub audio_sha256: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub manifest: Option<Value>,
-    pub transcript: Option<Transcript>,
-    pub transcript_status: String,
-}
-
-fn legacy_kind() -> String {
-    "legacy_audio".into()
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct CaptureProvenance {
     pub capture_id: String,
     pub metadata: CaptureMetadata,
@@ -169,8 +150,6 @@ pub struct OccurrenceManifest {
     pub occurrence_id: String,
     pub occurrence: CreateOccurrence,
     pub captures: Vec<CaptureProvenance>,
-    pub current: Option<Revision>,
-    pub inputs_changed: bool,
     pub sealed: bool,
 }
 
@@ -218,7 +197,7 @@ impl SharedRecordingService {
         sqlx::raw_sql("CREATE TABLE IF NOT EXISTS occurrences (
             workspace TEXT NOT NULL, id TEXT NOT NULL, provider_key TEXT NOT NULL,
             metadata TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
-            changed INTEGER NOT NULL DEFAULT 1, sealed INTEGER NOT NULL DEFAULT 0, next_revision INTEGER NOT NULL DEFAULT 1,
+            sealed INTEGER NOT NULL DEFAULT 0,
             current_json TEXT, PRIMARY KEY(workspace,id), UNIQUE(workspace,provider_key));
             CREATE TABLE IF NOT EXISTS captures (
             workspace TEXT NOT NULL, occurrence TEXT NOT NULL, id TEXT NOT NULL,
@@ -429,11 +408,6 @@ impl SharedRecordingService {
         let mut transaction = self.pool.begin().await?;
         sqlx::query("UPDATE captures SET transcript_json=? WHERE workspace=? AND occurrence=? AND id=? AND deleted=0")
             .bind(serde_json::to_string(&transcript)?).bind(workspace).bind(id).bind(capture_id).execute(&mut *transaction).await?;
-        sqlx::query("UPDATE occurrences SET changed=1 WHERE workspace=? AND id=?")
-            .bind(workspace)
-            .bind(id)
-            .execute(&mut *transaction)
-            .await?;
         transaction.commit().await?;
         Ok(())
     }
@@ -471,7 +445,7 @@ impl SharedRecordingService {
             return Err(RecordingError::Conflict);
         }
         let _guard = self.gate.lock().await;
-        let (mut occurrence, _, _) = self.occurrence_unlocked(workspace, id).await?;
+        let mut occurrence = self.occurrence_unlocked(workspace, id).await?;
         let automatic: bool =
             sqlx::query_scalar("SELECT automatic FROM occurrences WHERE workspace=? AND id=?")
                 .bind(workspace)
@@ -537,11 +511,6 @@ impl SharedRecordingService {
                 .execute(&mut *transaction)
                 .await?;
         }
-        sqlx::query("UPDATE occurrences SET changed=1 WHERE workspace=? AND id=?")
-            .bind(workspace)
-            .bind(id)
-            .execute(&mut *transaction)
-            .await?;
         transaction.commit().await?;
         self.manifest_unlocked(workspace, id).await
     }
@@ -551,23 +520,20 @@ impl SharedRecordingService {
         self.manifest_unlocked(workspace, id).await
     }
 
-    async fn occurrence_unlocked(
-        &self,
-        workspace: &str,
-        id: &str,
-    ) -> Result<(CreateOccurrence, Option<Revision>, bool)> {
-        let row = sqlx::query("SELECT metadata,current_json,changed FROM occurrences WHERE workspace=? AND id=? AND deleted=0")
-            .bind(workspace).bind(id).fetch_optional(&self.pool).await?.ok_or(RecordingError::NotFound)?;
-        let metadata = serde_json::from_str(&row.get::<String, _>("metadata"))?;
-        let revision = row
-            .get::<Option<String>, _>("current_json")
-            .map(|json| serde_json::from_str(&json))
-            .transpose()?;
-        Ok((metadata, revision, row.get::<i64, _>("changed") != 0))
+    async fn occurrence_unlocked(&self, workspace: &str, id: &str) -> Result<CreateOccurrence> {
+        let metadata: String = sqlx::query_scalar(
+            "SELECT metadata FROM occurrences WHERE workspace=? AND id=? AND deleted=0",
+        )
+        .bind(workspace)
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or(RecordingError::NotFound)?;
+        Ok(serde_json::from_str(&metadata)?)
     }
 
     async fn manifest_unlocked(&self, workspace: &str, id: &str) -> Result<OccurrenceManifest> {
-        let (occurrence, current, inputs_changed) = self.occurrence_unlocked(workspace, id).await?;
+        let occurrence = self.occurrence_unlocked(workspace, id).await?;
         let rows = sqlx::query("SELECT id,metadata,deleted,frames,transcript_json FROM captures WHERE workspace=? AND occurrence=? ORDER BY id")
             .bind(workspace).bind(id).fetch_all(&self.pool).await?;
         let captures = rows
@@ -596,8 +562,6 @@ impl SharedRecordingService {
             occurrence_id: id.into(),
             occurrence,
             captures,
-            current,
-            inputs_changed,
             sealed: self.sealed_unlocked(workspace, id).await?,
         })
     }
@@ -653,13 +617,11 @@ impl SharedRecordingService {
             .bind(capture_id)
             .execute(&mut *transaction)
             .await?;
-        sqlx::query(
-            "UPDATE occurrences SET current_json=NULL,changed=1 WHERE workspace=? AND id=?",
-        )
-        .bind(workspace)
-        .bind(id)
-        .execute(&mut *transaction)
-        .await?;
+        sqlx::query("UPDATE occurrences SET current_json=NULL WHERE workspace=? AND id=?")
+            .bind(workspace)
+            .bind(id)
+            .execute(&mut *transaction)
+            .await?;
         sqlx::query("DELETE FROM revisions WHERE workspace=? AND occurrence=?")
             .bind(workspace)
             .bind(id)

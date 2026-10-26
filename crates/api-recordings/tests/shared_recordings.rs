@@ -161,7 +161,6 @@ async fn original_audio_and_source_transcripts_survive_retry_restart_and_revocat
     ));
     let manifest = service.manifest("org", "meeting").await.unwrap();
     assert_eq!(manifest.captures.len(), 2);
-    assert!(manifest.current.is_none());
     assert_eq!(manifest.captures[0].transcript_status, "ready");
     assert_eq!(manifest.captures[1].transcript_status, "pending");
     let (source, original) = service.source_audio("org", "meeting", "a").await.unwrap();
@@ -245,8 +244,7 @@ async fn original_audio_and_source_transcripts_survive_retry_restart_and_revocat
 }
 
 #[tokio::test]
-async fn upgrading_legacy_storage_preserves_original_audio_and_marks_old_shared_transcripts_legacy()
-{
+async fn upgrading_legacy_storage_preserves_sources_without_exposing_combined_transcripts() {
     let directory = tempfile::tempdir().unwrap();
     let service = SharedRecordingService::open(directory.path())
         .await
@@ -272,20 +270,19 @@ async fn upgrading_legacy_storage_preserves_original_audio_and_marks_old_shared_
     let legacy = json!({"number":1,"revision":"old-revision","audioSha256":sha(&original),"manifest":{"version":1,"sample_rate":16000,"duration_frames":12,"selections":[]},"transcript":{"provider":"openai","model":"tiny.en","result":{"results":{"channels":[{"alternatives":[{"transcript":"old combined ASR"}]}]}}},"transcriptStatus":"ready"});
     std::fs::write(directory.path().join("canonical-legacy.wav"), &original).unwrap();
     sqlx::query("INSERT INTO revisions(workspace,occurrence,number,revision,object,revision_json) VALUES('org','meeting',1,'old-revision','canonical-legacy.wav',?)").bind(legacy.to_string()).execute(&mut database).await.unwrap();
-    sqlx::query("UPDATE occurrences SET current_json=?,next_revision=2 WHERE workspace='org' AND id='meeting'").bind(legacy.to_string()).execute(&mut database).await.unwrap();
+    sqlx::query("UPDATE occurrences SET current_json=? WHERE workspace='org' AND id='meeting'")
+        .bind(legacy.to_string())
+        .execute(&mut database)
+        .await
+        .unwrap();
     database.close().await.unwrap();
     let recovered = SharedRecordingService::open(directory.path())
         .await
         .unwrap();
-    let current = recovered
-        .manifest("org", "meeting")
-        .await
-        .unwrap()
-        .current
-        .unwrap();
-    assert_eq!(current.kind, "legacy_audio");
-    assert_eq!(current.revision, "old-revision");
-    assert_eq!(current.audio_sha256, Some(sha(&original)));
+    let manifest =
+        serde_json::to_value(recovered.manifest("org", "meeting").await.unwrap()).unwrap();
+    assert!(manifest.get("current").is_none());
+    assert!(manifest.get("inputsChanged").is_none());
     assert_eq!(
         recovered
             .source_audio("org", "meeting", "a")
@@ -305,14 +302,8 @@ async fn upgrading_legacy_storage_preserves_original_audio_and_marks_old_shared_
         .await
         .unwrap();
     assert_eq!(
-        recovered
-            .manifest("org", "meeting")
-            .await
-            .unwrap()
-            .current
-            .unwrap()
-            .kind,
-        "legacy_audio"
+        recovered.manifest("org", "meeting").await.unwrap().captures[0].transcript,
+        Some(transcript("independent source ASR"))
     );
     assert!(directory.path().join("canonical-legacy.wav").is_file());
 }

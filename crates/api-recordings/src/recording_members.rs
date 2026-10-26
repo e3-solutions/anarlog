@@ -22,7 +22,7 @@ pub enum MemberError {
     Invalid(String),
     #[error("provider identity is unresolved; capture remains local")]
     Unresolved,
-    #[error("recording identity or revision conflict")]
+    #[error("recording identity conflict")]
     Conflict,
     #[error("recording not found")]
     NotFound,
