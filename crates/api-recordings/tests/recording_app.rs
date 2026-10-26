@@ -3,12 +3,12 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use anarlog_enterprise_control_plane::{
+use anlg_shared_recording::{encode_wav, sha256};
+use api_recordings::{
     recording_app::{self, RecordingAppState},
-    recording_members::RecordingMemberAuth,
+    recording_members::RecordingMemberships,
     shared_recordings::{Provider, SharedRecordingService},
 };
-use anlg_shared_recording::{encode_wav, sha256};
 use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode, header},
@@ -41,65 +41,6 @@ fn request(method: &str, url: &str, token: &str, body: Value) -> Request<Body> {
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(serde_json::to_vec(&body).unwrap()))
         .unwrap()
-}
-
-#[tokio::test]
-async fn local_oauth_api_preflight_allows_only_the_isolated_preview_clients() {
-    for invalid in [
-        "http://shared-preview.example",
-        "https://user:password@shared-preview.example",
-        "https://shared-preview.example/path",
-        "https://shared-preview.example/",
-        "https://shared-preview.example?query=1",
-        "https://shared-preview.example#fragment",
-        "https://*.example",
-        "*",
-    ] {
-        assert!(recording_app::local_preview_cors(Some(invalid)).is_err());
-    }
-    for web_origin in [None, Some("https://shared-preview.example")] {
-        let app = axum::Router::new()
-            .route("/nango/session", axum::routing::post(|| async {}))
-            .layer(recording_app::local_preview_cors(web_origin).unwrap());
-        for origin in [
-            "http://localhost:3000",
-            "http://127.0.0.1:3000",
-            "tauri://localhost",
-            "http://tauri.localhost",
-            "https://shared-preview.example",
-            "https://unrelated.example",
-        ] {
-            let response = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method("OPTIONS")
-                        .uri("/nango/session")
-                        .header(header::ORIGIN, origin)
-                        .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
-                        .header(
-                            header::ACCESS_CONTROL_REQUEST_HEADERS,
-                            "authorization,content-type",
-                        )
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(response.status(), StatusCode::OK);
-            let allowed = response.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN);
-            if !origin.starts_with("https://") || Some(origin) == web_origin {
-                assert_eq!(allowed.unwrap(), origin);
-            } else {
-                assert!(allowed.is_none());
-            }
-            assert!(
-                !response
-                    .headers()
-                    .contains_key(header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
-            );
-        }
-    }
 }
 
 #[tokio::test]
@@ -148,107 +89,51 @@ async fn signed_members_share_one_library_without_spoofing_uploader_or_retaining
     let app = recording_app::router(
         RecordingAppState {
             service: service.clone(),
-            members: RecordingMemberAuth::new(&upstream.uri(), "fixture-anon").unwrap(),
+            members: RecordingMemberships::new(&upstream.uri(), "fixture-anon").unwrap(),
             identities: None,
             processor: None,
         },
-        recording_app::provider_router(anlg_api_nango::NangoConfig {
-            nango: serde_json::from_value(json!({
-                "nango_api_base": upstream.uri(),
-                "nango_api_key": "fixture-api-key",
-                "nango_webhook_signing_key": "fixture-signing-key",
-            }))
-            .unwrap(),
-            supabase_url: upstream.uri(),
-            supabase_anon_key: "fixture-anon".into(),
-            supabase_service_role_key: Some("fixture-service".into()),
-        }),
-        recording_app::local_preview_cors(None).unwrap(),
+        anlg_api_auth::AuthState::new(&upstream.uri()),
     );
-    let preflight = app
+    assert_eq!(
+        app.clone()
+            .oneshot(request(
+                "GET",
+                "/v1/shared-recordings/me",
+                "invalid",
+                Value::Null
+            ))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let response = app
         .clone()
         .oneshot(
             Request::builder()
-                .method("OPTIONS")
-                .uri("/nango/session")
-                .header(header::ORIGIN, "http://localhost:3000")
-                .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                .method("POST")
+                .uri("/v1/orgs/org/shared-recordings/admit")
+                .header(header::CONTENT_LENGTH, (140 * 1024 * 1024 + 1).to_string())
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(preflight.status(), StatusCode::OK);
-    assert_eq!(preflight.headers()[header::CACHE_CONTROL], "no-store");
-    assert_eq!(
-        preflight.headers()[header::X_CONTENT_TYPE_OPTIONS],
-        "nosniff"
-    );
-    for (path, expected) in [
-        ("/health", StatusCode::OK),
-        ("/unknown", StatusCode::NOT_FOUND),
-        ("/v1/audio/transcriptions", StatusCode::NOT_FOUND),
-    ] {
-        let response = app
-            .clone()
-            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(response.status(), expected);
-        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
-        assert_eq!(
-            response.headers()[header::X_CONTENT_TYPE_OPTIONS],
-            "nosniff"
-        );
-        assert!(!response.headers().contains_key(header::SERVER));
-    }
-    for path in ["/nango/session", "/v1/orgs/org/shared-recordings/admit"] {
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(path)
-                    .header(header::CONTENT_LENGTH, (140 * 1024 * 1024 + 1).to_string())
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
-        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
-    }
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
     let large_json = json!({"padding": "x".repeat(2 * 1024 * 1024 + 1)});
-    for (path, expected) in [
-        ("/nango/session", StatusCode::PAYLOAD_TOO_LARGE),
-        (
-            "/v1/orgs/org/shared-recordings/admit",
-            StatusCode::UNPROCESSABLE_ENTITY,
-        ),
-    ] {
-        let response = app
-            .clone()
-            .oneshot(request("POST", path, &a, large_json.clone()))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), expected);
-        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
-    }
     assert_eq!(
         app.clone()
-            .oneshot(request("POST", "/nango/session", "invalid", json!({})))
+            .oneshot(request(
+                "POST",
+                "/v1/orgs/org/shared-recordings/admit",
+                &a,
+                large_json
+            ))
             .await
             .unwrap()
             .status(),
-        StatusCode::UNAUTHORIZED,
-    );
-    assert_eq!(
-        app.clone()
-            .oneshot(request("GET", "/nango/connections", &a, Value::Null))
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::OK,
+        StatusCode::UNPROCESSABLE_ENTITY
     );
     assert_eq!(
         app.clone()

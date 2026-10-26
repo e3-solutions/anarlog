@@ -3,13 +3,13 @@ use std::sync::{
     atomic::{AtomicU8, Ordering},
 };
 
-use anarlog_enterprise_control_plane::{
+use anlg_shared_recording::{FrameRange, encode_wav, sha256};
+use api_recordings::{
     recording_transcription::{RecordingProcessor, RecordingTranscriber},
     shared_recordings::{
         CaptureMetadata, Provider, RecordingError, SharedRecordingService, TimingBasis,
     },
 };
-use anlg_shared_recording::{FrameRange, encode_wav, sha256};
 use serde_json::json;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,

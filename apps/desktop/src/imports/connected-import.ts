@@ -10,6 +10,7 @@ import {
   zoomImportMeetings,
   type ConnectionItem,
 } from "@anlg/api-client";
+import { createClient } from "@anlg/api-client/client";
 import {
   commands as importerCommands,
   type ConnectedImportCredentials,
@@ -25,7 +26,6 @@ import {
 } from "./queries";
 
 import { env } from "~/env";
-import { createDesktopApiClient as createClient } from "~/shared/api-client";
 import {
   integrationSetupError,
   openIntegrationUrl,

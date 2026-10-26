@@ -92,8 +92,7 @@ def main():
         XDG_DATA_HOME="/data/runtime",
         XDG_CONFIG_HOME="/data/runtime",
         ANARLOG_SHARED_RECORDINGS_DIR="/data/recordings",
-        ANARLOG_SHARED_RECORDINGS_BIND=f"0.0.0.0:{port}",
-        ANARLOG_SHARED_RECORDINGS_ALLOW_PUBLIC_BIND="true",
+        ANARLOG_SERVICE="core",
         ANARLOG_SHARED_RECORDINGS_TRANSCRIPTION_URL="http://127.0.0.1:18796/v1",
         ANARLOG_SHARED_RECORDINGS_TRANSCRIPTION_MODEL="tiny.en",
         ANARLOG_SHARED_RECORDINGS_TRANSCRIPTION_KEY="",
@@ -134,11 +133,11 @@ def main():
         deadline = time.monotonic() + 180
         while not stopping and time.monotonic() < deadline:
             if any(child.poll() is not None for child in children):
-                raise RuntimeError("preview dependency exited during startup")
+                raise RuntimeError("recording dependency exited during startup")
             if status(url) == expected:
                 return
             time.sleep(1)
-        raise RuntimeError("preview dependency startup timed out")
+        raise RuntimeError("recording dependency startup timed out")
 
     try:
         spawn(
@@ -162,12 +161,12 @@ def main():
             private=True,
         )
         ready("http://127.0.0.1:18796/health", 200)
-        spawn(["shared-recordings-app"], backend=True)
+        spawn(["api"], backend=True)
         ready(f"http://127.0.0.1:{port}/health", 200)
-        print("isolated shared recording preview ready", flush=True)
+        print("Anarlog API with local transcription ready", flush=True)
         while not stopping:
             if any(child.poll() is not None for child in children):
-                raise RuntimeError("preview dependency exited")
+                raise RuntimeError("recording dependency exited")
             time.sleep(1)
         return 0
     finally:
@@ -195,5 +194,5 @@ if __name__ == "__main__":
         sys.exit(main())
     except Exception as error:
         # Runtime environment and ASR output may contain credentials or room speech.
-        print(f"preview stopped: {type(error).__name__}", file=sys.stderr, flush=True)
+        print(f"API stopped: {type(error).__name__}", file=sys.stderr, flush=True)
         sys.exit(1)

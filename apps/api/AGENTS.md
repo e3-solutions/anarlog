@@ -86,3 +86,20 @@ adoption requires independent verification that the exact image handles SIGUSR1;
 health alone does not establish that capability. Secrets are filtered by the
 selected runtime before staging. Core's checked-in profile enables cleanup so
 routine deployments preserve worker ownership.
+
+## Shared recordings
+
+`ANARLOG_SHARED_RECORDINGS_DIR` opts the existing `core` or `all` runtime into
+organization recordings. Use an absolute path on one durable volume owned by a
+single API process. The SQLite/file store takes an exclusive directory lock;
+it is not shared storage for multiple Machines. Existing multi-Machine production
+profiles leave this feature disabled. Core forwarding and a local recording store
+cannot be enabled together.
+
+The routes reuse API session authentication and Nango configuration, then check
+current organization membership on each request. Optional
+`ANARLOG_SHARED_RECORDINGS_TRANSCRIPTION_URL` and
+`ANARLOG_SHARED_RECORDINGS_TRANSCRIPTION_MODEL` configure an OpenAI-compatible
+JSON endpoint; `ANARLOG_SHARED_RECORDINGS_TRANSCRIPTION_KEY` is optional. Without
+an endpoint, recordings remain pending. No extra listener or Supabase schema is
+required; existing recording files and revisions retain their format.

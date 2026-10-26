@@ -1,7 +1,7 @@
-use anarlog_enterprise_control_plane::shared_recordings::{
+use anlg_shared_recording::{FrameRange, SAMPLE_RATE, decode_source, encode_wav, sha256};
+use api_recordings::shared_recordings::{
     CaptureMetadata, Provider, RecordingError, SharedRecordingService, TimingBasis, Transcript,
 };
-use anlg_shared_recording::{FrameRange, SAMPLE_RATE, decode_source, encode_wav, sha256};
 use serde_json::json;
 
 fn metadata(id: &str, wav: &[u8], rank: u32, gaps: Vec<FrameRange>) -> CaptureMetadata {

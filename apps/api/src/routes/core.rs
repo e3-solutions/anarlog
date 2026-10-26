@@ -7,7 +7,7 @@ use crate::{
 use axum::{Router, middleware};
 use std::sync::Arc;
 
-pub(crate) fn router(
+pub(crate) async fn router(
     env: &RuntimeConfig,
     analytics: Arc<anlg_analytics::AnalyticsClient>,
 ) -> Router {
@@ -26,6 +26,59 @@ pub(crate) fn router(
             Some(env.supabase.supabase_service_role_key.clone()),
         )
     });
+    let recording_routes = if let Some(directory) = &env.anarlog_shared_recordings_dir {
+        use anlg_api_recordings::{
+            recording_app::{self, RecordingAppState},
+            recording_identity::RecordingIdentityResolver,
+            recording_members::RecordingMemberships,
+            recording_transcription::{RecordingProcessor, RecordingTranscriber},
+            shared_recordings::SharedRecordingService,
+        };
+        let service = Arc::new(
+            SharedRecordingService::open(directory)
+                .await
+                .expect("shared recording storage must open exclusively"),
+        );
+        let identities = nango_config.as_ref().map(|config| {
+            RecordingIdentityResolver::new(anlg_api_nango::NangoConnectionState::from_config(
+                config,
+            ))
+        });
+        let processor = env
+            .anarlog_shared_recordings_transcription_url
+            .as_ref()
+            .map(|url| {
+                let transcriber = RecordingTranscriber::new(
+                    url.clone(),
+                    env.anarlog_shared_recordings_transcription_key
+                        .clone()
+                        .unwrap_or_default(),
+                    env.anarlog_shared_recordings_transcription_model
+                        .clone()
+                        .expect("recording model validated"),
+                )
+                .expect("recording transcription configuration validated");
+                Arc::new(RecordingProcessor::new(service.clone(), transcriber))
+            });
+        recording_app::router(
+            RecordingAppState {
+                service,
+                members: RecordingMemberships::new(
+                    &env.supabase.supabase_url,
+                    &env.supabase.supabase_anon_key,
+                )
+                .expect("recording membership configuration validated"),
+                identities,
+                processor,
+            },
+            auth_state_basic.clone(),
+        )
+        .route_layer(middleware::from_fn(auth::sentry_and_analytics))
+    } else if env.upstreams.anarlog_core_origin.is_some() {
+        anlg_api_recordings::recording_app::forwarding_router()
+    } else {
+        Router::new()
+    };
     let subscription_config = env.subscription.as_ref().map(|(stripe, loops)| {
         anlg_api_subscription::SubscriptionConfig::new(&env.supabase, stripe, loops)
             .with_analytics(analytics.clone())
@@ -95,6 +148,7 @@ pub(crate) fn router(
         None => Router::new(),
     };
     Router::new()
+        .merge(recording_routes)
         .merge(nango_webhook_routes)
         .merge(integration_routes)
         .merge(integration_management_routes)

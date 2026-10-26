@@ -3,6 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useCallback, useRef } from "react";
 
 import { createSession } from "@anlg/api-client";
+import { createClient } from "@anlg/api-client/client";
 import { commands as openerCommands } from "@anlg/plugin-opener2";
 import { openUrlWithInstruction } from "@anlg/plugin-windows";
 import { toast } from "@anlg/ui/components/ui/toast";
@@ -10,7 +11,6 @@ import { toast } from "@anlg/ui/components/ui/toast";
 import { useAuth } from "~/auth";
 import { env } from "~/env";
 import { captureOperationalError } from "~/error-reporting";
-import { createDesktopApiClient as createClient } from "~/shared/api-client";
 import { addNangoSessionHandoff } from "~/shared/integration-handoff";
 import { buildWebAppUrl } from "~/shared/utils";
 

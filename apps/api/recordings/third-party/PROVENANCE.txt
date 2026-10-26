@@ -15,5 +15,4 @@ Repository revision: ggml-org/whisper-vad 9ffd54a1e1ee413ddf265af9913beaf518d163
 Model SHA256: 29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf
 License: silero-vad-LICENSE (snakers4/silero-vad v5.1.2)
 
-Debian and Rust base images are pinned by digest in Dockerfile. Distribution
-package copyright notices remain available under /usr/share/doc in the image.
+Distribution package copyright notices remain available under /usr/share/doc in the image.

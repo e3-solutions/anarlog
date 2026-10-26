@@ -6,8 +6,6 @@ import type {
   ObservationSummary,
 } from "@anlg/plugin-transcription";
 
-import { sharedRecordingsPreviewUrl } from "./client";
-
 export type SharedRecordingConfiguration = Configuration;
 export type SharedRecordingJob = Pick<
   Job,
@@ -54,6 +52,5 @@ export function observeSharedRecording(input: {
     | "observer_stopped";
   diagnosticSummary?: ObservationSummary;
 }) {
-  if (!sharedRecordingsPreviewUrl) return Promise.resolve(null);
   return invoke<string | null>(command("observe"), input);
 }

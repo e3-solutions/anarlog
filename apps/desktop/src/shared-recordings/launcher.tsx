@@ -10,15 +10,12 @@ import {
   DialogTitle,
 } from "@anlg/ui/components/ui/dialog";
 
-import { env } from "~/env";
-
 const SharedRecordingsAccount = lazy(async () => ({
   default: (await import("./index")).SharedRecordingsAccount,
 }));
 
 export function SharedRecordingsLauncher() {
   const [open, setOpen] = useState(false);
-  if (!env.VITE_SHARED_RECORDINGS_PREVIEW_URL) return null;
   return (
     <>
       <Button

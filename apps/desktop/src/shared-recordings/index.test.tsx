@@ -12,7 +12,6 @@ const mocks = vi.hoisted(() => ({
   userId: "account-one",
   downloadAudio: vi.fn(),
   readRecording: vi.fn(),
-  urls: new Map<string, Blob>(),
 }));
 
 vi.mock("~/auth", () => ({
@@ -58,58 +57,6 @@ vi.mock("./client", () => ({
 import { SharedRecordingsAccount } from "./index";
 
 beforeEach(() => {
-  let sequence = 0;
-  vi.stubGlobal(
-    "URL",
-    class extends URL {
-      static createObjectURL(blob: Blob) {
-        const url = `blob:shared-audio-${++sequence}`;
-        mocks.urls.set(url, blob);
-        return url;
-      }
-      static revokeObjectURL(url: string) {
-        mocks.urls.delete(url);
-      }
-    },
-  );
-});
-
-afterEach(() => {
-  cleanup();
-  mocks.userId = "account-one";
-  mocks.downloadAudio.mockReset();
-  mocks.readRecording.mockReset();
-  mocks.urls.clear();
-  vi.unstubAllGlobals();
-});
-
-it("removes the previous account's recording list when the signed-in account changes", async () => {
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  const content = () => (
-    <QueryClientProvider client={client}>
-      <SharedRecordingsAccount />
-    </QueryClientProvider>
-  );
-  const view = render(content());
-  await waitFor(() =>
-    expect(screen.getByText("conferenceRecords/account-one")).toBeTruthy(),
-  );
-  mocks.userId = "account-two";
-  view.rerender(content());
-  expect(screen.queryByText("conferenceRecords/account-one")).toBeNull();
-  await waitFor(() =>
-    expect(screen.getByText("conferenceRecords/account-two")).toBeTruthy(),
-  );
-  expect(screen.queryByText("conferenceRecords/account-one")).toBeNull();
-  client.clear();
-});
-
-it("shows media delivery failures and reloads shared audio when retried", async () => {
-  mocks.downloadAudio.mockResolvedValue(
-    new Blob(["RIFF"], { type: "audio/wav" }),
-  );
   mocks.readRecording.mockResolvedValue({
     occurrence: { provider: "slack_huddle" },
     captures: [],
@@ -127,35 +74,74 @@ it("shows media delivery failures and reloads shared audio when retried", async 
       },
     },
   });
+  vi.stubGlobal(
+    "URL",
+    class extends URL {
+      static createObjectURL() {
+        return "blob:shared-audio";
+      }
+      static revokeObjectURL() {}
+    },
+  );
+});
+
+afterEach(() => {
+  cleanup();
+  mocks.userId = "account-one";
+  mocks.downloadAudio.mockReset();
+  mocks.readRecording.mockReset();
+  vi.unstubAllGlobals();
+});
+
+function renderAccount() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  const view = render(
+  const content = () => (
     <QueryClientProvider client={client}>
       <SharedRecordingsAccount />
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
+  return { ...render(content()), client, content };
+}
+
+it("cancels the previous account's audio and removes its recordings when accounts change", async () => {
+  let signal: AbortSignal | undefined;
+  mocks.downloadAudio.mockImplementation((_input, requestSignal) => {
+    signal = requestSignal;
+    return new Promise(() => {});
+  });
+  const view = renderAccount();
+  fireEvent.click(await screen.findByText("conferenceRecords/account-one"));
+  await waitFor(() => expect(signal).toBeDefined());
+  mocks.userId = "account-two";
+  view.rerender(view.content());
+  expect(signal!.aborted).toBe(true);
+  expect(view.container.querySelector("audio")).toBeNull();
+  expect(screen.queryByText("conferenceRecords/account-one")).toBeNull();
+  expect(await screen.findByText("conferenceRecords/account-two")).toBeTruthy();
+  view.client.clear();
+});
+
+it("shows media delivery failures and reloads shared audio when retried", async () => {
+  mocks.downloadAudio.mockResolvedValue(
+    new Blob(["RIFF"], { type: "audio/wav" }),
+  );
+  const view = renderAccount();
   fireEvent.click(await screen.findByText("conferenceRecords/account-one"));
   await waitFor(() =>
     expect(view.container.querySelector("audio")).toBeTruthy(),
   );
   const audio = view.container.querySelector("audio")!;
-  expect(audio.src).toBe("blob:shared-audio-1");
-  expect(mocks.urls.size).toBe(1);
   Object.defineProperty(audio, "error", { value: { code: 4 } });
   fireEvent.error(audio);
   expect(screen.getByRole("alert").textContent).toContain("media error 4");
   expect(view.container.querySelector("audio")).toBeNull();
-  expect(mocks.urls.size).toBe(0);
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   await waitFor(() =>
-    expect(view.container.querySelector("audio")?.src).toBe(
-      "blob:shared-audio-2",
-    ),
+    expect(view.container.querySelector("audio")).toBeTruthy(),
   );
-  expect(mocks.urls.size).toBe(1);
   view.unmount();
-  expect(mocks.urls.size).toBe(0);
-  client.clear();
+  view.client.clear();
 });

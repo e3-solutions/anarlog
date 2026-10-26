@@ -1,9 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
-use anlg_api_auth::{AuthContext, AuthState};
+use anlg_api_auth::AuthContext;
 use axum::{
     Json,
-    http::{HeaderMap, StatusCode, header},
+    http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
@@ -55,20 +55,14 @@ pub struct OrganizationMembership {
     pub role: String,
 }
 
-pub struct MemberSession {
-    pub auth: AuthContext,
-    pub membership: OrganizationMembership,
-}
-
 #[derive(Clone)]
-pub struct RecordingMemberAuth {
-    auth: AuthState,
+pub struct RecordingMemberships {
     client: reqwest::Client,
     url: Arc<str>,
     anon_key: Arc<str>,
 }
 
-impl RecordingMemberAuth {
+impl RecordingMemberships {
     pub fn new(supabase_url: &str, anon_key: &str) -> Result<Self, MemberError> {
         let url = url::Url::parse(supabase_url)
             .map_err(|_| MemberError::Invalid("invalid Supabase URL".into()))?;
@@ -92,44 +86,22 @@ impl RecordingMemberAuth {
             .build()
             .map_err(|_| MemberError::Upstream)?;
         Ok(Self {
-            auth: AuthState::new(supabase_url),
             client,
             url: supabase_url.trim_end_matches('/').into(),
             anon_key: anon_key.into(),
         })
     }
 
-    pub async fn authenticate(&self, headers: &HeaderMap) -> Result<AuthContext, MemberError> {
-        let token = headers
-            .get(header::AUTHORIZATION)
-            .and_then(|value| value.to_str().ok())
-            .and_then(AuthState::extract_token)
-            .filter(|token| !token.is_empty())
-            .ok_or(MemberError::Unauthorized)?;
-        let claims = self
-            .auth
-            .verify_token(token)
-            .await
-            .map_err(|_| MemberError::Unauthorized)?;
-        Ok(AuthContext {
-            token: token.to_owned(),
-            claims,
-        })
-    }
-
     pub async fn authorize(
         &self,
-        headers: &HeaderMap,
+        auth: &AuthContext,
         workspace: &str,
-    ) -> Result<MemberSession, MemberError> {
-        let auth = self.authenticate(headers).await?;
-        let membership = self
-            .memberships(&auth)
+    ) -> Result<OrganizationMembership, MemberError> {
+        self.memberships(auth)
             .await?
             .into_iter()
             .find(|membership| membership.id == workspace)
-            .ok_or(MemberError::Forbidden)?;
-        Ok(MemberSession { auth, membership })
+            .ok_or(MemberError::Forbidden)
     }
 
     pub async fn memberships(

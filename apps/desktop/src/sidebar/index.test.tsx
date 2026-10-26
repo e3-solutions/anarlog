@@ -6,10 +6,6 @@ const mocks = vi.hoisted(() => ({
   platform: "macos",
 }));
 
-vi.mock("~/env", () => ({
-  env: { VITE_SHARED_RECORDINGS_PREVIEW_URL: "http://localhost:8789" },
-}));
-
 vi.mock("@tauri-apps/plugin-os", () => ({
   platform: () => mocks.platform,
 }));

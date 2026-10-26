@@ -1,8 +1,6 @@
 import { z } from "zod";
 
 export const DESKTOP_SCHEMES = [
-  "e3-shared-recordings-preview",
-  "e3-shared-recordings-preview-second",
   "anarlog",
   "anarlog-staging",
   "anarlog-nightly",

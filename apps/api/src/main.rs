@@ -116,7 +116,7 @@ async fn app_with_session_gate(
     }
     if service.includes(Service::Core) {
         routes = routes.merge(proxy::route(
-            routes::core(env, analytics.clone()),
+            routes::core(env, analytics.clone()).await,
             &env.upstreams.anarlog_core_origin,
             &session_gate,
             &env.supabase.supabase_service_role_key,
@@ -345,14 +345,12 @@ fn build_analytics_client(env: &Env) -> Arc<anlg_analytics::AnalyticsClient> {
     if let Some(revision) = option_env!("GH_SHA").filter(|revision| !revision.is_empty()) {
         builder = builder.with_event_property("serving_revision", revision);
     }
-    if cfg!(debug_assertions) {
-        tracing::info!("analytics: dev mode, printing events as tracing");
-    } else {
-        let key = env
-            .posthog_api_key
-            .as_ref()
-            .expect("POSTHOG_API_KEY is required in production");
+    if !cfg!(debug_assertions)
+        && let Some(key) = &env.posthog_api_key
+    {
         builder = builder.with_posthog(key);
+    } else {
+        tracing::info!("analytics: remote reporting disabled, using tracing");
     }
     Arc::new(builder.build())
 }

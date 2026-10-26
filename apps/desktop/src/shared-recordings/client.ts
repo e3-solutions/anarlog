@@ -1,10 +1,6 @@
-import { fetch } from "@tauri-apps/plugin-http";
 import { z } from "zod";
 
 import { env } from "~/env";
-
-export const sharedRecordingsPreviewUrl =
-  env.VITE_SHARED_RECORDINGS_PREVIEW_URL;
 
 const revisionSchema = z.object({
   number: z.number(),
@@ -87,20 +83,21 @@ async function request(
   signal?: AbortSignal,
 ) {
   signal?.throwIfAborted();
-  if (!sharedRecordingsPreviewUrl) {
-    throw new Error("Shared recordings preview is not configured.");
-  }
   const response = await fetch(
-    `${sharedRecordingsPreviewUrl.replace(/\/$/, "")}${path}`,
+    `${env.VITE_API_URL.replace(/\/$/, "")}${path}`,
     {
       headers: { Authorization: `Bearer ${accessToken}` },
-      connectTimeout: 15_000,
-      maxRedirections: 0,
+      redirect: "error",
       signal,
     },
   );
   signal?.throwIfAborted();
   if (!response.ok) {
+    if (response.status === 404 && path === "/v1/shared-recordings/me") {
+      throw new Error(
+        "Organization recordings are not configured on this server.",
+      );
+    }
     if (response.status === 401) {
       throw new Error("Sign in again to access shared recordings.");
     }

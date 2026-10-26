@@ -1,21 +1,22 @@
 use std::sync::Arc;
 
+use anlg_api_auth::{AuthContext, AuthState};
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::{DefaultBodyLimit, Path, State},
-    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
+    http::{HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{any, get, post},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::Serialize;
-use tower_http::{cors::CorsLayer, limit::RequestBodyLimitLayer};
+use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::{
     recording_identity::{AdmissionRequest, RecordingIdentityResolver, ResolvedOccurrence},
     recording_members::{
-        MemberError, OrganizationMembership, ProviderConnection, RecordingMemberAuth,
+        MemberError, OrganizationMembership, ProviderConnection, RecordingMemberships,
     },
     recording_transcription::RecordingProcessor,
     shared_recordings::{
@@ -27,91 +28,60 @@ use crate::{
 #[derive(Clone)]
 pub struct RecordingAppState {
     pub service: Arc<SharedRecordingService>,
-    pub members: RecordingMemberAuth,
+    pub members: RecordingMemberships,
     pub identities: Option<RecordingIdentityResolver>,
     pub processor: Option<Arc<RecordingProcessor>>,
 }
 
-pub fn local_preview_cors(web_origin: Option<&str>) -> anyhow::Result<CorsLayer> {
-    let mut origins = vec![
-        HeaderValue::from_static("http://localhost:3000"),
-        HeaderValue::from_static("http://127.0.0.1:3000"),
-        HeaderValue::from_static("tauri://localhost"),
-        HeaderValue::from_static("http://tauri.localhost"),
-    ];
-    if let Some(origin) = web_origin {
-        let url: url::Url = origin.parse()?;
-        anyhow::ensure!(
-            url.scheme() == "https"
-                && url.host_str().is_some_and(|host| !host.contains('*'))
-                && url.username().is_empty()
-                && url.password().is_none()
-                && url.path() == "/"
-                && url.query().is_none()
-                && url.fragment().is_none()
-                && url.origin().ascii_serialization() == origin,
-            "preview web origin must be an exact HTTPS origin without credentials, path, query or fragment"
-        );
-        origins.push(origin.parse()?);
-    }
-    Ok(CorsLayer::new()
-        .allow_origin(origins)
-        .allow_methods([Method::GET, Method::POST, Method::DELETE])
-        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]))
+const PATHS: [&str; 10] = [
+    "/v1/shared-recordings/me",
+    "/v1/orgs/{workspace}/shared-recordings",
+    "/v1/orgs/{workspace}/shared-recordings/admit",
+    "/v1/orgs/{workspace}/shared-recordings/{id}",
+    "/v1/orgs/{workspace}/shared-recordings/{id}/audio",
+    "/v1/orgs/{workspace}/shared-recordings/{id}/revisions/{revision}/audio",
+    "/v1/orgs/{workspace}/shared-recordings/{id}/transcript",
+    "/v1/orgs/{workspace}/shared-recordings/{id}/captures/{source}",
+    "/v1/orgs/{workspace}/shared-recordings/{id}/process",
+    "/v1/orgs/{workspace}/shared-recordings/{id}/seal",
+];
+
+pub fn forwarding_router() -> Router {
+    PATHS.into_iter().fold(Router::new(), |router, path| {
+        router.route(path, any(|| async { StatusCode::NOT_FOUND }))
+    })
 }
 
-pub fn provider_router(config: anlg_api_nango::NangoConfig) -> Router {
-    let auth = anlg_api_auth::AuthState::new(&config.supabase_url);
-    let authenticated = anlg_api_nango::router(config.clone()).route_layer(
-        middleware::from_fn_with_state(auth, anlg_api_auth::require_auth),
-    );
-    Router::new().nest(
-        "/nango",
-        authenticated.merge(anlg_api_nango::webhook_router(
-            config,
-            anlg_api_nango::ForwardHandlerRegistry::new(),
-        )),
-    )
-}
-
-pub fn router(state: RecordingAppState, provider_routes: Router, cors: CorsLayer) -> Router {
+pub fn router(state: RecordingAppState, auth: AuthState) -> Router {
+    let [
+        account,
+        library_path,
+        admission,
+        occurrence,
+        canonical_audio,
+        historical_audio,
+        text,
+        capture,
+        processing,
+        sealing,
+    ] = PATHS;
     Router::new()
-        .route("/v1/shared-recordings/me", get(me))
-        .route("/v1/orgs/{workspace}/shared-recordings", get(library))
-        .route("/v1/orgs/{workspace}/shared-recordings/admit", post(admit))
-        .route(
-            "/v1/orgs/{workspace}/shared-recordings/{id}",
-            get(manifest).delete(delete_occurrence),
-        )
-        .route(
-            "/v1/orgs/{workspace}/shared-recordings/{id}/audio",
-            get(audio),
-        )
-        .route(
-            "/v1/orgs/{workspace}/shared-recordings/{id}/revisions/{revision}/audio",
-            get(revision_audio),
-        )
-        .route(
-            "/v1/orgs/{workspace}/shared-recordings/{id}/transcript",
-            get(transcript),
-        )
-        .route(
-            "/v1/orgs/{workspace}/shared-recordings/{id}/captures/{source}",
-            post(upload).delete(delete_capture),
-        )
-        .route(
-            "/v1/orgs/{workspace}/shared-recordings/{id}/process",
-            post(process),
-        )
-        .route(
-            "/v1/orgs/{workspace}/shared-recordings/{id}/seal",
-            post(seal),
-        )
+        .route(account, get(me))
+        .route(library_path, get(library))
+        .route(admission, post(admit))
+        .route(occurrence, get(manifest).delete(delete_occurrence))
+        .route(canonical_audio, get(audio))
+        .route(historical_audio, get(revision_audio))
+        .route(text, get(transcript))
+        .route(capture, post(upload).delete(delete_capture))
+        .route(processing, post(process))
+        .route(sealing, post(seal))
         .layer(DefaultBodyLimit::max(140 * 1024 * 1024))
         .with_state(state)
-        .merge(provider_routes)
-        .route("/health", get(|| async { "ready" }))
-        .layer(cors)
+        .route_layer(middleware::from_fn_with_state(
+            auth,
+            anlg_api_auth::require_auth,
+        ))
         .layer(RequestBodyLimitLayer::new(140 * 1024 * 1024))
         .layer(middleware::from_fn(response_headers))
 }
@@ -151,9 +121,8 @@ struct Account {
 }
 async fn me(
     State(state): State<RecordingAppState>,
-    headers: HeaderMap,
+    Extension(auth): Extension<AuthContext>,
 ) -> Result<Json<Account>, MemberError> {
-    let auth = state.members.authenticate(&headers).await?;
     let workspaces = state.members.memberships(&auth).await?;
     let connections = state.members.connections(&auth).await?;
     Ok(Json(Account {
@@ -170,9 +139,9 @@ struct Library {
 async fn library(
     State(state): State<RecordingAppState>,
     Path(workspace): Path<String>,
-    headers: HeaderMap,
+    Extension(auth): Extension<AuthContext>,
 ) -> Result<Json<Library>, MemberError> {
-    state.members.authorize(&headers, &workspace).await?;
+    state.members.authorize(&auth, &workspace).await?;
     Ok(Json(Library {
         items: state
             .service
@@ -185,18 +154,18 @@ async fn library(
 async fn admit(
     State(state): State<RecordingAppState>,
     Path(workspace): Path<String>,
-    headers: HeaderMap,
+    Extension(auth): Extension<AuthContext>,
     Json(request): Json<AdmissionRequest>,
 ) -> Result<Json<ResolvedOccurrence>, MemberError> {
-    let session = state.members.authorize(&headers, &workspace).await?;
+    state.members.authorize(&auth, &workspace).await?;
     let resolver = state.identities.as_ref().ok_or(MemberError::Unresolved)?;
-    let mut resolved = resolver.resolve(&session.auth, &request).await?;
+    let mut resolved = resolver.resolve(&auth, &request).await?;
     resolved.provider_started_at_ms = state
         .service
         .admit_actor(
             &workspace,
             &resolved.occurrence_id,
-            &session.auth.claims.sub,
+            &auth.claims.sub,
             resolved.provider.clone(),
             &resolved.provider_occurrence_id,
             resolved.provider_started_at_ms,
@@ -209,9 +178,9 @@ async fn admit(
 async fn manifest(
     State(state): State<RecordingAppState>,
     Path((workspace, id)): Path<(String, String)>,
-    headers: HeaderMap,
+    Extension(auth): Extension<AuthContext>,
 ) -> Result<Json<OccurrenceManifest>, MemberError> {
-    state.members.authorize(&headers, &workspace).await?;
+    state.members.authorize(&auth, &workspace).await?;
     Ok(Json(
         state
             .service
@@ -223,9 +192,9 @@ async fn manifest(
 async fn transcript(
     State(state): State<RecordingAppState>,
     Path((workspace, id)): Path<(String, String)>,
-    headers: HeaderMap,
+    Extension(auth): Extension<AuthContext>,
 ) -> Result<Json<Revision>, MemberError> {
-    state.members.authorize(&headers, &workspace).await?;
+    state.members.authorize(&auth, &workspace).await?;
     Ok(Json(
         state
             .service
@@ -239,9 +208,9 @@ async fn transcript(
 async fn audio(
     State(state): State<RecordingAppState>,
     Path((workspace, id)): Path<(String, String)>,
-    headers: HeaderMap,
+    Extension(auth): Extension<AuthContext>,
 ) -> Result<Response, MemberError> {
-    state.members.authorize(&headers, &workspace).await?;
+    state.members.authorize(&auth, &workspace).await?;
     let (revision, wav) = state
         .service
         .canonical_audio(&workspace, &id)
@@ -253,19 +222,19 @@ async fn audio(
 async fn upload(
     State(state): State<RecordingAppState>,
     Path((workspace, id, source)): Path<(String, String, String)>,
-    headers: HeaderMap,
+    Extension(auth): Extension<AuthContext>,
     Json(mut request): Json<CaptureUpload>,
 ) -> Result<Json<OccurrenceManifest>, MemberError> {
-    let session = state.members.authorize(&headers, &workspace).await?;
+    state.members.authorize(&auth, &workspace).await?;
     if !state
         .service
-        .actor_admitted(&workspace, &id, &session.auth.claims.sub)
+        .actor_admitted(&workspace, &id, &auth.claims.sub)
         .await
         .map_err(storage_error)?
     {
         return Err(MemberError::Forbidden);
     }
-    request.metadata.uploader_id = session.auth.claims.sub;
+    request.metadata.uploader_id = auth.claims.sub;
     request.metadata.timing_basis = TimingBasis::DeviceClockHint;
     request.metadata.rank = 0;
     let wav = STANDARD
@@ -283,9 +252,9 @@ async fn upload(
 async fn process(
     State(state): State<RecordingAppState>,
     Path((workspace, id)): Path<(String, String)>,
-    headers: HeaderMap,
+    Extension(auth): Extension<AuthContext>,
 ) -> Result<Json<Revision>, MemberError> {
-    state.members.authorize(&headers, &workspace).await?;
+    state.members.authorize(&auth, &workspace).await?;
     let processor = state.processor.as_ref().ok_or(MemberError::Upstream)?;
     match processor.process(&workspace, &id).await {
         Ok(revision) => Ok(Json(revision)),
@@ -306,10 +275,10 @@ async fn process(
 async fn seal(
     State(state): State<RecordingAppState>,
     Path((workspace, id)): Path<(String, String)>,
-    headers: HeaderMap,
+    Extension(auth): Extension<AuthContext>,
 ) -> Result<Json<Revision>, MemberError> {
-    let session = state.members.authorize(&headers, &workspace).await?;
-    require_manager(&session.membership)?;
+    let membership = state.members.authorize(&auth, &workspace).await?;
+    require_manager(&membership)?;
     Ok(Json(
         state
             .service
@@ -321,10 +290,10 @@ async fn seal(
 async fn delete_occurrence(
     State(state): State<RecordingAppState>,
     Path((workspace, id)): Path<(String, String)>,
-    headers: HeaderMap,
+    Extension(auth): Extension<AuthContext>,
 ) -> Result<StatusCode, MemberError> {
-    let session = state.members.authorize(&headers, &workspace).await?;
-    require_manager(&session.membership)?;
+    let membership = state.members.authorize(&auth, &workspace).await?;
+    require_manager(&membership)?;
     state
         .service
         .delete_occurrence(&workspace, &id)
@@ -335,9 +304,9 @@ async fn delete_occurrence(
 async fn delete_capture(
     State(state): State<RecordingAppState>,
     Path((workspace, id, source)): Path<(String, String, String)>,
-    headers: HeaderMap,
+    Extension(auth): Extension<AuthContext>,
 ) -> Result<StatusCode, MemberError> {
-    let session = state.members.authorize(&headers, &workspace).await?;
+    let membership = state.members.authorize(&auth, &workspace).await?;
     let occurrence = state
         .service
         .manifest(&workspace, &id)
@@ -348,8 +317,8 @@ async fn delete_capture(
         .iter()
         .find(|capture| capture.capture_id == source)
         .ok_or(MemberError::NotFound)?;
-    if capture.metadata.uploader_id != session.auth.claims.sub {
-        require_manager(&session.membership)?;
+    if capture.metadata.uploader_id != auth.claims.sub {
+        require_manager(&membership)?;
     }
     state
         .service
@@ -379,9 +348,9 @@ fn storage_error(error: RecordingError) -> MemberError {
 async fn revision_audio(
     State(state): State<RecordingAppState>,
     Path((workspace, id, revision)): Path<(String, String, String)>,
-    headers: HeaderMap,
+    Extension(auth): Extension<AuthContext>,
 ) -> Result<Response, MemberError> {
-    state.members.authorize(&headers, &workspace).await?;
+    state.members.authorize(&auth, &workspace).await?;
     let (revision, wav) = state
         .service
         .revision_audio(&workspace, &id, &revision)

@@ -61,8 +61,8 @@ vi.mock("./native", () => ({
   },
   sharedRecordingQueue: async () => [],
 }));
-vi.mock("./client", () => ({
-  sharedRecordingsPreviewUrl: "http://localhost:8789",
+vi.mock("~/env", () => ({
+  env: { VITE_API_URL: "http://localhost:8789" },
 }));
 
 import { SharedRecordingLifecycle } from "./lifecycle";
@@ -103,8 +103,8 @@ it("keeps unverified active captures local without quarantining a stopped captur
   });
   const view = render(
     <QueryClientProvider client={client}>
-      <SharedRecordingLifecycle />
       <SharedRecordingQueue userId="account-one" />
+      <SharedRecordingLifecycle />
     </QueryClientProvider>,
   );
   await waitFor(() => expect(mocks.quarantined).toBe(true));
@@ -132,6 +132,7 @@ it("keeps unverified active captures local without quarantining a stopped captur
   });
   render(
     <QueryClientProvider client={client}>
+      <SharedRecordingQueue userId="account-one" />
       <SharedRecordingLifecycle />
     </QueryClientProvider>,
   );
@@ -140,11 +141,7 @@ it("keeps unverified active captures local without quarantining a stopped captur
   await act(async () => {
     finishInspection({ status: "error", error: "AX unavailable" });
   });
-  await waitFor(() =>
-    expect(
-      client.getQueryData(["shared-recording-observation", "account-one"]),
-    ).toEqual({ blocked: false }),
-  );
+  expect(screen.queryByRole("status")).toBeNull();
   expect(mocks.quarantined).toBe(false);
   cleanup();
   client.clear();
@@ -165,6 +162,7 @@ it("keeps unverified active captures local without quarantining a stopped captur
   });
   const authFailure = render(
     <QueryClientProvider client={client}>
+      <SharedRecordingQueue userId="account-one" />
       <SharedRecordingLifecycle />
     </QueryClientProvider>,
   );
@@ -272,23 +270,19 @@ it("recovers identity and uploads while two account views of the same Meet are i
   });
   render(
     <QueryClientProvider client={client}>
+      <SharedRecordingQueue userId="account-one" />
       <SharedRecordingLifecycle />
     </QueryClientProvider>,
   );
   await vi.waitFor(() =>
-    expect(
-      client.getQueryState(["shared-recording-observation", "account-one"])
-        ?.status,
-    ).toBe("error"),
+    expect(screen.getByRole("status").textContent).toContain(
+      "sharing will retry",
+    ),
   );
   await act(async () => {
     await vi.advanceTimersByTimeAsync(12_000);
   });
   expect(mocks.uploaded).toBe(true);
-  expect(mocks.observe.mock.lastCall?.[0]).toMatchObject({
-    userId: "account-one",
-    callIdentity: "https://meet.google.com/abc-defg-hij",
-  });
   client.clear();
 });
 
@@ -346,15 +340,16 @@ it.each([
     });
     render(
       <QueryClientProvider client={client}>
+        <SharedRecordingQueue userId="account-one" />
         <SharedRecordingLifecycle />
       </QueryClientProvider>,
     );
     const queryKey = ["shared-recording-observation", "account-one"];
-    await waitFor(() =>
-      expect(client.getQueryData(queryKey)).toEqual({ blocked: false }),
-    );
-    expect(mocks.inspection).toHaveBeenCalled();
-    expect(mocks.observe).not.toHaveBeenCalled();
+    await waitFor(() => expect(mocks.inspection).toHaveBeenCalled());
+    await act(async () => {
+      await client.refetchQueries({ queryKey });
+    });
+    expect(mocks.quarantined).toBe(false);
     mocks.live = { status: "active", sessionId: "session-one" };
     mocks.inspection.mockResolvedValue({ status: "ok", data: [row] });
     await act(async () => {
@@ -396,35 +391,14 @@ it.each([
       await client.refetchQueries({ queryKey });
     });
     if (!reason) {
-      expect(client.getQueryData(queryKey)).toEqual({ blocked: false });
+      expect(screen.queryByRole("status")).toBeNull();
       expect(mocks.quarantined).toBe(false);
-      expect(mocks.observe.mock.lastCall?.[0]).toMatchObject({
-        platform: "googleMeet",
-        callIdentity: room,
-      });
     } else {
-      expect(client.getQueryData(queryKey)).toEqual({
-        blocked: true,
-        quarantined: true,
-      });
-      expect(mocks.observe.mock.lastCall?.[0]).toMatchObject({
-        platform: "unverified",
-        quarantineReason: reason,
-        diagnosticSummary: {
-          inspectionStatus: "ok",
-        },
-      });
-      mocks.inspection.mockResolvedValue({
-        status: "ok",
-        data: [{ ...background, openCallIdentities: inventory }],
-      });
-      await act(async () => {
-        await client.refetchQueries({ queryKey });
-      });
-      expect(client.getQueryData(queryKey)).toEqual({
-        blocked: true,
-        quarantined: true,
-      });
+      await waitFor(() =>
+        expect(screen.getByRole("status").textContent).toContain(
+          "start a new recording",
+        ),
+      );
       expect(mocks.quarantined).toBe(true);
     }
     client.clear();

@@ -63,6 +63,15 @@ pub struct Env {
     #[serde(default, deserialize_with = "anlg_api_env::filter_empty")]
     pub sqlitecloud_cloudsync_management_api_key: Option<String>,
 
+    #[serde(default, deserialize_with = "anlg_api_env::filter_empty")]
+    pub anarlog_shared_recordings_dir: Option<String>,
+    #[serde(default, deserialize_with = "anlg_api_env::filter_empty")]
+    pub anarlog_shared_recordings_transcription_url: Option<String>,
+    #[serde(default, deserialize_with = "anlg_api_env::filter_empty")]
+    pub anarlog_shared_recordings_transcription_model: Option<String>,
+    #[serde(default, deserialize_with = "anlg_api_env::filter_empty")]
+    pub anarlog_shared_recordings_transcription_key: Option<String>,
+
     #[serde(flatten)]
     pub observability: crate::observability::Env,
 
@@ -124,6 +133,43 @@ impl RuntimeConfig {
         env.upstreams.validate(service)?;
         if env.anarlog_billing_webhooks && service != Service::Billing {
             return Err("Local billing webhooks require the billing role".into());
+        }
+        if let Some(directory) = &env.anarlog_shared_recordings_dir {
+            if !service.includes(Service::Core) {
+                return Err(
+                    "ANARLOG_SHARED_RECORDINGS_DIR is only supported by core or all".into(),
+                );
+            }
+            if !Path::new(directory).is_absolute() {
+                return Err("ANARLOG_SHARED_RECORDINGS_DIR requires an absolute single-writer durable directory".into());
+            }
+            if env.upstreams.anarlog_core_origin.is_some() {
+                return Err(
+                    "Local shared recordings cannot be combined with core forwarding".into(),
+                );
+            }
+            match (
+                &env.anarlog_shared_recordings_transcription_url,
+                &env.anarlog_shared_recordings_transcription_model,
+                &env.anarlog_shared_recordings_transcription_key,
+            ) {
+                (Some(url), Some(model), key) => {
+                    anlg_api_recordings::recording_transcription::RecordingTranscriber::new(
+                        url.clone(),
+                        key.clone().unwrap_or_default(),
+                        model.clone(),
+                    )
+                    .map_err(|_| {
+                        "Invalid shared recording transcription configuration".to_string()
+                    })?;
+                }
+                (None, None, None) => {}
+                _ => {
+                    return Err(
+                        "Shared recording transcription requires URL and model together".into(),
+                    );
+                }
+            }
         }
         let nango = if service.includes(Service::Core) {
             resolve_nango(&env.nango)?
@@ -461,6 +507,43 @@ mod tests {
             .unwrap();
             assert!(error.contains("only supported by core or all"));
         }
+    }
+
+    #[test]
+    fn shared_recordings_require_opt_in_local_core_storage_and_complete_transcription() {
+        assert!(
+            role_config("core", &[])
+                .unwrap()
+                .anarlog_shared_recordings_dir
+                .is_none()
+        );
+        for (role, directory) in [
+            ("core", "relative"),
+            ("sync", "/data/recordings"),
+            ("billing", "/data/recordings"),
+        ] {
+            assert!(role_config(role, &[("ANARLOG_SHARED_RECORDINGS_DIR", directory)]).is_err());
+        }
+        assert!(
+            role_config(
+                "core",
+                &[("ANARLOG_SHARED_RECORDINGS_DIR", "/data/recordings")]
+            )
+            .is_ok()
+        );
+        assert!(
+            role_config(
+                "core",
+                &[
+                    ("ANARLOG_SHARED_RECORDINGS_DIR", "/data/recordings"),
+                    (
+                        "ANARLOG_SHARED_RECORDINGS_TRANSCRIPTION_URL",
+                        "http://127.0.0.1:18796/v1"
+                    )
+                ]
+            )
+            .is_err()
+        );
     }
 
     #[test]

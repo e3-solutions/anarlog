@@ -38,6 +38,7 @@ anlg-api-messenger = { path = "crates/api-messenger", package = "api-messenger" 
 anlg-api-nango = { path = "crates/api-nango", package = "api-nango" }
 anlg-api-notion = { path = "crates/api-notion", package = "api-notion" }
 anlg-api-pyannote = { path = "crates/api-pyannote", package = "api-pyannote" }
+anlg-api-recordings = { path = "crates/api-recordings", package = "api-recordings" }
 anlg-api-research = { path = "crates/api-research", package = "api-research" }
 anlg-api-subscription = { path = "crates/api-subscription", package = "api-subscription" }
 anlg-api-sync = { path = "crates/api-sync", package = "api-sync" }
@@ -128,6 +129,7 @@ anlg-pyannote-local = { path = "crates/pyannote-local", package = "pyannote-loca
 anlg-resampler = { path = "crates/resampler", package = "resampler" }
 anlg-s3 = { path = "crates/s3", package = "s3" }
 anlg-session-ingest = { path = "crates/session-ingest", package = "session-ingest" }
+anlg-shared-recording = { path = "crates/shared-recording", package = "shared-recording" }
 anlg-shortcut-macos = { path = "crates/shortcut-macos", package = "shortcut-macos" }
 anlg-slack-web = { path = "crates/slack-web", package = "slack-web" }
 anlg-storage = { path = "crates/storage", package = "storage" }

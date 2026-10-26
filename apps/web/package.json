@@ -5,7 +5,6 @@
   "scripts": {
     "dev": "NODE_OPTIONS='--max-old-space-size=8192' VITE_APP_URL=\"http://localhost:3000\" VITE_API_URL=\"http://localhost:3001\" dotenvx run --ignore MISSING_ENV_FILE -f ../../.env.supabase -f .env -- vite dev --port 3000",
     "build": "NODE_OPTIONS='--max-old-space-size=8192' vite build && node scripts/finalize-build.mjs",
-    "build:shared-recordings-preview": "ANARLOG_SHARED_RECORDINGS_PREVIEW=1 NITRO_PRESET=node-server NODE_OPTIONS='--max-old-space-size=4096' vite build --mode shared-recordings-preview --config vite.shared-recordings-preview.config.ts && node scripts/finalize-build.mjs",
     "media:napkin": "node scripts/napkin-to-supabase.mjs",
     "media:figures": "node scripts/napkin-batch.mjs",
     "media:figures:check": "node scripts/napkin-batch.mjs --check && node scripts/static-media-check.mjs",

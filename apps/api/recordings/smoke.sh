@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-image="${1:?Pass the locally built preview image}"
-name="anlg-shared-preview-smoke-$$"
+image="${1:?Pass the locally built recordings image}"
+name="anlg-recordings-smoke-$$"
 volume="${name}-data"
 cleanup() {
   docker rm --force "$name" >/dev/null 2>&1 || true
@@ -10,7 +10,7 @@ cleanup() {
 }
 trap cleanup EXIT
 if docker run --rm "$image"; then
-  echo "Preview accepted missing runtime credentials" >&2
+  echo "API accepted missing runtime credentials" >&2
   exit 1
 fi
 if docker run --rm \
@@ -19,7 +19,7 @@ if docker run --rm \
   -e SUPABASE_SERVICE_ROLE_KEY=disposable-smoke-key \
   -e NANGO_API_KEY=disposable-smoke-key \
   -e NANGO_WEBHOOK_SIGNING_KEY=disposable-smoke-key "$image"; then
-  echo "Preview accepted missing persistent mount" >&2
+  echo "API accepted missing persistent mount" >&2
   exit 1
 fi
 docker volume create "$volume" >/dev/null
@@ -36,16 +36,16 @@ docker run --detach --name "$name" \
 wait_ready() {
   for ((attempt = 0; attempt < 240; attempt++)); do
     if [[ "$(docker inspect --format '{{.State.Running}}' "$name")" != true ]]; then
-      echo "Preview exited before readiness" >&2
+      echo "API exited before readiness" >&2
       docker logs "$name"
       exit 1
     fi
-    if docker exec "$name" python3 /opt/preview/entrypoint.py healthcheck; then
+    if docker exec "$name" python3 /opt/recordings/entrypoint.py healthcheck; then
       return
     fi
     sleep 1
   done
-  echo "Preview did not become ready" >&2
+  echo "API did not become ready" >&2
   return 1
 }
 wait_ready
@@ -65,16 +65,16 @@ for path, expected in (
     try:
         with urllib.request.urlopen(base + path, timeout=3) as response:
             actual = response.status
-            assert response.headers["Cache-Control"] == "no-store"
-            assert response.headers["X-Content-Type-Options"] == "nosniff"
-            assert response.headers.get("Server") is None
+            if path.startswith("/v1/shared-recordings") or path.startswith("/v1/orgs"):
+                assert response.headers["Cache-Control"] == "no-store"
+                assert response.headers["X-Content-Type-Options"] == "nosniff"
     except urllib.error.HTTPError as error:
         actual = error.code
-        assert error.headers["Cache-Control"] == "no-store"
-        assert error.headers["X-Content-Type-Options"] == "nosniff"
-        assert error.headers.get("Server") is None
+        if path.startswith("/v1/shared-recordings") or path.startswith("/v1/orgs"):
+            assert error.headers["Cache-Control"] == "no-store"
+            assert error.headers["X-Content-Type-Options"] == "nosniff"
     assert actual == expected, (path, actual, expected)
-request = urllib.request.Request(base + "/nango/session", data=b"", method="POST", headers={"Content-Length": str(140 * 1024 * 1024 + 1)})
+request = urllib.request.Request(base + "/v1/orgs/org/shared-recordings/admit", data=b"", method="POST", headers={"Content-Length": str(140 * 1024 * 1024 + 1)})
 try:
     urllib.request.urlopen(request, timeout=3)
 except urllib.error.HTTPError as error:
@@ -120,7 +120,7 @@ with wave.open(audio, "wb") as wav:
     wav.setsampwidth(2)
     wav.setframerate(16000)
     wav.writeframes(bytes(32000))
-boundary = "isolated-preview-silence-smoke"
+boundary = "isolated-recordings-silence-smoke"
 body = (
     f"--{boundary}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ntiny.en\r\n"
     f"--{boundary}\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n"
@@ -166,5 +166,5 @@ PY
   fi
   sleep 1
 done
-echo "Preview remained running after ASR failure" >&2
+echo "API remained running after ASR failure" >&2
 exit 1

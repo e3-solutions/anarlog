@@ -502,6 +502,7 @@ dependencies = [
  "api-nango",
  "api-notion",
  "api-pyannote",
+ "api-recordings",
  "api-research",
  "api-subscription",
  "api-sync",
@@ -528,6 +529,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "tempfile",
  "tokio",
  "tokio-tungstenite 0.29.0",
  "tokio-util",
@@ -753,6 +755,34 @@ dependencies = [
  "tokio",
  "tower",
  "utoipa",
+ "wiremock",
+]
+
+[[package]]
+name = "api-recordings"
+version = "0.1.0"
+dependencies = [
+ "anlg-http-utils",
+ "anyhow",
+ "api-auth",
+ "api-nango",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "jsonwebtoken",
+ "reqwest 0.13.2",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "shared-recording",
+ "sqlx",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tracing",
+ "url",
  "wiremock",
 ]
 

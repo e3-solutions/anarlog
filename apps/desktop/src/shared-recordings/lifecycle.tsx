@@ -4,22 +4,17 @@ import { useRef } from "react";
 import { commands as detectCommands } from "@anlg/plugin-detect";
 import { useMountEffect } from "@anlg/ui/hooks/use-mount-effect";
 
-import { sharedRecordingsPreviewUrl } from "./client";
 import { useSharingConfiguration } from "./configuration";
 import { flushSharedRecordings, observeSharedRecording } from "./native";
 
 import { useAuth } from "~/auth";
+import { env } from "~/env";
 import { listenerStore } from "~/store/zustand/listener/instance";
 import { selectAutomaticMeeting } from "~/stt/automatic-meeting";
 
 export function SharedRecordingLifecycle() {
   const { session } = useAuth();
-  if (
-    !sharedRecordingsPreviewUrl ||
-    !session ||
-    session.user.is_anonymous === true
-  )
-    return null;
+  if (!session || session.user.is_anonymous === true) return null;
   return (
     <ActiveSharedRecordingLifecycle
       key={session.user.id}
@@ -263,7 +258,7 @@ function ActiveSharedRecordingLifecycle({ userId }: { userId: string }) {
     },
     enabled:
       config.data?.enabled === true &&
-      config.data.apiBaseUrl === sharedRecordingsPreviewUrl,
+      config.data.apiBaseUrl === env.VITE_API_URL,
     refetchIntervalInBackground: true,
     refetchInterval: 4_000,
     retry: false,
@@ -280,7 +275,7 @@ function ActiveSharedRecordingLifecycle({ userId }: { userId: string }) {
     },
     enabled:
       config.data?.enabled === true &&
-      config.data.apiBaseUrl === sharedRecordingsPreviewUrl,
+      config.data.apiBaseUrl === env.VITE_API_URL,
     refetchIntervalInBackground: true,
     refetchInterval: 10_000,
     retry: false,

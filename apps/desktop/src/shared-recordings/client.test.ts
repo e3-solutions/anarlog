@@ -3,12 +3,14 @@ import { webcrypto } from "node:crypto";
 import { afterEach, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ fetch: vi.fn() }));
-vi.mock("@tauri-apps/plugin-http", () => ({ fetch: mocks.fetch }));
 vi.mock("~/env", () => ({
-  env: { VITE_SHARED_RECORDINGS_PREVIEW_URL: "http://localhost:8789" },
+  env: { VITE_API_URL: "http://localhost:8789" },
 }));
 
-import { downloadSharedRecordingAudio } from "./client";
+import {
+  downloadSharedRecordingAudio,
+  readSharedRecordingAccount,
+} from "./client";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -16,6 +18,7 @@ afterEach(() => {
 });
 
 it("plays only complete checksum-verified audio for the current account and rejects canceled downloads", async () => {
+  vi.stubGlobal("fetch", mocks.fetch);
   vi.stubGlobal("Blob", Blob);
   vi.stubGlobal("crypto", webcrypto);
   const bytes = new Uint8Array([82, 73, 70, 70]);
@@ -67,6 +70,11 @@ it("plays only complete checksum-verified audio for the current account and reje
   await expect(
     downloadSharedRecordingAudio(input, new AbortController().signal),
   ).rejects.toThrow("Account does not match");
+
+  mocks.fetch.mockResolvedValueOnce(new Response("Not found", { status: 404 }));
+  await expect(readSharedRecordingAccount("token")).rejects.toThrow(
+    "not configured on this server",
+  );
 
   const before = new AbortController();
   before.abort();

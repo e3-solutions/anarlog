@@ -7,10 +7,7 @@ import {
 
 import { Button } from "@anlg/ui/components/ui/button";
 
-import {
-  sharedRecordingsPreviewUrl,
-  type SharedRecordingAccount,
-} from "./client";
+import type { SharedRecordingAccount } from "./client";
 import { useSharingConfiguration } from "./configuration";
 import {
   configureSharedRecordings,
@@ -19,6 +16,7 @@ import {
 } from "./native";
 
 import { useAuth } from "~/auth";
+import { env } from "~/env";
 import { useOpenIntegrationUrl } from "~/shared/integration";
 
 export function SharedRecordingPreferences({
@@ -33,12 +31,13 @@ export function SharedRecordingPreferences({
   const { openIntegration, openingAction } = useOpenIntegrationUrl();
   const enabled =
     config.data?.enabled === true &&
-    config.data.organizationId === organizationId;
+    config.data.organizationId === organizationId &&
+    config.data.apiBaseUrl === env.VITE_API_URL;
   const update = useMutation({
     mutationFn: () =>
       configureSharedRecordings({
         enabled: !enabled,
-        apiBaseUrl: sharedRecordingsPreviewUrl!,
+        apiBaseUrl: env.VITE_API_URL,
         organizationId,
         userId: account.userId,
         connections: account.connections,
