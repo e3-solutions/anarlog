@@ -218,6 +218,22 @@ async fn signed_members_share_one_library_without_spoofing_uploader_or_retaining
         assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
         assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
     }
+    let large_json = json!({"padding": "x".repeat(2 * 1024 * 1024 + 1)});
+    for (path, expected) in [
+        ("/nango/session", StatusCode::PAYLOAD_TOO_LARGE),
+        (
+            "/v1/orgs/org/shared-recordings/admit",
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(request("POST", path, &a, large_json.clone()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    }
     assert_eq!(
         app.clone()
             .oneshot(request("POST", "/nango/session", "invalid", json!({})))

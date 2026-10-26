@@ -107,10 +107,10 @@ pub fn router(state: RecordingAppState, provider_routes: Router, cors: CorsLayer
             "/v1/orgs/{workspace}/shared-recordings/{id}/seal",
             post(seal),
         )
+        .layer(DefaultBodyLimit::max(140 * 1024 * 1024))
         .with_state(state)
         .merge(provider_routes)
         .route("/health", get(|| async { "ready" }))
-        .layer(DefaultBodyLimit::max(140 * 1024 * 1024))
         .layer(cors)
         .layer(RequestBodyLimitLayer::new(140 * 1024 * 1024))
         .layer(middleware::from_fn(response_headers))
