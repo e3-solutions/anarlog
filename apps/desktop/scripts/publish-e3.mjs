@@ -82,6 +82,7 @@ export async function publish(directory, env = process.env, request = fetch) {
       method: "HEAD",
       redirect: "error",
       cache: "no-store",
+      headers: { "Accept-Encoding": "identity" },
     });
     if (!check.ok || Number(check.headers.get("content-length")) !== size) {
       throw new Error(`Public release verification failed for ${key}`);

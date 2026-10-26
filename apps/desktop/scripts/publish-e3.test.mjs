@@ -16,7 +16,11 @@ test("an incomplete release cannot replace the working updater feed", async () =
     const key = new URL(url).pathname.split("e3-scribe-releases/")[1];
     if (options.method === "HEAD") {
       return new Response(null, {
-        headers: { "content-length": objects.get(key)?.length ?? 0 },
+        headers:
+          key.endsWith(".json") &&
+          options.headers?.["Accept-Encoding"] !== "identity"
+            ? { "content-encoding": "br" }
+            : { "content-length": objects.get(key)?.length ?? 0 },
       });
     }
     if (key.endsWith(".tar.gz") && failArchive)
