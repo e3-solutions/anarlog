@@ -294,3 +294,142 @@ it("recovers identity and uploads while two account views of the same Meet are i
   });
   client.clear();
 });
+
+it.each([
+  ["matching inventory", "", true],
+  ["missing inventory", "inventory_missing", true],
+  ["other meeting inventory", "inventory_conflict", true],
+  ["competing call", "call_changed", true],
+  ["explicit departure", "meeting_departed", true],
+  ["no native admission proof", "meeting_unverified", false],
+] as const)(
+  "keeps background capture bound only after verified admission: %s",
+  async (scenario, reason, proof) => {
+    const room = "https://meet.google.com/abc-defg-hij";
+    const inventory = [`${room}:tab:42`];
+    const row = {
+      activeCall: true,
+      accessibilityTrusted: true,
+      windowTitle: "Meet - abc-defg-hij",
+      warnings: [] as string[],
+      platform: "googleMeet",
+      app: { id: "com.google.Chrome", name: "Chrome" },
+      pid: 123,
+      callIdentity: `${room}:tab:42`,
+      openCallIdentities: inventory,
+    };
+    mocks.saved = {
+      enabled: true,
+      userId: "account-one",
+      organizationId: "organization-one",
+      apiBaseUrl: "http://localhost:8789",
+      connections: [
+        {
+          integrationId: "google-meet",
+          connectionId: "google-one",
+          status: "connected",
+        },
+      ],
+    };
+    mocks.observe.mockImplementation(async (input) => {
+      if (input.platform === "unverified") {
+        mocks.quarantined = true;
+        return null;
+      }
+      if (mocks.quarantined) throw new Error("Original remains local");
+      return proof ? "verified-occurrence" : null;
+    });
+    mocks.live = { status: "inactive", sessionId: "session-one" };
+    mocks.inspection.mockResolvedValue({
+      status: "error",
+      error: "AX warming",
+    });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={client}>
+        <SharedRecordingLifecycle />
+      </QueryClientProvider>,
+    );
+    const queryKey = ["shared-recording-observation", "account-one"];
+    await waitFor(() =>
+      expect(client.getQueryData(queryKey)).toEqual({ blocked: false }),
+    );
+    expect(mocks.inspection).toHaveBeenCalled();
+    expect(mocks.observe).not.toHaveBeenCalled();
+    mocks.live = { status: "active", sessionId: "session-one" };
+    mocks.inspection.mockResolvedValue({ status: "ok", data: [row] });
+    await act(async () => {
+      await client.refetchQueries({ queryKey });
+    });
+    expect(mocks.quarantined).toBe(false);
+    const background = {
+      ...row,
+      activeCall: false,
+      platform: "unknown",
+      windowTitle: null,
+      warnings: [
+        "browser inspection found no uniquely scoped meeting AXWindow and active AXWebArea",
+      ],
+      callIdentity: null,
+      openCallIdentities:
+        scenario === "missing inventory"
+          ? undefined
+          : scenario === "other meeting inventory"
+            ? ["https://meet.google.com/xyz-abcd-uvw:tab:43"]
+            : inventory,
+    };
+    mocks.inspection.mockResolvedValue({
+      status: "ok",
+      data:
+        scenario === "competing call"
+          ? [background, { ...row, platform: "slack", callIdentity: null }]
+          : scenario === "explicit departure"
+            ? [
+                {
+                  ...background,
+                  platform: "googleMeet",
+                  callIdentity: row.callIdentity,
+                },
+              ]
+            : [background],
+    });
+    await act(async () => {
+      await client.refetchQueries({ queryKey });
+    });
+    if (!reason) {
+      expect(client.getQueryData(queryKey)).toEqual({ blocked: false });
+      expect(mocks.quarantined).toBe(false);
+      expect(mocks.observe.mock.lastCall?.[0]).toMatchObject({
+        platform: "googleMeet",
+        callIdentity: room,
+      });
+    } else {
+      expect(client.getQueryData(queryKey)).toEqual({
+        blocked: true,
+        quarantined: true,
+      });
+      expect(mocks.observe.mock.lastCall?.[0]).toMatchObject({
+        platform: "unverified",
+        quarantineReason: reason,
+        diagnosticSummary: {
+          inspectionStatus: "ok",
+        },
+      });
+      mocks.inspection.mockResolvedValue({
+        status: "ok",
+        data: [{ ...background, openCallIdentities: inventory }],
+      });
+      await act(async () => {
+        await client.refetchQueries({ queryKey });
+      });
+      expect(client.getQueryData(queryKey)).toEqual({
+        blocked: true,
+        quarantined: true,
+      });
+      expect(mocks.quarantined).toBe(true);
+    }
+    client.clear();
+  },
+);

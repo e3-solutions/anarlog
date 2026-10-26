@@ -56,9 +56,26 @@ export function observeSharedRecording(input: {
   observedAtMs: number;
   accessToken: string;
   userId: string;
+  quarantineReason?:
+    | "ax_unavailable"
+    | "ax_ambiguous"
+    | "meeting_unverified"
+    | "inventory_missing"
+    | "inventory_conflict"
+    | "meeting_departed"
+    | "call_changed"
+    | "auth_unavailable"
+    | "observer_stopped";
+  diagnosticSummary?: {
+    inspectionStatus: "ok" | "error" | "unavailable";
+    rowCount: number;
+    activeCallCount: number;
+    trustedCount: number;
+    warningCategories: string[];
+  };
 }) {
-  if (!sharedRecordingsPreviewUrl) return Promise.resolve();
-  return invoke<unknown>(command("observe"), input);
+  if (!sharedRecordingsPreviewUrl) return Promise.resolve(null);
+  return invoke<string | null>(command("observe"), input);
 }
 
 export async function downloadSharedRecordingAudio(

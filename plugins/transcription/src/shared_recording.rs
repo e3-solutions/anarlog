@@ -58,6 +58,15 @@ struct Segment {
     sha256: String,
     frames: u64,
 }
+#[derive(Clone, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ObservationSummary {
+    inspection_status: String,
+    row_count: u32,
+    active_call_count: u32,
+    trusted_count: u32,
+    warning_categories: Vec<String>,
+}
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Binding {
@@ -75,6 +84,8 @@ struct Binding {
     verification_pending: bool,
     #[serde(default)]
     connection_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    quarantine_reason: Option<String>,
 }
 impl Binding {
     fn valid_binding(&self) -> bool {
@@ -356,6 +367,7 @@ fn quarantine_binding(
     session_id: &str,
     platform: &str,
     observed_at_ms: i64,
+    reason: &str,
 ) -> Result<(), String> {
     let path = dir.join(format!("binding-{}.json", key(session_id)));
     let mut binding = read::<Binding>(&path)?.unwrap_or(Binding {
@@ -369,6 +381,7 @@ fn quarantine_binding(
         call_identity: None,
         verification_pending: false,
         connection_id: None,
+        quarantine_reason: None,
     });
     if binding.user_id != config.user_id
         || binding.organization_id != config.organization_id
@@ -378,6 +391,14 @@ fn quarantine_binding(
     }
     binding.admission = Value::Null;
     binding.verification_pending = false;
+    binding
+        .quarantine_reason
+        .get_or_insert_with(|| reason.into());
+    tracing::warn!(
+        reason = binding.quarantine_reason.as_deref().unwrap_or("unverified"),
+        session = key(session_id),
+        "shared_recording_quarantined"
+    );
     save(&path, &binding)
 }
 fn quarantine_configuration_change(
@@ -421,7 +442,14 @@ fn quarantine_configuration_change(
                 .map(|(session_id, _)| session_id.clone())
                 .collect::<Vec<_>>();
             for session_id in captures {
-                quarantine_binding(dir, &previous, &session_id, "unverified", changed_at_ms)?;
+                quarantine_binding(
+                    dir,
+                    &previous,
+                    &session_id,
+                    "unverified",
+                    changed_at_ms,
+                    "configuration_changed",
+                )?;
             }
         }
     }
@@ -442,7 +470,14 @@ fn quarantine_unadmitted(
         .get(session_id)
         .is_some_and(|timeline| timeline.owned_by(config))
     {
-        quarantine_binding(dir, config, session_id, platform, observed_at_ms)?;
+        quarantine_binding(
+            dir,
+            config,
+            session_id,
+            platform,
+            observed_at_ms,
+            "initial_admission_failed",
+        )?;
     }
     Ok(())
 }
@@ -519,7 +554,9 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
     observed_at_ms: i64,
     access_token: String,
     user_id: String,
-) -> Result<(), String> {
+    quarantine_reason: Option<String>,
+    diagnostic_summary: Option<ObservationSummary>,
+) -> Result<Option<String>, String> {
     let queue_state = app.state::<QueueState>();
     let dir = directory(&app)?;
     if platform == "unverified" {
@@ -545,7 +582,41 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
         if !active_owner {
             return Err("Capture is no longer active under this sharing account".into());
         }
-        return quarantine_binding(&dir, &config, &session_id, &platform, observed_at_ms);
+        let reason = match quarantine_reason.as_deref() {
+            Some(
+                reason @ ("ax_unavailable" | "ax_ambiguous" | "meeting_unverified"
+                | "inventory_missing" | "inventory_conflict" | "meeting_departed"
+                | "auth_unavailable" | "observer_stopped" | "call_changed"),
+            ) => reason,
+            _ => "unverified",
+        };
+        if let Some(summary) = diagnostic_summary {
+            let status = match summary.inspection_status.as_str() {
+                "ok" => "ok",
+                "error" => "error",
+                _ => "unavailable",
+            };
+            let categories: Vec<_> = summary
+                .warning_categories
+                .iter()
+                .filter_map(|category| match category.as_str() {
+                    category @ ("ambiguous" | "incomplete" | "timeout" | "permission"
+                    | "failed" | "unscoped" | "missing") => Some(category),
+                    _ => None,
+                })
+                .take(7)
+                .collect();
+            tracing::warn!(reason, session = key(&session_id), inspection_status = status, row_count = summary.row_count.min(4096), active_call_count = summary.active_call_count.min(4096), trusted_count = summary.trusted_count.min(4096), warning_categories = ?categories, "shared_recording_observation_unverified");
+        }
+        quarantine_binding(
+            &dir,
+            &config,
+            &session_id,
+            &platform,
+            observed_at_ms,
+            reason,
+        )?;
+        return Ok(None);
     }
     let _observation = queue_state.observe_serial.lock().await;
     let provider = match platform.as_str() {
@@ -582,6 +653,17 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
                     && binding.call_identity != call_identity)
             {
                 binding.admission = Value::Null;
+                binding
+                    .quarantine_reason
+                    .get_or_insert_with(|| "call_changed".into());
+                tracing::warn!(
+                    reason = binding
+                        .quarantine_reason
+                        .as_deref()
+                        .unwrap_or("call_changed"),
+                    session = key(&session_id),
+                    "shared_recording_quarantined"
+                );
                 save(&path, &binding)?;
                 return Err(
                     "Meeting changed during this recording; start a new recording to share it"
@@ -719,6 +801,17 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
         }
         if binding.admission["occurrenceId"] != admission["occurrenceId"] {
             binding.admission = Value::Null;
+            binding
+                .quarantine_reason
+                .get_or_insert_with(|| "occurrence_changed".into());
+            tracing::warn!(
+                reason = binding
+                    .quarantine_reason
+                    .as_deref()
+                    .unwrap_or("occurrence_changed"),
+                session = key(&session_id),
+                "shared_recording_quarantined"
+            );
             save(&path, &binding)?;
             return Err(
                 "Provider occurrence changed during this recording; original stays local".into(),
@@ -728,8 +821,11 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
         binding.connection_id = Some(connection_id);
         binding.call_identity = call_identity;
         save(&path, &binding)?;
-        return Ok(());
+        return Ok(binding.admission["occurrenceId"]
+            .as_str()
+            .map(str::to_owned));
     }
+    let occurrence_id = admission["occurrenceId"].as_str().map(str::to_owned);
     save(
         &path,
         &Binding {
@@ -743,8 +839,10 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
             call_identity,
             verification_pending: false,
             connection_id: Some(connection_id),
+            quarantine_reason: None,
         },
-    )
+    )?;
+    Ok(occurrence_id)
 }
 
 fn normalize(source: &Path, dir: &Path) -> Result<Vec<Segment>, String> {
@@ -1077,6 +1175,8 @@ pub async fn shared_recording_flush<R: tauri::Runtime>(
                 chrono::Utc::now().timestamp_millis(),
                 access_token.clone(),
                 user_id.clone(),
+                None,
+                None,
             )
             .await
             .is_err()
@@ -1424,13 +1524,18 @@ mod tests {
                 chrono::Utc::now().timestamp_millis(),
                 "token".into(),
                 "user".into(),
+                None,
+                None,
             )
         };
         assert!(start_raw(&handle, "unconnected-provider", Some("user")));
         assert!(observe("unconnected-provider", "googleMeet").await.is_err());
         assert!(observe("unconnected-provider", "slack").await.is_err());
         assert!(start_raw(&handle, "before-identity", Some("user")));
-        observe("before-identity", "unverified").await.unwrap();
+        assert_eq!(
+            observe("before-identity", "unverified").await.unwrap(),
+            None
+        );
         assert!(observe("before-identity", "slack").await.is_err());
         assert!(start_raw(&handle, "stopped", Some("user")));
         let stopped_at_ms = chrono::Utc::now().timestamp_millis();
@@ -1443,7 +1548,9 @@ mod tests {
                 None,
                 stopped_at_ms + 1,
                 "".into(),
-                "user".into()
+                "user".into(),
+                None,
+                None,
             )
             .await
             .is_err()
@@ -1457,17 +1564,22 @@ mod tests {
         assert!(start_raw(&handle, "stopping", Some("user")));
         let observed_at_ms = chrono::Utc::now().timestamp_millis();
         snapshot_stopped(&handle, "stopping", None, None, observed_at_ms + 1);
-        shared_recording_observe(
-            handle.clone(),
-            "stopping".into(),
-            "unverified".into(),
-            None,
-            observed_at_ms,
-            "".into(),
-            "user".into(),
-        )
-        .await
-        .unwrap();
+        assert_eq!(
+            shared_recording_observe(
+                handle.clone(),
+                "stopping".into(),
+                "unverified".into(),
+                None,
+                observed_at_ms,
+                "".into(),
+                "user".into(),
+                None,
+                None,
+            )
+            .await
+            .unwrap(),
+            None
+        );
         assert!(start_raw(&handle, "disabled", Some("user")));
         let state = handle.state::<QueueState>();
         let gate = state.serial.lock().await;
@@ -1565,13 +1677,16 @@ mod tests {
                 .unwrap()
                 .unwrap();
             let gate = state.serial.lock().await;
-            tokio::time::timeout(
-                std::time::Duration::from_secs(5),
-                observe("in-flight", "unverified"),
-            )
-            .await
-            .unwrap()
-            .unwrap();
+            assert_eq!(
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    observe("in-flight", "unverified"),
+                )
+                .await
+                .unwrap()
+                .unwrap(),
+                None
+            );
             assert!(
                 read::<Binding>(&dir.join(format!("binding-{}.json", key("in-flight"))))
                     .unwrap()
@@ -1736,9 +1851,11 @@ mod tests {
                 0,
                 "token".into(),
                 "user".into(),
+                None,
+                None,
             )
         };
-        observe(None).await.unwrap();
+        assert_eq!(observe(None).await.unwrap().as_deref(), Some("first"));
         let before = shared_recording_enqueue(
             handle.clone(),
             session_id.clone(),
@@ -1797,7 +1914,13 @@ mod tests {
                 .iter()
                 .all(|job| job.state == "uploaded")
         );
-        observe(Some("slack://room/first".into())).await.unwrap();
+        assert_eq!(
+            observe(Some("slack://room/first".into()))
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("first")
+        );
         assert_eq!(
             read::<Binding>(&path)
                 .unwrap()
