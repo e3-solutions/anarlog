@@ -1,15 +1,15 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Anarlog",
+  "productName": "E3 Scribe",
   "mainBinaryName": "anarlog",
   "identifier": "com.hyprnote.stable",
   "bundle": {
     "icon": [
-      "icons/stable/32x32.png",
-      "icons/stable/128x128.png",
-      "icons/stable/128x128@2x.png",
-      "icons/stable/icon.icns",
-      "icons/stable/icon.ico"
+      "icons/e3/32x32.png",
+      "icons/e3/128x128.png",
+      "icons/e3/128x128@2x.png",
+      "icons/e3/icon.icns",
+      "icons/e3/icon.ico"
     ],
     "linux": {
       "deb": {
@@ -20,7 +20,7 @@
     },
     "macOS": {
       "files": {
-        "Resources/AppIcon.icns": "resources/stable/AppIcon.icns"
+        "Resources/AppIcon.icns": "icons/e3/icon.icns"
       }
     },
     "windows": {

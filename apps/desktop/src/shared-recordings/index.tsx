@@ -96,32 +96,44 @@ function OrganizationRecordings({
     );
   }
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-4">
-      <label className="flex items-center gap-3 text-sm">
-        Organization
-        <select
-          aria-label="Organization"
-          className="bg-background rounded-md border p-2"
-          value={organizationId}
-          onChange={(event) => {
-            setOrganizationId(event.target.value);
-            setSelected(null);
-          }}
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b px-6 py-3">
+        <label className="flex items-center gap-3 text-sm">
+          Organization
+          <select
+            aria-label="Organization"
+            className="bg-background max-w-64 rounded-md border px-3 py-1.5 focus-visible:outline-violet-600"
+            value={organizationId}
+            onChange={(event) => {
+              setOrganizationId(event.target.value);
+              setSelected(null);
+            }}
+          >
+            {account.workspaces.map((workspace) => (
+              <option key={workspace.id} value={workspace.id}>
+                {workspace.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <details className="max-w-xl text-sm">
+          <summary className="cursor-pointer rounded-md px-3 py-1.5 text-violet-700 hover:bg-violet-50 focus-visible:outline-violet-600 dark:text-violet-300 dark:hover:bg-violet-950">
+            Sharing settings
+          </summary>
+          <SharedRecordingPreferences
+            account={account}
+            organizationId={organizationId}
+          />
+        </details>
+      </div>
+      <div className="px-6">
+        <SharedRecordingQueue userId={account.userId} />
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
+        <nav
+          aria-label="Meetings"
+          className="max-h-48 shrink-0 overflow-y-auto border-b bg-violet-50/40 p-3 sm:max-h-none sm:w-60 sm:border-r sm:border-b-0 dark:bg-violet-950/10"
         >
-          {account.workspaces.map((workspace) => (
-            <option key={workspace.id} value={workspace.id}>
-              {workspace.name} · {workspace.role}
-            </option>
-          ))}
-        </select>
-      </label>
-      <SharedRecordingPreferences
-        account={account}
-        organizationId={organizationId}
-      />
-      <SharedRecordingQueue userId={account.userId} />
-      <div className="flex min-h-0 flex-1 gap-4 border-t pt-4">
-        <div className="w-64 shrink-0 overflow-y-auto border-r pr-3">
           {recordings.error ? (
             <ErrorMessage
               error={recordings.error}
@@ -144,10 +156,10 @@ function OrganizationRecordings({
               aria-current={selected === item.occurrenceId ? "page" : undefined}
               onClick={() => setSelected(item.occurrenceId)}
               className={cn([
-                "mb-1 w-full rounded-md p-3 text-left text-sm",
+                "mb-1 w-full rounded-lg p-3 text-left text-sm transition-colors focus-visible:outline-violet-600",
                 selected === item.occurrenceId
-                  ? "bg-accent"
-                  : "hover:bg-accent/50",
+                  ? "bg-violet-100 text-violet-950 dark:bg-violet-900/60 dark:text-violet-100"
+                  : "hover:bg-violet-100/60 dark:hover:bg-violet-900/30",
               ])}
             >
               <span className="block font-medium">
@@ -171,8 +183,8 @@ function OrganizationRecordings({
               </span>
             </button>
           ))}
-        </div>
-        <div className="min-w-0 flex-1 overflow-y-auto">
+        </nav>
+        <div className="min-w-0 flex-1 overflow-y-auto p-6">
           {selected ? (
             <RecordingDetail
               key={`${account.userId}:${organizationId}:${selected}`}
@@ -181,10 +193,15 @@ function OrganizationRecordings({
               occurrenceId={selected}
             />
           ) : (
-            <p className="text-muted-foreground p-4 text-sm">
-              Select a meeting to read its source transcripts and play the
-              original audio recordings.
-            </p>
+            <div className="mx-auto flex h-full max-w-sm flex-col justify-center gap-2 pb-12">
+              <h2 className="text-xl font-semibold tracking-tight">
+                Every perspective, saved.
+              </h2>
+              <p className="text-muted-foreground text-sm leading-relaxed">
+                Choose a meeting to listen to each person’s recording and read
+                its transcript.
+              </p>
+            </div>
           )}
         </div>
       </div>
@@ -228,31 +245,51 @@ function RecordingDetail({
   if (!detail.data) return <p className="text-sm">Loading recording…</p>;
   const { captures } = detail.data;
   return (
-    <div className="space-y-4 pr-2">
-      <h2 className="text-lg font-medium">
+    <div className="mx-auto max-w-3xl space-y-5">
+      <h2 className="text-2xl font-semibold tracking-tight text-violet-950 dark:text-violet-100">
         {detail.data.occurrence.provider === "google_meet"
           ? "Google Meet"
           : "Slack huddle"}
       </h2>
-      <h3 className="font-medium">Original audio and transcripts</h3>
-      <p className="text-muted-foreground text-sm">
-        Each recording and its transcript stay separate. Start times are device
-        clock estimates.
-      </p>
+      <details className="text-muted-foreground text-xs">
+        <summary className="cursor-pointer">Verified meeting identity</summary>
+        <p className="pt-2 font-mono break-all select-text">
+          {detail.data.occurrence.providerOccurrenceId}
+        </p>
+      </details>
+      <div className="space-y-1">
+        <h3 className="font-medium">Original audio and transcripts</h3>
+        <p className="text-muted-foreground text-sm">
+          Each person’s audio and transcript are saved separately.
+        </p>
+      </div>
       <ul className="space-y-4">
         {captures
           .filter((capture) => !capture.deleted)
-          .map((capture) => (
+          .map((capture, index) => (
             <li
               key={`${capture.captureId}:${capture.metadata.sha256}`}
-              className="space-y-2 border-t pt-3"
+              className="space-y-3 border-t py-4"
             >
-              <p className="text-sm">
-                {capture.metadata.uploaderId} · source{" "}
-                {(capture.metadata.segmentSequence ?? 0) + 1} · starts{" "}
-                {formatTime(capture.metadata.offsetFrames / 16000)} ·{" "}
-                {formatTime(capture.frameCount / 16000)} long
-              </p>
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <p className="text-sm font-medium">
+                  Recording {index + 1} ·{" "}
+                  {capture.metadata.uploaderId.slice(0, 8)}
+                </p>
+                <p className="text-muted-foreground text-xs tabular-nums">
+                  {formatTime(capture.frameCount / 16000)} · starts at ~
+                  {formatTime(capture.metadata.offsetFrames / 16000)}
+                </p>
+              </div>
+              <details className="text-muted-foreground text-xs">
+                <summary className="cursor-pointer">Recording details</summary>
+                <p className="pt-2 break-all select-text">
+                  Contributor: {capture.metadata.uploaderId}
+                </p>
+                <p>
+                  Start time is estimated from the recording device’s clock.
+                </p>
+              </details>
               {capture.metadata.gaps.length ? (
                 <p className="text-muted-foreground text-xs">
                   Missing audio within this source:{" "}
@@ -264,11 +301,11 @@ function RecordingDetail({
                     .join(", ")}
                 </p>
               ) : null}
-              <details className="text-sm">
-                <summary>
+              <details className="rounded-lg bg-violet-50/70 p-3 text-sm dark:bg-violet-950/30">
+                <summary className="cursor-pointer font-medium text-violet-900 dark:text-violet-200">
                   Source transcript · {capture.transcriptStatus}
                 </summary>
-                <p className="pt-2 whitespace-pre-wrap">
+                <p className="pt-3 leading-relaxed whitespace-pre-wrap select-text">
                   {transcriptText(capture) ||
                     (capture.transcriptStatus === "ready"
                       ? "No speech was returned for this source."
@@ -380,7 +417,7 @@ function RecordingAudio({
     );
   return audio.data && !audio.isFetching ? (
     <audio
-      className="w-full"
+      className="w-full accent-violet-600"
       controls
       preload="metadata"
       src={audio.data}
@@ -407,7 +444,10 @@ function RecordingAudio({
 
 function ErrorMessage({ error, retry }: { error: Error; retry: () => void }) {
   return (
-    <div role="alert" className="space-y-2 p-3 text-sm">
+    <div
+      role="alert"
+      className="space-y-2 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-950 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-100"
+    >
       <p>{error.message}</p>
       <Button variant="outline" size="sm" onClick={retry}>
         Retry

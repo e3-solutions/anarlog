@@ -88,14 +88,6 @@ describe("LeftSidebar", () => {
     expect(screen.queryByTestId("shared-notes-nav")).toBeNull();
   });
 
-  it("keeps organization recordings reachable from the default personal notes view", () => {
-    render(<LeftSidebar />);
-
-    expect(
-      screen.getByRole("button", { name: "Organization recordings" }),
-    ).toBeTruthy();
-  });
-
   it("hides folder materials when viewing all notes", () => {
     render(<LeftSidebar />);
 

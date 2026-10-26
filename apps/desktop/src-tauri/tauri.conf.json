@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Anarlog Dev",
+  "productName": "E3 Scribe Dev",
   "mainBinaryName": "anarlog-dev",
   "identifier": "com.hyprnote.dev",
   "build": {
@@ -25,7 +25,7 @@
     }
   },
   "bundle": {
-    "publisher": "Fastrepl",
+    "publisher": "E3 Group",
     "active": true,
     "createUpdaterArtifacts": true,
     "targets": "all",
@@ -48,11 +48,11 @@
     },
     "externalBin": [],
     "icon": [
-      "icons/dev/32x32.png",
-      "icons/dev/128x128.png",
-      "icons/dev/128x128@2x.png",
-      "icons/dev/icon.icns",
-      "icons/dev/icon.ico"
+      "icons/e3/32x32.png",
+      "icons/e3/128x128.png",
+      "icons/e3/128x128@2x.png",
+      "icons/e3/icon.icns",
+      "icons/e3/icon.ico"
     ],
     "resources": {
       "../../../plugins/windows/swift-lib/src/Resources/CabinSketch-Regular.ttf": "CabinSketch-Regular.ttf",
@@ -95,7 +95,13 @@
       },
       "files": {
         "Resources/mlx-swift_Cmlx.bundle/default.metallib": "resources/mlx.metallib",
-        "Resources/AppIcon.icns": "resources/dev/AppIcon.icns"
+        "Resources/AppIcon.icns": "icons/e3/icon.icns",
+        "Resources/icons/dev.icns": "icons/e3/icon.icns",
+        "Resources/icons/dev-dark.icns": "icons/e3/icon.icns",
+        "Resources/icons/staging.icns": "icons/e3/icon.icns",
+        "Resources/icons/staging-dark.icns": "icons/e3/icon.icns",
+        "Resources/icons/stable.icns": "icons/e3/icon.icns",
+        "Resources/icons/stable-dark.icns": "icons/e3/icon.icns"
       }
     }
   },

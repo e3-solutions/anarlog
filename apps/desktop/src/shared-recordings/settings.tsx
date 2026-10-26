@@ -48,22 +48,18 @@ export function SharedRecordingPreferences({
       }),
   });
   return (
-    <div className="flex items-start justify-between gap-4 rounded-lg border p-3">
+    <div className="mt-3 flex items-start justify-between gap-4 border-t pt-3">
       <div className="space-y-1 text-sm">
         <p className="font-medium">
-          {enabled
-            ? "Automatic sharing is on for this organization"
-            : "Automatic sharing is off"}
+          {enabled ? "Sharing is on" : "Automatic sharing is off"}
         </p>
         <p className="text-muted-foreground">
-          Only verified Google Meet and Slack huddle recordings are shared.
-          Original audio stays local when offline; pending uploads retry after
-          reconnecting.
+          Verified Google Meet and Slack recordings are available to
+          organization members. Offline uploads retry when you reconnect.
         </p>
         <p className="text-muted-foreground">
-          Sharing keeps a private local copy for retries, including when local
-          audio retention is otherwise off. Organization members can read the
-          source transcripts and listen to their audio.
+          A local audio copy is kept for retries, even when audio retention is
+          off.
         </p>
         {!account.connections.some(
           (connection) => connection.status === "connected",
@@ -118,7 +114,8 @@ export function SharedRecordingPreferences({
         ) : null}
       </div>
       <Button
-        variant={enabled ? "outline" : "default"}
+        className="shrink-0 border-violet-200 bg-violet-100 text-violet-900 hover:bg-violet-200 dark:border-violet-800 dark:bg-violet-900 dark:text-violet-100 dark:hover:bg-violet-800"
+        variant="outline"
         disabled={
           config.isPending ||
           update.isPending ||

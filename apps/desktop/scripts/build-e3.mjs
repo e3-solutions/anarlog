@@ -57,6 +57,8 @@ if (identifier.startsWith("com.hyprnote.")) {
 const tempDir = await mkdtemp(path.join(os.tmpdir(), "anarlog-e3-build-"));
 const configPath = path.join(tempDir, "e3-updater.json");
 const config = {
+  productName: "E3 Scribe",
+  mainBinaryName: "e3-scribe",
   identifier,
   plugins: {
     updater: {

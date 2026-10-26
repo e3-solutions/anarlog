@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       build_macos_app:
-        description: Build an unsigned Anarlog Dev app against the configured QA services
+        description: Build the unsigned desktop app against the configured QA services
         type: boolean
         default: false
   workflow_call:
@@ -241,7 +241,8 @@ jobs:
           artifact_dir="$RUNNER_TEMP/anarlog-dev-macos"
           mkdir -p "$artifact_dir"
           target_dir=$(cd apps/desktop/src-tauri && cargo metadata --no-deps --format-version 1 | jq -r .target_directory)
-          app="$target_dir/debug/bundle/macos/Anarlog Dev.app"
+          app_name=$(node -p 'require("./apps/desktop/src-tauri/tauri.conf.json").productName')
+          app="$target_dir/debug/bundle/macos/$app_name.app"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = com.hyprnote.dev
           ditto -c -k --keepParent "$app" "$artifact_dir/Anarlog-Dev.zip"
           jq -n --arg source "$GITHUB_SHA" --arg run "$GITHUB_RUN_ID" --arg version "$APP_VERSION" --arg validation "$VALIDATION_STATUS" \

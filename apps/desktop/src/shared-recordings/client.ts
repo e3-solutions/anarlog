@@ -77,9 +77,7 @@ async function request(
   signal?.throwIfAborted();
   if (!response.ok) {
     if (response.status === 404 && path === "/v1/shared-recordings/me") {
-      throw new Error(
-        "Organization recordings are not configured on this server.",
-      );
+      throw new Error("The meeting library is not configured on this server.");
     }
     if (response.status === 401) {
       throw new Error("Sign in again to access shared recordings.");

@@ -85,7 +85,8 @@ html[data-rounded-window] #root {
   --animate-wiggle: wiggle 1s ease-in-out infinite;
 
   @keyframes wiggle {
-    0%, 100% {
+    0%,
+    100% {
       transform: rotate(0deg);
     }
     15% {
@@ -103,7 +104,8 @@ html[data-rounded-window] #root {
     60% {
       transform: rotate(2deg);
     }
-    70%, 100% {
+    70%,
+    100% {
       transform: rotate(0deg);
     }
   }
@@ -134,10 +136,12 @@ html[data-rounded-window] #root {
     }
   }
   @keyframes title-hover-scroll {
-    0%, 16% {
+    0%,
+    16% {
       transform: translateX(0);
     }
-    84%, 100% {
+    84%,
+    100% {
       transform: translateX(var(--title-hover-scroll-distance, 0px));
     }
   }
@@ -168,6 +172,26 @@ html[data-rounded-window] #root {
   color utility to any element that depends on these defaults.
 */
 @layer base {
+  :root {
+    --primary: 258 87% 50%;
+    --primary-foreground: 0 0% 100%;
+    --ring: 258 87% 50%;
+    --accent: 258 65% 95%;
+    --accent-foreground: 258 55% 26%;
+    --sidebar-accent: 258 65% 93%;
+    --selection-overlay: hsl(258 87% 50% / 0.2);
+  }
+
+  :root.dark {
+    --primary: 258 88% 74%;
+    --primary-foreground: 258 50% 15%;
+    --ring: 258 88% 74%;
+    --accent: 258 30% 24%;
+    --accent-foreground: 258 80% 92%;
+    --sidebar-accent: 258 30% 24%;
+    --selection-overlay: hsl(258 88% 74% / 0.25);
+  }
+
   *,
   ::after,
   ::before,
