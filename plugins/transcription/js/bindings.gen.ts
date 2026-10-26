@@ -42,7 +42,9 @@ export const commands = {
     observedAtMs: number,
     accessToken: string,
     userId: string,
-  ): Promise<Result<null, string>> {
+    quarantineReason: string | null,
+    diagnosticSummary: ObservationSummary | null,
+  ): Promise<Result<string | null, string>> {
     try {
       return {
         status: "ok",
@@ -55,6 +57,8 @@ export const commands = {
             observedAtMs,
             accessToken,
             userId,
+            quarantineReason,
+            diagnosticSummary,
           },
         ),
       };
@@ -1313,6 +1317,13 @@ export type LiveTranscriptTarget = {
   memo: string;
   provider: string | null;
   model: string | null;
+};
+export type ObservationSummary = {
+  inspectionStatus: string;
+  rowCount: number;
+  activeCallCount: number;
+  trustedCount: number;
+  warningCategories: string[];
 };
 export type PartialWord = {
   text: string;
