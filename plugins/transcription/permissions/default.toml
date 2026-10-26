@@ -7,7 +7,6 @@ permissions = [
     "allow-shared-recording-enqueue",
     "allow-shared-recording-queue",
     "allow-shared-recording-flush",
-    "allow-shared-recording-download",
     "allow-list-microphone-devices",
     "allow-get-current-microphone-device",
     "allow-start-capture",

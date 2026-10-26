@@ -645,3 +645,55 @@ fn upload_snapshot_is_decodable_mono_and_keeps_captured_silence() {
     assert_eq!(normalize(&input, &output).unwrap()[0].sha256, hash);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn legacy_playback_cleanup_only_removes_known_cache_files_without_following_symlinks() {
+    let root =
+        std::env::temp_dir().join(format!("shared-legacy-playback-{}", uuid::Uuid::new_v4()));
+    let base = root.join("app");
+    let playback = base.join("shared-recording-outbox/playback");
+    private_directory(&playback).unwrap();
+    let cached = playback.join(format!("{}.wav", "a".repeat(64)));
+    let unrelated = playback.join("unrelated.wav");
+    let source = base.join("shared-recording-outbox/source.audio");
+    for path in [&cached, &unrelated, &source] {
+        write_private(path, b"preserved audio").unwrap();
+    }
+    #[cfg(unix)]
+    let linked_file = {
+        let path = playback.join(format!("{}.wav", "b".repeat(64)));
+        std::os::unix::fs::symlink(&source, &path).unwrap();
+        path
+    };
+    clear_legacy_playback_at(&base);
+    assert!(!cached.exists());
+    assert!(unrelated.exists());
+    assert!(source.exists());
+    #[cfg(unix)]
+    {
+        assert!(
+            linked_file
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        write_private(&cached, b"preserved target").unwrap();
+        let linked_base = root.join("linked-app");
+        std::os::unix::fs::symlink(&base, &linked_base).unwrap();
+        clear_legacy_playback_at(&linked_base);
+        assert!(cached.exists());
+        for alias in [
+            "shared-recording-outbox",
+            "shared-recording-outbox/playback",
+        ] {
+            let alias_base = root.join(uuid::Uuid::new_v4().to_string());
+            let link = alias_base.join(alias);
+            private_directory(link.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(base.join(alias), &link).unwrap();
+            clear_legacy_playback_at(&alias_base);
+            assert!(cached.exists());
+        }
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}

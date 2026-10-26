@@ -487,32 +487,45 @@ fn quarantine_unadmitted(
     Ok(())
 }
 
-pub(crate) fn prune_playback<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+pub(crate) fn clear_legacy_playback<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let Ok(base) = app.path().app_data_dir() else {
         return;
     };
-    let Ok(entries) = std::fs::read_dir(base.join("shared-recording-outbox/playback")) else {
+    clear_legacy_playback_at(&base);
+}
+fn clear_legacy_playback_at(base: &Path) {
+    let outbox = base.join("shared-recording-outbox");
+    let playback = outbox.join("playback");
+    if [base, outbox.as_path(), playback.as_path()]
+        .iter()
+        .any(|path| {
+            !path
+                .symlink_metadata()
+                .is_ok_and(|metadata| metadata.is_dir())
+        })
+    {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(playback) else {
         return;
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().is_some_and(|extension| extension == "wav") {
-            expire_playback(&path);
+        let known_name = path.extension().is_some_and(|extension| extension == "wav")
+            && path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .is_some_and(|stem| {
+                    stem.len() == 64
+                        && stem
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                });
+        if known_name && entry.file_type().is_ok_and(|kind| kind.is_file()) {
+            let _ = std::fs::remove_file(path);
         }
     }
 }
-fn expire_playback(path: &Path) {
-    if path
-        .metadata()
-        .and_then(|metadata| metadata.modified())
-        .ok()
-        .and_then(|modified| modified.elapsed().ok())
-        .is_some_and(|age| age >= std::time::Duration::from_secs(86400))
-    {
-        let _ = std::fs::remove_file(path);
-    }
-}
-
 #[tauri::command]
 #[specta::specta]
 pub async fn shared_recording_configuration<R: tauri::Runtime>(
@@ -1267,76 +1280,6 @@ async fn upload(dir: &Path, job: &Job, token: &str, state: &QueueState) -> Resul
     .await?;
     Ok(())
 }
-#[tauri::command]
-#[specta::specta]
-pub async fn shared_recording_download<R: tauri::Runtime>(
-    app: tauri::AppHandle<R>,
-    api_base_url: String,
-    organization_id: String,
-    occurrence_id: String,
-    revision: String,
-    audio_sha256: String,
-    access_token: String,
-    user_id: String,
-) -> Result<String, String> {
-    validate_url(&api_base_url)?;
-    let account = json_body(
-        success(
-            client()?
-                .get(format!(
-                    "{}/v1/shared-recordings/me",
-                    api_base_url.trim_end_matches('/')
-                ))
-                .bearer_auth(&access_token)
-                .send()
-                .await
-                .map_err(|e| e.to_string())?,
-        )
-        .await?,
-    )
-    .await?;
-    if account["userId"].as_str() != Some(user_id.as_str()) {
-        return Err("Account does not match shared recording".into());
-    }
-    let response = success(
-        client()?
-            .get(format!(
-                "{}/v1/orgs/{}/shared-recordings/{}/revisions/{}/audio",
-                api_base_url.trim_end_matches('/'),
-                organization_id,
-                occurrence_id,
-                revision
-            ))
-            .bearer_auth(access_token)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?,
-    )
-    .await?;
-    let bytes = bounded_body(response, 512 * 1024 * 1024).await?;
-    if digest(&bytes) != audio_sha256 {
-        return Err("Shared audio checksum mismatch or download too large".into());
-    }
-    let dir = directory(&app)?.join("playback");
-    private_directory(&dir)?;
-    let path = dir.join(format!(
-        "{}.wav",
-        key(&format!(
-            "{user_id}:{organization_id}:{occurrence_id}:{revision}"
-        ))
-    ));
-    write_private(&path, &bytes)?;
-    app.asset_protocol_scope()
-        .allow_file(&path)
-        .map_err(|error| error.to_string())?;
-    let expiring = path.clone();
-    tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_secs(86400)).await;
-        expire_playback(&expiring);
-    });
-    Ok(path.to_string_lossy().to_string())
-}
-
 pub(crate) fn snapshot_stopped<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     session_id: &str,

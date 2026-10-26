@@ -29,10 +29,8 @@ vi.mock("./settings", () => ({
   SharedRecordingPreferences: () => null,
   SharedRecordingQueue: () => null,
 }));
-vi.mock("./native", () => ({
-  downloadSharedRecordingAudio: mocks.downloadAudio,
-}));
 vi.mock("./client", () => ({
+  downloadSharedRecordingAudio: mocks.downloadAudio,
   readSharedRecordingAccount: async (token: string) => ({
     userId: token,
     workspaces: [

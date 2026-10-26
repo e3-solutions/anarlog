@@ -81,7 +81,12 @@ export type SharedRecordingAccount = z.infer<typeof accountSchema>;
 export type SharedRecordingOccurrence = z.infer<typeof occurrenceSchema>;
 export type SharedRecordingRevision = z.infer<typeof revisionSchema>;
 
-async function request(path: string, accessToken: string) {
+async function request(
+  path: string,
+  accessToken: string,
+  signal?: AbortSignal,
+) {
+  signal?.throwIfAborted();
   if (!sharedRecordingsPreviewUrl) {
     throw new Error("Shared recordings preview is not configured.");
   }
@@ -90,8 +95,11 @@ async function request(path: string, accessToken: string) {
     {
       headers: { Authorization: `Bearer ${accessToken}` },
       connectTimeout: 15_000,
+      maxRedirections: 0,
+      signal,
     },
   );
+  signal?.throwIfAborted();
   if (!response.ok) {
     if (response.status === 401) {
       throw new Error("Sign in again to access shared recordings.");
@@ -106,9 +114,14 @@ async function request(path: string, accessToken: string) {
   return response;
 }
 
-export async function readSharedRecordingAccount(accessToken: string) {
+export async function readSharedRecordingAccount(
+  accessToken: string,
+  signal?: AbortSignal,
+) {
   return accountSchema.parse(
-    await (await request("/v1/shared-recordings/me", accessToken)).json(),
+    await (
+      await request("/v1/shared-recordings/me", accessToken, signal)
+    ).json(),
   );
 }
 
@@ -153,4 +166,66 @@ export function transcriptText(revision: SharedRecordingRevision): string {
     .safeParse(revision.transcript?.result);
   if (!result.success) return "";
   return result.data.results.channels[0]?.alternatives[0]?.transcript ?? "";
+}
+
+export async function downloadSharedRecordingAudio(
+  input: {
+    userId: string;
+    organizationId: string;
+    occurrenceId: string;
+    revision: string;
+    audioSha256: string;
+    accessToken: string;
+  },
+  signal: AbortSignal,
+) {
+  signal.throwIfAborted();
+  if (
+    (await readSharedRecordingAccount(input.accessToken, signal)).userId !==
+    input.userId
+  ) {
+    throw new Error("Account does not match shared recording.");
+  }
+  const response = await request(
+    `/v1/orgs/${encodeURIComponent(input.organizationId)}/shared-recordings/${encodeURIComponent(input.occurrenceId)}/revisions/${encodeURIComponent(input.revision)}/audio`,
+    input.accessToken,
+    signal,
+  );
+  if (!response.body) throw new Error("Shared audio is empty.");
+  const limit = 512 * 1024 * 1024;
+  if (Number(response.headers.get("content-length")) > limit) {
+    await response.body.cancel();
+    throw new Error("Shared audio exceeds the playback size limit.");
+  }
+  const reader = response.body.getReader();
+  const chunks: BlobPart[] = [];
+  let length = 0;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > limit) {
+        await reader.cancel();
+        throw new Error("Shared audio exceeds the playback size limit.");
+      }
+      chunks.push(new Uint8Array(value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  signal.throwIfAborted();
+  if (length === 0) throw new Error("Shared audio is empty.");
+  const blob = new Blob(chunks, { type: "audio/wav" });
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    await blob.arrayBuffer(),
+  );
+  signal.throwIfAborted();
+  const checksum = Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+  if (checksum !== input.audioSha256)
+    throw new Error("Shared audio checksum mismatch.");
+  return blob;
 }

@@ -7,13 +7,13 @@ import { cn } from "@anlg/utils";
 
 import {
   listSharedRecordings,
+  downloadSharedRecordingAudio,
   readSharedRecording,
   readSharedRecordingAccount,
   transcriptText,
   type SharedRecordingAccount,
   type SharedRecordingRevision,
 } from "./client";
-import { downloadSharedRecordingAudio } from "./native";
 import { SharedRecordingPreferences, SharedRecordingQueue } from "./settings";
 
 import { useAuth } from "~/auth";

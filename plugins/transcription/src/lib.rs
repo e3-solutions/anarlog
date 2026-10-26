@@ -148,7 +148,6 @@ fn make_specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
             shared_recording::shared_recording_enqueue::<tauri::Wry>,
             shared_recording::shared_recording_queue::<tauri::Wry>,
             shared_recording::shared_recording_flush::<tauri::Wry>,
-            shared_recording::shared_recording_download::<tauri::Wry>,
             listener::commands::list_microphone_devices::<tauri::Wry>,
             listener::commands::get_current_microphone_device::<tauri::Wry>,
             listener::commands::get_mic_muted::<tauri::Wry>,
@@ -226,7 +225,7 @@ pub fn init() -> tauri::plugin::TauriPlugin<tauri::Wry> {
             }));
             app.manage(state);
             app.manage(shared_recording::QueueState::default());
-            shared_recording::prune_playback(&app_handle);
+            shared_recording::clear_legacy_playback(&app_handle);
             app.manage(live_journal::LiveJournalRegistry::default());
             let stopped_capture_registry = StoppedCaptureRegistry::default();
             app.manage(stopped_capture_registry.clone());

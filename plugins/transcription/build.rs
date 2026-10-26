@@ -5,7 +5,6 @@ const COMMANDS: &[&str] = &[
     "shared_recording_enqueue",
     "shared_recording_queue",
     "shared_recording_flush",
-    "shared_recording_download",
     "list_microphone_devices",
     "get_current_microphone_device",
     "get_mic_muted",
