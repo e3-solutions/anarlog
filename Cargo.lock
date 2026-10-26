@@ -20046,7 +20046,7 @@ dependencies = [
 name = "user-error"
 version = "0.1.0"
 dependencies = [
- "sentry-core",
+ "sentry",
 ]
 
 [[package]]
