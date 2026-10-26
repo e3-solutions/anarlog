@@ -1,3 +1,4 @@
+mod common;
 use std::sync::{
     Arc,
     atomic::{AtomicU8, Ordering},
@@ -6,9 +7,7 @@ use std::sync::{
 use api_recordings::shared_recordings::FrameRange;
 use api_recordings::{
     recording_transcription::{RecordingProcessor, RecordingTranscriber},
-    shared_recordings::{
-        CaptureMetadata, Provider, RecordingError, SharedRecordingService, TimingBasis,
-    },
+    shared_recordings::{CaptureMetadata, Provider, RecordingError, TimingBasis},
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -19,12 +18,8 @@ use wiremock::{
 
 #[tokio::test]
 async fn each_original_is_transcribed_independently_and_partial_asr_retries_keep_cached_sources() {
-    let directory = tempfile::tempdir().unwrap();
-    let service = Arc::new(
-        SharedRecordingService::open(directory.path())
-            .await
-            .unwrap(),
-    );
+    let (_storage, service) = common::service("workspace").await;
+    let service = Arc::new(service);
     for (url, model) in [
         ("http://provider.invalid", "tiny.en"),
         ("https://user:secret@provider.invalid", "tiny.en"),

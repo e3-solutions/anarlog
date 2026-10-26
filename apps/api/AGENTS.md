@@ -89,12 +89,12 @@ routine deployments preserve worker ownership.
 
 ## Shared recordings
 
-`ANARLOG_SHARED_RECORDINGS_DIR` opts the existing `core` or `all` runtime into
-organization recordings. Use an absolute path on one durable volume owned by a
-single API process. The SQLite/file store takes an exclusive directory lock;
-it is not shared storage for multiple Machines. Existing multi-Machine production
-profiles leave this feature disabled. Core forwarding and a local recording store
-cannot be enabled together.
+`ANARLOG_SHARED_RECORDINGS_ENABLED=true` opts the existing `core` or `all`
+runtime into organization recording ingestion. It uses the existing `SUPABASE_URL`
+and server-only `SUPABASE_SERVICE_ROLE_KEY`: meeting identity, capture metadata,
+and source transcripts live in Postgres; original WAV files live in a private
+Supabase Storage bucket. Apply the shared-recording Supabase migration before
+enabling ingestion. Core forwarding and local ingestion cannot be enabled together.
 
 The routes reuse API session authentication and Nango configuration, then check
 current organization membership on each request. Optional
@@ -103,6 +103,7 @@ current organization membership on each request. Optional
 JSON endpoint; `ANARLOG_SHARED_RECORDINGS_TRANSCRIPTION_KEY` is optional. Without
 an endpoint, source transcripts remain pending. Each immutable uploaded audio source
 has its own cached transcript, capture identity, and verified meeting identity.
-There is no audio stitching or transcript consolidation. No extra listener or
-Supabase schema is required. Historical consolidated artifacts have no read route;
-the store retains only compatibility cleanup for deleting earlier preview artifacts.
+There is no audio stitching or transcript consolidation. The optional recording
+container's durable volume caches local ASR models and runtime files; it does not
+store ingested audio or transcript data. Keep earlier preview volume data until
+its original recordings have been migrated and verified separately.

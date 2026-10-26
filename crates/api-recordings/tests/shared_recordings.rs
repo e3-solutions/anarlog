@@ -4,7 +4,11 @@ use api_recordings::shared_recordings::{
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use sqlx::Connection;
+mod common;
+use wiremock::{
+    Mock, ResponseTemplate,
+    matchers::{method, path, path_regex},
+};
 
 fn wav(samples: &[i16]) -> Vec<u8> {
     let mut bytes = std::io::Cursor::new(Vec::new());
@@ -67,253 +71,71 @@ fn transcript(text: &str) -> Transcript {
 }
 
 #[tokio::test]
-async fn original_audio_and_source_transcripts_survive_retry_restart_and_revocation() {
-    let directory = tempfile::tempdir().unwrap();
-    let service = SharedRecordingService::open(directory.path())
-        .await
-        .unwrap();
-    assert!(
-        SharedRecordingService::open(directory.path())
-            .await
-            .is_err()
-    );
+async fn original_source_integrity_and_storage_failures_remain_visible() {
+    let (upstream, service) = common::service("org").await;
     admit(&service).await;
-    assert_eq!(
-        service
-            .admit_actor(
-                "org",
-                "meeting",
-                "user-b",
-                Provider::GoogleMeet,
-                "conferenceRecords/actual-call",
-                Some(99)
-            )
-            .await
-            .unwrap(),
-        Some(7)
-    );
-    assert!(
-        service
-            .actor_admitted("org", "meeting", "user-b")
-            .await
-            .unwrap()
-    );
-    assert!(matches!(
-        service
-            .admit_actor(
-                "org",
-                "meeting",
-                "wrong-user",
-                Provider::GoogleMeet,
-                "conferenceRecords/other-call",
-                Some(7)
-            )
-            .await,
-        Err(RecordingError::Conflict)
-    ));
-    assert!(
-        !service
-            .actor_admitted("org", "meeting", "wrong-user")
-            .await
-            .unwrap()
-    );
-    let first = wav(&[10; 12]);
-    let second = wav(&[20; 12]);
-    for _ in 0..2 {
-        service
-            .upload("org", "meeting", "a", metadata("a", &first), &first)
-            .await
-            .unwrap();
-    }
-    service
-        .upload("org", "meeting", "b", metadata("b", &second), &second)
-        .await
-        .unwrap();
-    let mut changed = metadata("a", &first);
-    changed.rank = 1;
-    assert!(matches!(
-        service.upload("org", "meeting", "a", changed, &first).await,
-        Err(RecordingError::Conflict)
-    ));
-    assert!(matches!(
-        service
-            .save_source_transcript("org", "meeting", "a", "wrong-sha", transcript("source A"))
-            .await,
-        Err(RecordingError::Conflict)
-    ));
-    for _ in 0..2 {
-        service
-            .save_source_transcript("org", "meeting", "a", &sha(&first), transcript("source A"))
-            .await
-            .unwrap();
-    }
-    assert!(matches!(
-        service
-            .save_source_transcript(
-                "org",
-                "meeting",
-                "a",
-                &sha(&first),
-                transcript("replacement")
-            )
-            .await,
-        Err(RecordingError::Conflict)
-    ));
-    let manifest = service.manifest("org", "meeting").await.unwrap();
-    assert_eq!(manifest.captures.len(), 2);
-    assert_eq!(manifest.captures[0].transcript_status, "ready");
-    assert_eq!(manifest.captures[1].transcript_status, "pending");
-    let (source, original) = service.source_audio("org", "meeting", "a").await.unwrap();
-    assert_eq!(original, first);
-    assert_eq!(source.frame_count, 12);
-    assert_eq!(source.metadata.offset_frames, -4);
-    assert_eq!(source.transcript.unwrap(), transcript("source A"));
-    assert_eq!(
-        service.source_audio("org", "meeting", "b").await.unwrap().1,
-        second
-    );
-    drop(service);
-    let recovered = SharedRecordingService::open(directory.path())
-        .await
-        .unwrap();
-    assert_eq!(
-        recovered
-            .source_audio("org", "meeting", "a")
-            .await
-            .unwrap()
-            .0
-            .transcript
-            .unwrap(),
-        transcript("source A")
-    );
-    recovered
-        .delete_capture("org", "meeting", "a")
-        .await
-        .unwrap();
-    assert!(matches!(
-        recovered.source_audio("org", "meeting", "a").await,
-        Err(RecordingError::NotFound)
-    ));
-    assert!(matches!(
-        recovered
-            .save_source_transcript("org", "meeting", "a", &sha(&first), transcript("late ASR"))
-            .await,
-        Err(RecordingError::NotFound)
-    ));
-    assert!(matches!(
-        recovered
-            .upload("org", "meeting", "a", metadata("a", &first), &first)
-            .await,
-        Err(RecordingError::Conflict)
-    ));
-    assert!(recovered.seal("org", "meeting").await.unwrap().sealed);
-    recovered
-        .upload("org", "meeting", "b", metadata("b", &second), &second)
-        .await
-        .unwrap();
-    assert!(matches!(
-        recovered
-            .upload("org", "meeting", "c", metadata("c", &first), &first)
-            .await,
-        Err(RecordingError::Conflict)
-    ));
-    recovered.delete_occurrence("org", "meeting").await.unwrap();
-    assert!(matches!(
-        recovered.source_audio("org", "meeting", "b").await,
-        Err(RecordingError::NotFound)
-    ));
-    assert!(
-        !recovered
-            .actor_admitted("org", "meeting", "user-a")
-            .await
-            .unwrap()
-    );
-    assert!(matches!(
-        recovered
-            .admit_actor(
-                "org",
-                "meeting",
-                "user-a",
-                Provider::GoogleMeet,
-                "conferenceRecords/actual-call",
-                Some(7)
-            )
-            .await,
-        Err(RecordingError::Conflict)
-    ));
-}
-
-#[tokio::test]
-async fn upgrading_legacy_storage_preserves_sources_without_exposing_combined_transcripts() {
-    let directory = tempfile::tempdir().unwrap();
-    let service = SharedRecordingService::open(directory.path())
-        .await
-        .unwrap();
-    admit(&service).await;
-    let original = wav(&[42; 12]);
+    let original = wav(&[10; 12]);
     service
         .upload("org", "meeting", "a", metadata("a", &original), &original)
         .await
         .unwrap();
-    drop(service);
-    // Recreate the previously shipped shape: no source ASR column and an old audio-derived revision.
-    let mut database = sqlx::SqliteConnection::connect_with(
-        &sqlx::sqlite::SqliteConnectOptions::new()
-            .filename(directory.path().join("recordings.sqlite")),
-    )
-    .await
-    .unwrap();
-    sqlx::query("ALTER TABLE captures DROP COLUMN transcript_json")
-        .execute(&mut database)
-        .await
-        .unwrap();
-    let legacy = json!({"number":1,"revision":"old-revision","audioSha256":sha(&original),"manifest":{"version":1,"sample_rate":16000,"duration_frames":12,"selections":[]},"transcript":{"provider":"openai","model":"tiny.en","result":{"results":{"channels":[{"alternatives":[{"transcript":"old combined ASR"}]}]}}},"transcriptStatus":"ready"});
-    std::fs::write(directory.path().join("canonical-legacy.wav"), &original).unwrap();
-    sqlx::query("INSERT INTO revisions(workspace,occurrence,number,revision,object,revision_json) VALUES('org','meeting',1,'old-revision','canonical-legacy.wav',?)").bind(legacy.to_string()).execute(&mut database).await.unwrap();
-    sqlx::query("UPDATE occurrences SET current_json=? WHERE workspace='org' AND id='meeting'")
-        .bind(legacy.to_string())
-        .execute(&mut database)
-        .await
-        .unwrap();
-    database.close().await.unwrap();
-    let recovered = SharedRecordingService::open(directory.path())
-        .await
-        .unwrap();
-    let manifest =
-        serde_json::to_value(recovered.manifest("org", "meeting").await.unwrap()).unwrap();
-    assert!(manifest.get("current").is_none());
-    assert!(manifest.get("inputsChanged").is_none());
-    assert_eq!(
-        recovered
-            .source_audio("org", "meeting", "a")
-            .await
-            .unwrap()
-            .1,
-        original
-    );
-    recovered
+    let (source, bytes) = service.source_audio("org", "meeting", "a").await.unwrap();
+    assert_eq!(bytes, original);
+    assert_eq!(source.frame_count, 12);
+    assert_eq!(source.metadata.offset_frames, -4);
+    assert_eq!(source.metadata.gaps, vec![FrameRange { start: 4, end: 8 }]);
+    assert_eq!(source.transcript_status, "pending");
+    service
         .save_source_transcript(
             "org",
             "meeting",
             "a",
             &sha(&original),
-            transcript("independent source ASR"),
+            transcript("source A"),
         )
         .await
         .unwrap();
+    let reconnected = api_recordings::shared_recordings::SharedRecordingService::supabase(
+        &upstream.uri(),
+        "fixture-service-role",
+    )
+    .unwrap();
     assert_eq!(
-        recovered.manifest("org", "meeting").await.unwrap().captures[0].transcript,
-        Some(transcript("independent source ASR"))
+        reconnected
+            .source_audio("org", "meeting", "a")
+            .await
+            .unwrap()
+            .0
+            .transcript,
+        Some(transcript("source A"))
     );
-    assert!(directory.path().join("canonical-legacy.wav").is_file());
+    Mock::given(method("GET"))
+        .and(path_regex(
+            "^/storage/v1/object/authenticated/recording-audio/",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wav(&[99; 12])))
+        .with_priority(1)
+        .mount(&upstream)
+        .await;
+    assert!(matches!(
+        service.source_audio("org", "meeting", "a").await,
+        Err(RecordingError::Conflict)
+    ));
+    Mock::given(method("GET"))
+        .and(path("/rest/v1/recording_captures"))
+        .respond_with(ResponseTemplate::new(503))
+        .with_priority(1)
+        .mount(&upstream)
+        .await;
+    assert!(matches!(
+        service.manifest("org", "meeting").await,
+        Err(RecordingError::Upstream)
+    ));
 }
 
 #[tokio::test]
-async fn provider_aliases_and_incomplete_audio_cannot_admit_sources() {
-    let directory = tempfile::tempdir().unwrap();
-    let service = SharedRecordingService::open(directory.path())
-        .await
-        .unwrap();
+async fn provider_aliases_incomplete_audio_and_rpc_errors_fail_closed() {
+    let (upstream, service) = common::service("org").await;
     assert!(matches!(
         service
             .admit_actor(
@@ -353,4 +175,24 @@ async fn provider_aliases_and_incomplete_audio_cannot_admit_sources() {
         .upload("org", "meeting", "a", metadata("a", &original), &original)
         .await
         .unwrap();
+    let mode = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0));
+    let responder_mode = mode.clone();
+    Mock::given(method("POST")).and(path("/rest/v1/rpc/recording_seal"))
+        .respond_with(move |_: &wiremock::Request| ResponseTemplate::new(400).set_body_json(json!({"code":match responder_mode.load(std::sync::atomic::Ordering::SeqCst) {0=>"23505",1=>"P0002",2=>"22023",_=>"unexpected"}})))
+        .with_priority(1).mount(&upstream).await;
+    for value in 0..4 {
+        mode.store(value, std::sync::atomic::Ordering::SeqCst);
+        let error = service.seal("org", "meeting").await.unwrap_err();
+        assert!(matches!(
+            (value, error),
+            (0, RecordingError::Conflict)
+                | (1, RecordingError::NotFound)
+                | (2, RecordingError::Invalid(_))
+                | (3, RecordingError::Upstream)
+        ));
+    }
+    assert_eq!(
+        service.source_audio("org", "meeting", "a").await.unwrap().1,
+        original
+    );
 }

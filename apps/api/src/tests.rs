@@ -34,7 +34,7 @@ async fn shared_recordings_gateway_forwards_reads_and_uploads_without_local_stor
         .await;
     let mut raw = deserialize_api_env([]);
     raw.upstreams.anarlog_core_origin = Some(upstream.uri());
-    assert!(raw.anarlog_shared_recordings_dir.is_none());
+    assert!(!raw.anarlog_shared_recordings_enabled);
     let config = Box::leak(Box::new(crate::env::RuntimeConfig::resolve(raw).unwrap()));
     let app = app_with_env(config).await;
     for (method, path, body, expected) in [
@@ -59,13 +59,10 @@ async fn shared_recordings_gateway_forwards_reads_and_uploads_without_local_stor
 }
 
 #[tokio::test]
-async fn shared_recordings_mount_only_when_core_storage_is_enabled() {
-    let directory = tempfile::tempdir().unwrap();
+async fn shared_recordings_mount_only_when_core_ingestion_is_enabled() {
     for enabled in [false, true] {
         let mut raw = deserialize_api_env([("ANARLOG_SERVICE", "core")]);
-        if enabled {
-            raw.anarlog_shared_recordings_dir = Some(directory.path().to_str().unwrap().to_owned());
-        }
+        raw.anarlog_shared_recordings_enabled = enabled;
         let config = Box::leak(Box::new(crate::env::RuntimeConfig::resolve(raw).unwrap()));
         let app = app_with_env(config).await;
         let response = app

@@ -75,7 +75,7 @@ def main():
     root = pathlib.Path("/data")
     if not root.is_mount() or root.is_symlink():
         raise RuntimeError("mount a dedicated persistent volume at /data")
-    for directory in (root, root / "recordings", root / "models", root / "runtime"):
+    for directory in (root, root / "models", root / "runtime"):
         if directory.is_symlink():
             raise RuntimeError("data directories must not be symlinks")
         directory.mkdir(exist_ok=True)
@@ -91,7 +91,7 @@ def main():
         HOME="/data/runtime",
         XDG_DATA_HOME="/data/runtime",
         XDG_CONFIG_HOME="/data/runtime",
-        ANARLOG_SHARED_RECORDINGS_DIR="/data/recordings",
+        ANARLOG_SHARED_RECORDINGS_ENABLED="true",
         ANARLOG_SERVICE="core",
         ANARLOG_SHARED_RECORDINGS_TRANSCRIPTION_URL="http://127.0.0.1:18796/v1",
         ANARLOG_SHARED_RECORDINGS_TRANSCRIPTION_MODEL="tiny.en",

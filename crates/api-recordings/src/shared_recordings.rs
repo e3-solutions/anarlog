@@ -1,21 +1,12 @@
-use std::{
-    collections::HashSet,
-    path::{Path as FsPath, PathBuf},
-};
-
+use reqwest::{Client, Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use sqlx::{
-    Row, SqlitePool,
-    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
-};
-use tokio::sync::Mutex;
+use std::time::Duration;
 
 const MAX_AUDIO_BYTES: usize = 100 * 1024 * 1024;
 
 const MAX_FRAMES: u64 = 16_000 * 60 * 60 * 4;
-const MAX_SOURCES: usize = 32;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -67,10 +58,8 @@ pub enum RecordingError {
     Conflict,
     #[error("recording not found")]
     NotFound,
-    #[error("recording storage unavailable: {0}")]
-    Storage(#[from] sqlx::Error),
-    #[error("recording files unavailable: {0}")]
-    Io(#[from] std::io::Error),
+    #[error("recording storage unavailable")]
+    Upstream,
     #[error("recording metadata unavailable: {0}")]
     Json(#[from] serde_json::Error),
 }
@@ -154,145 +143,162 @@ pub struct OccurrenceManifest {
 }
 
 pub struct SharedRecordingService {
-    pool: SqlitePool,
-    directory: PathBuf,
-    gate: Mutex<()>,
-    _lock: std::fs::File,
+    client: Client,
+    url: String,
+    service_key: String,
 }
 
 impl SharedRecordingService {
-    pub async fn open(directory: impl AsRef<FsPath>) -> Result<Self> {
-        let directory = directory.as_ref().to_path_buf();
-        std::fs::create_dir_all(&directory)?;
-        #[cfg(unix)]
+    pub fn supabase(url: &str, service_key: &str) -> Result<Self> {
+        let parsed = url::Url::parse(url)
+            .map_err(|_| RecordingError::Invalid("invalid Supabase URL".into()))?;
+        if service_key.is_empty()
+            || parsed.host_str().is_none()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || parsed.query().is_some()
+            || parsed.fragment().is_some()
+            || !(parsed.scheme() == "https"
+                || (parsed.scheme() == "http"
+                    && matches!(parsed.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"))))
         {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))?;
+            return Err(RecordingError::Invalid(
+                "invalid Supabase storage configuration".into(),
+            ));
         }
-        let mut lock_options = std::fs::OpenOptions::new();
-        lock_options
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(false);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            lock_options.mode(0o600);
-        }
-        let lock = lock_options.open(directory.join("service.lock"))?;
-        lock.try_lock().map_err(|error| {
-            RecordingError::Invalid(format!("storage directory is already in use: {error}"))
-        })?;
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(
-                SqliteConnectOptions::new()
-                    .filename(directory.join("recordings.sqlite"))
-                    .create_if_missing(true)
-                    .foreign_keys(true)
-                    .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal),
-            )
-            .await?;
-        sqlx::raw_sql("CREATE TABLE IF NOT EXISTS occurrences (
-            workspace TEXT NOT NULL, id TEXT NOT NULL, provider_key TEXT NOT NULL,
-            metadata TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
-            sealed INTEGER NOT NULL DEFAULT 0,
-            current_json TEXT, PRIMARY KEY(workspace,id), UNIQUE(workspace,provider_key));
-            CREATE TABLE IF NOT EXISTS captures (
-            workspace TEXT NOT NULL, occurrence TEXT NOT NULL, id TEXT NOT NULL,
-            identity TEXT NOT NULL, metadata TEXT NOT NULL, object TEXT NOT NULL,
-            deleted INTEGER NOT NULL DEFAULT 0, frames INTEGER NOT NULL, size_bytes INTEGER NOT NULL, PRIMARY KEY(workspace,occurrence,id),
-            UNIQUE(workspace,identity), FOREIGN KEY(workspace,occurrence) REFERENCES occurrences(workspace,id));
-            CREATE TABLE IF NOT EXISTS revisions (
-            workspace TEXT NOT NULL, occurrence TEXT NOT NULL, number INTEGER NOT NULL,
-            revision TEXT NOT NULL, object TEXT NOT NULL, revision_json TEXT NOT NULL, PRIMARY KEY(workspace,occurrence,number));").execute(&pool).await?;
-        let columns = sqlx::query("PRAGMA table_info(occurrences)")
-            .fetch_all(&pool)
-            .await?;
-        if !columns
-            .iter()
-            .any(|column| column.get::<String, _>("name") == "sealed")
-        {
-            sqlx::query("ALTER TABLE occurrences ADD COLUMN sealed INTEGER NOT NULL DEFAULT 0")
-                .execute(&pool)
-                .await?;
-        }
-        if !columns
-            .iter()
-            .any(|column| column.get::<String, _>("name") == "automatic")
-        {
-            sqlx::query("ALTER TABLE occurrences ADD COLUMN automatic INTEGER NOT NULL DEFAULT 0")
-                .execute(&pool)
-                .await?;
-            sqlx::query("ALTER TABLE occurrences ADD COLUMN provider_started_at_ms INTEGER")
-                .execute(&pool)
-                .await?;
-        }
-        sqlx::raw_sql(
-            "CREATE TABLE IF NOT EXISTS admissions (
-            workspace TEXT NOT NULL, occurrence TEXT NOT NULL, actor TEXT NOT NULL,
-            PRIMARY KEY(workspace,occurrence,actor),
-            FOREIGN KEY(workspace,occurrence) REFERENCES occurrences(workspace,id));",
-        )
-        .execute(&pool)
-        .await?;
-        let capture_columns = sqlx::query("PRAGMA table_info(captures)")
-            .fetch_all(&pool)
-            .await?;
-        if !capture_columns
-            .iter()
-            .any(|column| column.get::<String, _>("name") == "transcript_json")
-        {
-            sqlx::query("ALTER TABLE captures ADD COLUMN transcript_json TEXT")
-                .execute(&pool)
-                .await?;
-        }
-        let service = Self {
-            pool,
-            directory,
-            gate: Mutex::new(()),
-            _lock: lock,
-        };
-        service.recover_files().await?;
-        Ok(service)
+        Ok(Self {
+            client: Client::builder()
+                .timeout(Duration::from_secs(120))
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|_| RecordingError::Upstream)?,
+            url: url.trim_end_matches('/').into(),
+            service_key: service_key.into(),
+        })
     }
 
-    async fn recover_files(&self) -> Result<()> {
-        sqlx::query("DELETE FROM revisions WHERE EXISTS (SELECT 1 FROM occurrences WHERE occurrences.workspace=revisions.workspace AND occurrences.id=revisions.occurrence AND (occurrences.deleted=1 OR occurrences.current_json IS NULL))").execute(&self.pool).await?;
-        let mut retained: HashSet<String> =
-            sqlx::query_scalar("SELECT object FROM captures WHERE deleted=0")
-                .fetch_all(&self.pool)
-                .await?
-                .into_iter()
-                .collect();
-        retained.extend(
-            sqlx::query_scalar::<_, String>("SELECT object FROM revisions WHERE object<>''")
-                .fetch_all(&self.pool)
-                .await?,
-        );
-        for entry in std::fs::read_dir(&self.directory)? {
-            let entry = entry?;
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if entry.file_type()?.is_file()
-                && (name.ends_with(".pending")
-                    || ((name.starts_with("source-") || name.starts_with("canonical-"))
-                        && name.ends_with(".wav")
-                        && !retained.contains(&name)))
-            {
-                remove_if_exists(&entry.path())?;
+    fn request(&self, method: Method, path: &str) -> reqwest::RequestBuilder {
+        self.client
+            .request(method, format!("{}{path}", self.url))
+            .header("apikey", &self.service_key)
+            .bearer_auth(&self.service_key)
+    }
+
+    async fn bytes(&self, request: reqwest::RequestBuilder, limit: usize) -> Result<Vec<u8>> {
+        let mut response = request.send().await.map_err(|_| RecordingError::Upstream)?;
+        let status = response.status();
+        if !status.is_success() {
+            #[derive(Deserialize)]
+            struct Failure {
+                code: Option<String>,
+            }
+            let code = response
+                .json::<Failure>()
+                .await
+                .ok()
+                .and_then(|error| error.code);
+            return Err(match (status, code.as_deref()) {
+                (_, Some("23505")) => RecordingError::Conflict,
+                (_, Some("P0002")) | (StatusCode::NOT_FOUND, _) => RecordingError::NotFound,
+                (_, Some("22023")) => {
+                    RecordingError::Invalid("source metadata exceeds ingestion limits".into())
+                }
+                _ => RecordingError::Upstream,
+            });
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > limit as u64)
+        {
+            return Err(RecordingError::Upstream);
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|_| RecordingError::Upstream)?
+        {
+            if bytes.len() + chunk.len() > limit {
+                return Err(RecordingError::Upstream);
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(bytes)
+    }
+
+    async fn json<T: serde::de::DeserializeOwned>(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> Result<T> {
+        Ok(serde_json::from_slice(
+            &self.bytes(request, 32 * 1024 * 1024).await?,
+        )?)
+    }
+
+    async fn rpc<T: serde::de::DeserializeOwned>(&self, name: &str, args: Value) -> Result<T> {
+        let bytes = self
+            .bytes(
+                self.request(Method::POST, &format!("/rest/v1/rpc/{name}"))
+                    .json(&args),
+                32 * 1024 * 1024,
+            )
+            .await?;
+        Ok(serde_json::from_slice(if bytes.is_empty() {
+            b"null"
+        } else {
+            &bytes
+        })?)
+    }
+
+    async fn occurrences(
+        &self,
+        workspace: &str,
+        id: Option<&str>,
+    ) -> Result<Vec<StoredOccurrence>> {
+        identifier(workspace)?;
+        let mut request = self
+            .request(Method::GET, "/rest/v1/recording_occurrences")
+            .query(&[
+                ("workspace", format!("eq.{workspace}")),
+                ("deleted", "eq.false".into()),
+                ("select", "id,metadata,sealed".into()),
+                ("order", "created_at.desc,id.asc".into()),
+                ("limit", "500".into()),
+            ]);
+        if let Some(id) = id {
+            identifier(id)?;
+            request = request.query(&[("id", format!("eq.{id}"))]);
+        }
+        self.json(request).await
+    }
+
+    async fn captures(&self, workspace: &str, id: &str) -> Result<Vec<StoredCapture>> {
+        let mut rows = Vec::new();
+        loop {
+            let page: Vec<StoredCapture> = self
+                .json(
+                    self.request(Method::GET, "/rest/v1/recording_captures")
+                        .query(&[
+                            ("workspace", format!("eq.{workspace}")),
+                            ("occurrence", format!("eq.{id}")),
+                            ("order", "id.asc".into()),
+                            ("offset", rows.len().to_string()),
+                            ("limit", "1000".into()),
+                        ]),
+                )
+                .await?;
+            let finished = page.len() < 1000;
+            rows.extend(page);
+            if finished {
+                return Ok(rows);
             }
         }
-        Ok(())
     }
 
     pub async fn list_occurrences(&self, workspace: &str) -> Result<Vec<OccurrenceManifest>> {
-        let _guard = self.gate.lock().await;
-        let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM occurrences WHERE workspace=? AND deleted=0 ORDER BY rowid DESC LIMIT 500")
-            .bind(workspace).fetch_all(&self.pool).await?;
-        let mut items = Vec::with_capacity(ids.len());
-        for id in ids {
-            items.push(self.manifest_unlocked(workspace, &id).await?);
+        let mut items = Vec::new();
+        for row in self.occurrences(workspace, None).await? {
+            items.push(self.manifest(workspace, &row.id).await?);
         }
         Ok(items)
     }
@@ -306,51 +312,59 @@ impl SharedRecordingService {
         provider_occurrence_id: &str,
         provider_started_at_ms: Option<i64>,
     ) -> Result<Option<i64>> {
-        identifier(workspace)?;
-        identifier(id)?;
-        identifier(actor)?;
+        for value in [workspace, id, actor] {
+            identifier(value)?;
+        }
         let occurrence = CreateOccurrence {
             provider,
-            provider_occurrence_id: provider_occurrence_id.to_owned(),
+            provider_occurrence_id: provider_occurrence_id.into(),
             duration_frames: 1,
         };
         validate_occurrence(&occurrence)?;
-        let _guard = self.gate.lock().await;
-        let mut transaction = self.pool.begin().await?;
-        let key = format!(
-            "{:?}:{}",
-            occurrence.provider, occurrence.provider_occurrence_id
-        );
-        let epoch = if let Some(existing) = sqlx::query(
-            "SELECT provider_key,deleted,provider_started_at_ms FROM occurrences WHERE workspace=? AND id=?",
-        )
-        .bind(workspace)
-        .bind(id)
-        .fetch_optional(&mut *transaction)
-        .await?
-        {
-            if existing.get::<i64, _>("deleted") != 0
-                || existing.get::<String, _>("provider_key") != key
-            {
-                return Err(RecordingError::Conflict);
-            }
-            existing.get::<Option<i64>, _>("provider_started_at_ms")
-        } else {
-            let epoch = provider_started_at_ms.unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
-            sqlx::query("INSERT INTO occurrences(workspace,id,provider_key,metadata,automatic,provider_started_at_ms) VALUES(?,?,?,?,1,?)")
-                .bind(workspace).bind(id).bind(key).bind(serde_json::to_string(&occurrence)?)
-                .bind(epoch).execute(&mut *transaction).await.map_err(map_constraint)?;
-            Some(epoch)
-        };
-        sqlx::query("INSERT INTO admissions(workspace,occurrence,actor) VALUES(?,?,?) ON CONFLICT DO NOTHING")
-            .bind(workspace).bind(id).bind(actor).execute(&mut *transaction).await?;
-        transaction.commit().await?;
-        Ok(epoch)
+        self.rpc("recording_admit", serde_json::json!({
+            "p_workspace":workspace,"p_id":id,"p_actor":actor,
+            "p_provider_key":format!("{:?}:{}", occurrence.provider, occurrence.provider_occurrence_id),
+            "p_metadata":occurrence,"p_provider_started_at_ms":provider_started_at_ms,
+        })).await
     }
 
     pub async fn actor_admitted(&self, workspace: &str, id: &str, actor: &str) -> Result<bool> {
-        Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM admissions a JOIN occurrences o ON o.workspace=a.workspace AND o.id=a.occurrence WHERE a.workspace=? AND a.occurrence=? AND a.actor=? AND o.deleted=0)")
-            .bind(workspace).bind(id).bind(actor).fetch_one(&self.pool).await?)
+        if self.occurrences(workspace, Some(id)).await?.is_empty() {
+            return Ok(false);
+        }
+        let rows: Vec<Value> = self
+            .json(
+                self.request(Method::GET, "/rest/v1/recording_admissions")
+                    .query(&[
+                        ("workspace", format!("eq.{workspace}")),
+                        ("occurrence", format!("eq.{id}")),
+                        ("actor", format!("eq.{actor}")),
+                        ("select", "actor".into()),
+                        ("limit", "1".into()),
+                    ]),
+            )
+            .await?;
+        Ok(!rows.is_empty())
+    }
+
+    pub async fn manifest(&self, workspace: &str, id: &str) -> Result<OccurrenceManifest> {
+        let row = self
+            .occurrences(workspace, Some(id))
+            .await?
+            .into_iter()
+            .next()
+            .ok_or(RecordingError::NotFound)?;
+        Ok(OccurrenceManifest {
+            occurrence_id: row.id,
+            occurrence: row.metadata,
+            captures: self
+                .captures(workspace, id)
+                .await?
+                .into_iter()
+                .map(StoredCapture::provenance)
+                .collect(),
+            sealed: row.sealed,
+        })
     }
 
     pub async fn source_audio(
@@ -359,27 +373,36 @@ impl SharedRecordingService {
         id: &str,
         capture_id: &str,
     ) -> Result<(CaptureProvenance, Vec<u8>)> {
-        let _guard = self.gate.lock().await;
-        let capture = self
-            .manifest_unlocked(workspace, id)
+        self.occurrences(workspace, Some(id))
             .await?
-            .captures
             .into_iter()
-            .find(|capture| capture.capture_id == capture_id && !capture.deleted)
+            .next()
             .ok_or(RecordingError::NotFound)?;
-        let object: String = sqlx::query_scalar(
-            "SELECT object FROM captures WHERE workspace=? AND occurrence=? AND id=? AND deleted=0",
-        )
-        .bind(workspace)
-        .bind(id)
-        .bind(capture_id)
-        .fetch_one(&self.pool)
-        .await?;
-        let wav = std::fs::read(self.directory.join(object))?;
-        if hex_sha(&wav) != capture.metadata.sha256 {
+        let row = self
+            .captures(workspace, id)
+            .await?
+            .into_iter()
+            .find(|row| row.id == capture_id && !row.deleted)
+            .ok_or(RecordingError::NotFound)?;
+        if !row.object.starts_with(&format!("{workspace}/{id}/")) || row.object.contains("..") {
             return Err(RecordingError::Conflict);
         }
-        Ok((capture, wav))
+        let bytes = self
+            .bytes(
+                self.request(
+                    Method::GET,
+                    &format!(
+                        "/storage/v1/object/authenticated/recording-audio/{}",
+                        row.object
+                    ),
+                ),
+                MAX_AUDIO_BYTES,
+            )
+            .await?;
+        if hex_sha(&bytes) != row.metadata.sha256 {
+            return Err(RecordingError::Conflict);
+        }
+        Ok((row.provenance(), bytes))
     }
 
     pub async fn save_source_transcript(
@@ -391,24 +414,9 @@ impl SharedRecordingService {
         transcript: Transcript,
     ) -> Result<()> {
         validate_transcript(&transcript)?;
-        let _guard = self.gate.lock().await;
-        self.occurrence_unlocked(workspace, id).await?;
-        let row = sqlx::query("SELECT metadata,transcript_json FROM captures WHERE workspace=? AND occurrence=? AND id=? AND deleted=0")
-            .bind(workspace).bind(id).bind(capture_id).fetch_optional(&self.pool).await?.ok_or(RecordingError::NotFound)?;
-        let metadata: CaptureMetadata = serde_json::from_str(&row.get::<String, _>("metadata"))?;
-        if metadata.sha256 != expected_sha {
-            return Err(RecordingError::Conflict);
-        }
-        if let Some(existing) = row.get::<Option<String>, _>("transcript_json") {
-            if serde_json::from_str::<Transcript>(&existing)? != transcript {
-                return Err(RecordingError::Conflict);
-            }
-            return Ok(());
-        }
-        let mut transaction = self.pool.begin().await?;
-        sqlx::query("UPDATE captures SET transcript_json=? WHERE workspace=? AND occurrence=? AND id=? AND deleted=0")
-            .bind(serde_json::to_string(&transcript)?).bind(workspace).bind(id).bind(capture_id).execute(&mut *transaction).await?;
-        transaction.commit().await?;
+        let _: Value = self.rpc("recording_save_transcript", serde_json::json!({
+            "p_workspace":workspace,"p_occurrence":id,"p_id":capture_id,"p_expected_sha":expected_sha,"p_transcript":transcript,
+        })).await?;
         Ok(())
     }
 
@@ -420,8 +428,10 @@ impl SharedRecordingService {
         metadata: CaptureMetadata,
         wav: &[u8],
     ) -> Result<OccurrenceManifest> {
-        identifier(capture_id)?;
         for value in [
+            workspace,
+            id,
+            capture_id,
             &metadata.uploader_id,
             &metadata.device_id,
             &metadata.local_capture_id,
@@ -444,255 +454,126 @@ impl SharedRecordingService {
         if hex_sha(wav) != metadata.sha256 {
             return Err(RecordingError::Conflict);
         }
-        let _guard = self.gate.lock().await;
-        let mut occurrence = self.occurrence_unlocked(workspace, id).await?;
-        let automatic: bool =
-            sqlx::query_scalar("SELECT automatic FROM occurrences WHERE workspace=? AND id=?")
-                .bind(workspace)
-                .bind(id)
-                .fetch_one(&self.pool)
-                .await?;
-        if automatic {
-            let end = metadata.offset_frames.saturating_add(frames as i64).max(1) as u64;
-            if end > MAX_FRAMES {
-                return Err(RecordingError::Invalid(
-                    "automatic occurrence exceeds supported timeline".into(),
-                ));
+        let manifest = self.manifest(workspace, id).await?;
+        if let Some(existing) = manifest
+            .captures
+            .iter()
+            .find(|row| row.capture_id == capture_id)
+        {
+            if existing.deleted || existing.metadata != metadata {
+                return Err(RecordingError::Conflict);
             }
-            occurrence.duration_frames = occurrence.duration_frames.max(end);
+            return Ok(manifest);
         }
-        let json = serde_json::to_string(&metadata)?;
+        if manifest.sealed {
+            return Err(RecordingError::Conflict);
+        }
+        let object = format!(
+            "{workspace}/{id}/{}-{}.wav",
+            key_hash(&[workspace, id, capture_id]),
+            metadata.sha256
+        );
+        let request = self
+            .request(
+                Method::POST,
+                &format!("/storage/v1/object/recording-audio/{object}"),
+            )
+            .header("content-type", "audio/wav")
+            .body(wav.to_vec());
+        let response = request.send().await.map_err(|_| RecordingError::Upstream)?;
+        if !response.status().is_success() {
+            // A retry may find the immutable object from an upload whose database commit failed.
+            let existing = self
+                .bytes(
+                    self.request(
+                        Method::GET,
+                        &format!("/storage/v1/object/authenticated/recording-audio/{object}"),
+                    ),
+                    MAX_AUDIO_BYTES,
+                )
+                .await?;
+            if hex_sha(&existing) != metadata.sha256 {
+                return Err(RecordingError::Conflict);
+            }
+        }
         let identity = serde_json::to_string(&(
             &metadata.uploader_id,
             &metadata.device_id,
             &metadata.local_capture_id,
             metadata.segment_sequence,
         ))?;
-        if let Some(row) = sqlx::query(
-            "SELECT metadata,deleted FROM captures WHERE workspace=? AND occurrence=? AND id=?",
-        )
-        .bind(workspace)
-        .bind(id)
-        .bind(capture_id)
-        .fetch_optional(&self.pool)
-        .await?
-        {
-            if row.get::<i64, _>("deleted") != 0 || row.get::<String, _>("metadata") != json {
-                return Err(RecordingError::Conflict);
-            }
-            return self.manifest_unlocked(workspace, id).await;
-        }
-        if self.sealed_unlocked(workspace, id).await? {
-            return Err(RecordingError::Conflict);
-        }
-        let limits=sqlx::query("SELECT count(*) AS count,coalesce(sum(frames),0) AS frames FROM captures WHERE workspace=? AND occurrence=? AND deleted=0")
-            .bind(workspace).bind(id).fetch_one(&self.pool).await?;
-        if limits.get::<i64, _>("count") >= MAX_SOURCES as i64
-            || limits.get::<i64, _>("frames") as u64 + frames > MAX_FRAMES * 2
-        {
-            return Err(RecordingError::Invalid(
-                "occurrence source limit exceeded".into(),
-            ));
-        }
-        let object = format!(
-            "source-{}-{}.wav",
-            key_hash(&[workspace, id, capture_id]),
-            metadata.sha256
-        );
-        let mut transaction = self.pool.begin().await?;
-        if let Err(error) = sqlx::query("INSERT INTO captures(workspace,occurrence,id,identity,metadata,object,frames,size_bytes) VALUES(?,?,?,?,?,?,?,?)")
-            .bind(workspace).bind(id).bind(capture_id).bind(identity).bind(json).bind(&object).bind(frames as i64).bind(wav.len() as i64).execute(&mut *transaction).await { return Err(map_constraint(error)); }
-        write_atomic(&self.directory.join(&object), wav)?;
-        if automatic {
-            sqlx::query("UPDATE occurrences SET metadata=? WHERE workspace=? AND id=?")
-                .bind(serde_json::to_string(&occurrence)?)
-                .bind(workspace)
-                .bind(id)
-                .execute(&mut *transaction)
-                .await?;
-        }
-        transaction.commit().await?;
-        self.manifest_unlocked(workspace, id).await
-    }
-
-    pub async fn manifest(&self, workspace: &str, id: &str) -> Result<OccurrenceManifest> {
-        let _guard = self.gate.lock().await;
-        self.manifest_unlocked(workspace, id).await
-    }
-
-    async fn occurrence_unlocked(&self, workspace: &str, id: &str) -> Result<CreateOccurrence> {
-        let metadata: String = sqlx::query_scalar(
-            "SELECT metadata FROM occurrences WHERE workspace=? AND id=? AND deleted=0",
-        )
-        .bind(workspace)
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await?
-        .ok_or(RecordingError::NotFound)?;
-        Ok(serde_json::from_str(&metadata)?)
-    }
-
-    async fn manifest_unlocked(&self, workspace: &str, id: &str) -> Result<OccurrenceManifest> {
-        let occurrence = self.occurrence_unlocked(workspace, id).await?;
-        let rows = sqlx::query("SELECT id,metadata,deleted,frames,transcript_json FROM captures WHERE workspace=? AND occurrence=? ORDER BY id")
-            .bind(workspace).bind(id).fetch_all(&self.pool).await?;
-        let captures = rows
-            .into_iter()
-            .map(|row| {
-                Ok(CaptureProvenance {
-                    capture_id: row.get("id"),
-                    metadata: serde_json::from_str(&row.get::<String, _>("metadata"))?,
-                    frame_count: row.get::<i64, _>("frames") as u64,
-                    transcript: row
-                        .get::<Option<String>, _>("transcript_json")
-                        .map(|json| serde_json::from_str(&json))
-                        .transpose()?,
-                    transcript_status: if row.get::<Option<String>, _>("transcript_json").is_some()
-                    {
-                        "ready"
-                    } else {
-                        "pending"
-                    }
-                    .into(),
-                    deleted: row.get::<i64, _>("deleted") != 0,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(OccurrenceManifest {
-            occurrence_id: id.into(),
-            occurrence,
-            captures,
-            sealed: self.sealed_unlocked(workspace, id).await?,
-        })
-    }
-
-    async fn sealed_unlocked(&self, workspace: &str, id: &str) -> Result<bool> {
-        sqlx::query_scalar(
-            "SELECT sealed FROM occurrences WHERE workspace=? AND id=? AND deleted=0",
-        )
-        .bind(workspace)
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await?
-        .ok_or(RecordingError::NotFound)
+        let _: Value = self.rpc("recording_upload", serde_json::json!({
+            "p_workspace":workspace,"p_occurrence":id,"p_id":capture_id,"p_identity":identity,"p_metadata":metadata,
+            "p_object":object,"p_frames":frames,"p_size_bytes":wav.len(),
+        })).await?;
+        self.manifest(workspace, id).await
     }
 
     pub async fn seal(&self, workspace: &str, id: &str) -> Result<OccurrenceManifest> {
-        let _guard = self.gate.lock().await;
-        self.occurrence_unlocked(workspace, id).await?;
-        let has_capture:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM captures WHERE workspace=? AND occurrence=? AND deleted=0)").bind(workspace).bind(id).fetch_one(&self.pool).await?;
-        if !has_capture {
-            return Err(RecordingError::Conflict);
-        }
-        sqlx::query("UPDATE occurrences SET sealed=1 WHERE workspace=? AND id=?")
-            .bind(workspace)
-            .bind(id)
-            .execute(&self.pool)
+        let _: Value = self
+            .rpc(
+                "recording_seal",
+                serde_json::json!({"p_workspace":workspace,"p_occurrence":id}),
+            )
             .await?;
-        self.manifest_unlocked(workspace, id).await
+        self.manifest(workspace, id).await
     }
 
-    pub async fn delete_capture(&self, workspace: &str, id: &str, capture_id: &str) -> Result<()> {
-        let _guard = self.gate.lock().await;
-        self.occurrence_unlocked(workspace, id).await?;
-        let row = sqlx::query(
-            "SELECT object,deleted FROM captures WHERE workspace=? AND occurrence=? AND id=?",
-        )
-        .bind(workspace)
-        .bind(id)
-        .bind(capture_id)
-        .fetch_optional(&self.pool)
-        .await?;
-        let row = row.ok_or(RecordingError::NotFound)?;
-        let object: String = row.get("object");
-        if row.get::<i64, _>("deleted") != 0 {
-            remove_if_exists(&self.directory.join(object))?;
-            return Ok(());
+    async fn delete(&self, workspace: &str, id: &str, capture: Option<&str>) -> Result<()> {
+        let objects: Vec<String> = self
+            .rpc(
+                "recording_delete",
+                serde_json::json!({"p_workspace":workspace,"p_occurrence":id,"p_capture":capture}),
+            )
+            .await?;
+        if !objects.is_empty() {
+            self.bytes(
+                self.request(Method::DELETE, "/storage/v1/object/recording-audio")
+                    .json(&serde_json::json!({"prefixes":objects})),
+                1024 * 1024,
+            )
+            .await?;
         }
-        let derived = self.derived_objects_unlocked(workspace, id).await?;
-        let mut transaction = self.pool.begin().await?;
-        sqlx::query("UPDATE captures SET deleted=1,transcript_json=NULL WHERE workspace=? AND occurrence=? AND id=?")
-            .bind(workspace)
-            .bind(id)
-            .bind(capture_id)
-            .execute(&mut *transaction)
-            .await?;
-        sqlx::query("UPDATE occurrences SET current_json=NULL WHERE workspace=? AND id=?")
-            .bind(workspace)
-            .bind(id)
-            .execute(&mut *transaction)
-            .await?;
-        sqlx::query("DELETE FROM revisions WHERE workspace=? AND occurrence=?")
-            .bind(workspace)
-            .bind(id)
-            .execute(&mut *transaction)
-            .await?;
-        transaction.commit().await?;
-        for object in derived {
-            remove_if_exists(&self.directory.join(object))?;
-        }
-        remove_if_exists(&self.directory.join(object))?;
         Ok(())
     }
-
+    pub async fn delete_capture(&self, workspace: &str, id: &str, capture: &str) -> Result<()> {
+        self.delete(workspace, id, Some(capture)).await
+    }
     pub async fn delete_occurrence(&self, workspace: &str, id: &str) -> Result<()> {
-        let _guard = self.gate.lock().await;
-        let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM occurrences WHERE workspace=? AND id=?)",
-        )
-        .bind(workspace)
-        .bind(id)
-        .fetch_one(&self.pool)
-        .await?;
-        if !exists {
-            return Err(RecordingError::NotFound);
-        }
-        let objects: Vec<String> =
-            sqlx::query_scalar("SELECT object FROM captures WHERE workspace=? AND occurrence=?")
-                .bind(workspace)
-                .bind(id)
-                .fetch_all(&self.pool)
-                .await?;
-        let derived = self.derived_objects_unlocked(workspace, id).await?;
-        let mut transaction = self.pool.begin().await?;
-        sqlx::query(
-            "UPDATE occurrences SET deleted=1,current_json=NULL WHERE workspace=? AND id=?",
-        )
-        .bind(workspace)
-        .bind(id)
-        .execute(&mut *transaction)
-        .await?;
-        sqlx::query(
-            "UPDATE captures SET deleted=1,transcript_json=NULL WHERE workspace=? AND occurrence=?",
-        )
-        .bind(workspace)
-        .bind(id)
-        .execute(&mut *transaction)
-        .await?;
-        sqlx::query("DELETE FROM revisions WHERE workspace=? AND occurrence=?")
-            .bind(workspace)
-            .bind(id)
-            .execute(&mut *transaction)
-            .await?;
-        transaction.commit().await?;
-        for object in derived {
-            remove_if_exists(&self.directory.join(object))?;
-        }
-        for object in objects {
-            remove_if_exists(&self.directory.join(object))?;
-        }
-        Ok(())
+        self.delete(workspace, id, None).await
     }
+}
 
-    async fn derived_objects_unlocked(&self, workspace: &str, id: &str) -> Result<Vec<String>> {
-        let objects: Vec<String> = sqlx::query_scalar(
-            "SELECT object FROM revisions WHERE workspace=? AND occurrence=? AND object<>''",
-        )
-        .bind(workspace)
-        .bind(id)
-        .fetch_all(&self.pool)
-        .await?;
-        Ok(objects)
+#[derive(Deserialize)]
+struct StoredOccurrence {
+    id: String,
+    metadata: CreateOccurrence,
+    sealed: bool,
+}
+#[derive(Deserialize)]
+struct StoredCapture {
+    id: String,
+    metadata: CaptureMetadata,
+    object: String,
+    deleted: bool,
+    frames: u64,
+    transcript_json: Option<Transcript>,
+}
+impl StoredCapture {
+    fn provenance(self) -> CaptureProvenance {
+        CaptureProvenance {
+            capture_id: self.id,
+            metadata: self.metadata,
+            frame_count: self.frames,
+            transcript_status: if self.transcript_json.is_some() {
+                "ready"
+            } else {
+                "pending"
+            }
+            .into(),
+            transcript: self.transcript_json,
+            deleted: self.deleted,
+        }
     }
 }
 
@@ -778,42 +659,4 @@ pub(crate) fn hex_sha(bytes: &[u8]) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
-}
-fn map_constraint(error: sqlx::Error) -> RecordingError {
-    if error
-        .as_database_error()
-        .is_some_and(|error| error.is_unique_violation())
-    {
-        RecordingError::Conflict
-    } else {
-        RecordingError::Storage(error)
-    }
-}
-fn write_atomic(path: &FsPath, bytes: &[u8]) -> Result<()> {
-    use std::io::Write;
-    let temporary = path.with_extension("pending");
-    let mut options = std::fs::OpenOptions::new();
-    options.create(true).truncate(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(&temporary)?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    std::fs::rename(&temporary, path)?;
-    std::fs::File::open(
-        path.parent()
-            .ok_or_else(|| RecordingError::Invalid("invalid storage path".into()))?,
-    )?
-    .sync_all()?;
-    Ok(())
-}
-fn remove_if_exists(path: &FsPath) -> Result<()> {
-    match std::fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.into()),
-    }
 }

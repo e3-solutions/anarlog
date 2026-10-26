@@ -1,3 +1,4 @@
+mod common;
 use std::{
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -6,7 +7,7 @@ use std::{
 use api_recordings::{
     recording_app::{self, RecordingAppState},
     recording_members::RecordingMemberships,
-    shared_recordings::{Provider, SharedRecordingService},
+    shared_recordings::Provider,
 };
 use axum::{
     body::{Body, to_bytes},
@@ -94,12 +95,8 @@ async fn signed_members_share_one_library_without_spoofing_uploader_or_retaining
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
         .mount(&upstream)
         .await;
-    let directory = tempfile::tempdir().unwrap();
-    let service = Arc::new(
-        SharedRecordingService::open(directory.path())
-            .await
-            .unwrap(),
-    );
+    let (_storage, service) = common::service("org").await;
+    let service = Arc::new(service);
     service
         .admit_actor(
             "org",

@@ -85,22 +85,17 @@ print("public health/auth/body-limit/private-ASR smoke passed")
 PY
 
 docker exec -i "$name" python3 - <<'PY'
-import pathlib, sqlite3
-root = pathlib.Path("/data/recordings")
+import pathlib
+root = pathlib.Path("/data/models")
 assert root.stat().st_mode & 0o777 == 0o700
-with sqlite3.connect(root / "recordings.sqlite") as database:
-    assert database.execute("PRAGMA integrity_check").fetchone() == ("ok",)
-    assert {"occurrences", "captures", "revisions", "admissions"} <= {row[0] for row in database.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-(root / "smoke-persistence-marker").write_text("disposable-volume-proof")
+(root / "smoke-persistence-marker").write_text("disposable-model-cache-proof")
 PY
 docker restart --time 20 "$name" >/dev/null
 wait_ready
 docker exec -i "$name" python3 - <<'PY'
-import pathlib, sqlite3
-root = pathlib.Path("/data/recordings")
-assert (root / "smoke-persistence-marker").read_text() == "disposable-volume-proof"
-with sqlite3.connect(root / "recordings.sqlite") as database:
-    assert database.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+import pathlib
+root = pathlib.Path("/data/models")
+assert (root / "smoke-persistence-marker").read_text() == "disposable-model-cache-proof"
 listeners = []
 for table in ("/proc/net/tcp", "/proc/net/tcp6"):
     for line in pathlib.Path(table).read_text().splitlines()[1:]:
@@ -109,7 +104,7 @@ for table in ("/proc/net/tcp", "/proc/net/tcp6"):
         if int(port, 16) == 18796 and fields[3] == "0A":
             listeners.append(address)
 assert listeners == ["0100007F"], listeners
-print("persistent restart and private-ASR socket smoke passed")
+print("model-cache restart and private-ASR socket smoke passed")
 PY
 
 docker exec -i "$name" python3 - <<'PY'

@@ -16,7 +16,6 @@ reqwest = { workspace = true, features = ["json", "multipart", "query", "stream"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
-sqlx = { workspace = true, features = ["sqlite", "runtime-tokio"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time"] }
 tower-http = { workspace = true, features = ["limit"] }
@@ -25,7 +24,6 @@ url = { workspace = true }
 
 [dev-dependencies]
 jsonwebtoken = { workspace = true }
-tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tower = { workspace = true, features = ["util"] }
 wiremock = { workspace = true }

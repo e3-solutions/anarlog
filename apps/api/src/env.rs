@@ -63,8 +63,8 @@ pub struct Env {
     #[serde(default, deserialize_with = "anlg_api_env::filter_empty")]
     pub sqlitecloud_cloudsync_management_api_key: Option<String>,
 
-    #[serde(default, deserialize_with = "anlg_api_env::filter_empty")]
-    pub anarlog_shared_recordings_dir: Option<String>,
+    #[serde(default)]
+    pub anarlog_shared_recordings_enabled: bool,
     #[serde(default, deserialize_with = "anlg_api_env::filter_empty")]
     pub anarlog_shared_recordings_transcription_url: Option<String>,
     #[serde(default, deserialize_with = "anlg_api_env::filter_empty")]
@@ -134,18 +134,15 @@ impl RuntimeConfig {
         if env.anarlog_billing_webhooks && service != Service::Billing {
             return Err("Local billing webhooks require the billing role".into());
         }
-        if let Some(directory) = &env.anarlog_shared_recordings_dir {
+        if env.anarlog_shared_recordings_enabled {
             if !service.includes(Service::Core) {
                 return Err(
-                    "ANARLOG_SHARED_RECORDINGS_DIR is only supported by core or all".into(),
+                    "ANARLOG_SHARED_RECORDINGS_ENABLED is only supported by core or all".into(),
                 );
-            }
-            if !Path::new(directory).is_absolute() {
-                return Err("ANARLOG_SHARED_RECORDINGS_DIR requires an absolute single-writer durable directory".into());
             }
             if env.upstreams.anarlog_core_origin.is_some() {
                 return Err(
-                    "Local shared recordings cannot be combined with core forwarding".into(),
+                    "Shared recording ingestion cannot be combined with core forwarding".into(),
                 );
             }
             match (
@@ -510,32 +507,40 @@ mod tests {
     }
 
     #[test]
-    fn shared_recordings_require_opt_in_local_core_storage_and_complete_transcription() {
+    fn shared_recordings_require_opt_in_core_ingestion_and_complete_transcription() {
         assert!(
-            role_config("core", &[])
+            !role_config("core", &[])
                 .unwrap()
-                .anarlog_shared_recordings_dir
-                .is_none()
+                .anarlog_shared_recordings_enabled
         );
-        for (role, directory) in [
-            ("core", "relative"),
-            ("sync", "/data/recordings"),
-            ("billing", "/data/recordings"),
-        ] {
-            assert!(role_config(role, &[("ANARLOG_SHARED_RECORDINGS_DIR", directory)]).is_err());
+        for role in ["ai", "sync", "billing"] {
+            assert!(
+                role_config(role, &[("ANARLOG_SHARED_RECORDINGS_ENABLED", "true")])
+                    .err()
+                    .unwrap()
+                    .contains("only supported by core or all")
+            );
         }
+        assert!(role_config("core", &[("ANARLOG_SHARED_RECORDINGS_ENABLED", "true")]).is_ok());
         assert!(
             role_config(
-                "core",
-                &[("ANARLOG_SHARED_RECORDINGS_DIR", "/data/recordings")]
+                "all",
+                &[
+                    ("OPENROUTER_API_KEY", "key"),
+                    ("API_BASE_URL", "http://localhost:3001"),
+                    ("ANARLOG_SHARED_RECORDINGS_ENABLED", "true"),
+                    ("ANARLOG_CORE_ORIGIN", "http://localhost:3002"),
+                ]
             )
-            .is_ok()
+            .err()
+            .unwrap()
+            .contains("cannot be combined with core forwarding")
         );
         assert!(
             role_config(
                 "core",
                 &[
-                    ("ANARLOG_SHARED_RECORDINGS_DIR", "/data/recordings"),
+                    ("ANARLOG_SHARED_RECORDINGS_ENABLED", "true"),
                     (
                         "ANARLOG_SHARED_RECORDINGS_TRANSCRIPTION_URL",
                         "http://127.0.0.1:18796/v1"

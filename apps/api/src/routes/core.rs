@@ -26,7 +26,7 @@ pub(crate) async fn router(
             Some(env.supabase.supabase_service_role_key.clone()),
         )
     });
-    let recording_routes = if let Some(directory) = &env.anarlog_shared_recordings_dir {
+    let recording_routes = if env.anarlog_shared_recordings_enabled {
         use anlg_api_recordings::{
             recording_app::{self, RecordingAppState},
             recording_identity::RecordingIdentityResolver,
@@ -35,9 +35,11 @@ pub(crate) async fn router(
             shared_recordings::SharedRecordingService,
         };
         let service = Arc::new(
-            SharedRecordingService::open(directory)
-                .await
-                .expect("shared recording storage must open exclusively"),
+            SharedRecordingService::supabase(
+                &env.supabase.supabase_url,
+                &env.supabase.supabase_service_role_key,
+            )
+            .expect("shared recording Supabase configuration validated"),
         );
         let identities = nango_config.as_ref().map(|config| {
             RecordingIdentityResolver::new(anlg_api_nango::NangoConnectionState::from_config(
