@@ -5,7 +5,7 @@ use axum::{
     extract::{DefaultBodyLimit, Path, State},
     http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     middleware::{self, Next},
-    response::{IntoResponse, Response},
+    response::Response,
     routing::{get, post},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -20,7 +20,7 @@ use crate::{
     recording_transcription::RecordingProcessor,
     shared_recordings::{
         CaptureUpload, OccurrenceManifest, RecordingError, Revision, SharedRecordingService,
-        TimingBasis,
+        TimingBasis, wav_response,
     },
 };
 
@@ -239,14 +239,7 @@ async fn audio(
         .canonical_audio(&workspace, &id)
         .await
         .map_err(storage_error)?;
-    Ok((
-        [
-            (header::CONTENT_TYPE, "audio/wav".to_owned()),
-            (header::ETAG, format!("\"{}\"", revision.audio_sha256)),
-        ],
-        wav,
-    )
-        .into_response())
+    Ok(wav_response(wav, &revision.audio_sha256))
 }
 
 async fn upload(
@@ -386,12 +379,5 @@ async fn revision_audio(
         .revision_audio(&workspace, &id, &revision)
         .await
         .map_err(storage_error)?;
-    Ok((
-        [
-            (header::CONTENT_TYPE, "audio/wav".to_owned()),
-            (header::ETAG, format!("\"{}\"", revision.audio_sha256)),
-        ],
-        wav,
-    )
-        .into_response())
+    Ok(wav_response(wav, &revision.audio_sha256))
 }

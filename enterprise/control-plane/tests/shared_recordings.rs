@@ -1,10 +1,4 @@
-use std::{
-    path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-};
+use std::sync::Arc;
 
 use anarlog_enterprise_control_plane::{
     auth::StaticTokenAuthenticator,
@@ -21,23 +15,6 @@ use axum::{
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use tower::ServiceExt;
-
-static NEXT: AtomicU64 = AtomicU64::new(0);
-struct Directory(PathBuf);
-impl Directory {
-    fn new() -> Self {
-        Self(std::env::temp_dir().join(format!(
-            "anarlog-shared-recordings-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        )))
-    }
-}
-impl Drop for Directory {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
 
 fn occurrence(id: &str) -> CreateOccurrence {
     CreateOccurrence {
@@ -65,9 +42,15 @@ fn metadata(id: &str, wav: &[u8], rank: u32, gaps: Vec<FrameRange>) -> CaptureMe
 #[tokio::test]
 async fn immutable_inputs_recover_without_duplicates_and_late_revisions_invalidate_stale_transcripts()
  {
-    let directory = Directory::new();
-    let service = SharedRecordingService::open(&directory.0).await.unwrap();
-    assert!(SharedRecordingService::open(&directory.0).await.is_err());
+    let directory = tempfile::tempdir().unwrap();
+    let service = SharedRecordingService::open(directory.path())
+        .await
+        .unwrap();
+    assert!(
+        SharedRecordingService::open(directory.path())
+            .await
+            .is_err()
+    );
     let first = encode_wav(&[10; 12]).unwrap();
     let fallback = encode_wav(&[20; 12]).unwrap();
     service
@@ -186,7 +169,7 @@ async fn immutable_inputs_recover_without_duplicates_and_late_revisions_invalida
         .canonical_audio("workspace", "meeting")
         .await
         .unwrap();
-    for entry in std::fs::read_dir(&directory.0).unwrap() {
+    for entry in std::fs::read_dir(directory.path()).unwrap() {
         let path = entry.unwrap().path();
         if std::fs::read(&path).ok().as_deref() == Some(expected_audio.as_slice()) {
             std::fs::remove_file(path).unwrap();
@@ -291,7 +274,9 @@ async fn immutable_inputs_recover_without_duplicates_and_late_revisions_invalida
         Err(RecordingError::Conflict)
     ));
     drop(service);
-    let recovered = SharedRecordingService::open(&directory.0).await.unwrap();
+    let recovered = SharedRecordingService::open(directory.path())
+        .await
+        .unwrap();
     assert!(
         recovered
             .manifest("workspace", "meeting")
@@ -365,8 +350,10 @@ async fn immutable_inputs_recover_without_duplicates_and_late_revisions_invalida
 
 #[tokio::test]
 async fn audio_alignment_extending_a_capture_preserves_its_corrected_tail() {
-    let directory = Directory::new();
-    let service = SharedRecordingService::open(&directory.0).await.unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let service = SharedRecordingService::open(directory.path())
+        .await
+        .unwrap();
     service
         .automatic_admit(
             "workspace",
@@ -432,8 +419,12 @@ async fn audio_alignment_extending_a_capture_preserves_its_corrected_tail() {
 
 #[tokio::test]
 async fn http_requires_workspace_service_authority_and_rejects_room_aliases_and_incomplete_audio() {
-    let directory = Directory::new();
-    let service = Arc::new(SharedRecordingService::open(&directory.0).await.unwrap());
+    let directory = tempfile::tempdir().unwrap();
+    let service = Arc::new(
+        SharedRecordingService::open(directory.path())
+            .await
+            .unwrap(),
+    );
     let auth = Arc::new(
         StaticTokenAuthenticator::new([("workspace".into(), "operator-token".into())]).unwrap(),
     );

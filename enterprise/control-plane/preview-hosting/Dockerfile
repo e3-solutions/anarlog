@@ -1,5 +1,6 @@
 ARG RUST_IMAGE=rust:1.94.0-bookworm@sha256:365468470075493dc4583f47387001854321c5a8583ea9604b297e67f01c5a4f
 ARG RUNTIME_IMAGE=debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
+ARG CADDY_IMAGE=caddy:2.10.2@sha256:c3d7ee5d2b11f9dc54f947f68a734c84e9c9666c92c88a7f30b9cba5da182adb
 
 FROM ${RUST_IMAGE} AS builder
 RUN apt-get update && apt-get install --no-install-recommends -y cmake g++ pkg-config libssl-dev libclang-dev ca-certificates curl && rm -rf /var/lib/apt/lists/*
@@ -15,7 +16,7 @@ RUN curl --fail --location --retry 3 --max-time 180 https://codeload.github.com/
     && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF -DGGML_CUDA=OFF -DGGML_METAL=OFF -DWHISPER_BUILD_TESTS=OFF \
     && cmake --build build --target whisper-server --parallel 2
 
-FROM caddy:2.10.2@sha256:c3d7ee5d2b11f9dc54f947f68a734c84e9c9666c92c88a7f30b9cba5da182adb AS proxy
+FROM ${CADDY_IMAGE} AS proxy
 FROM ${RUNTIME_IMAGE}
 RUN apt-get update && apt-get install --no-install-recommends -y ca-certificates libssl3 libstdc++6 libgomp1 python3 \
     && rm -rf /var/lib/apt/lists/* \

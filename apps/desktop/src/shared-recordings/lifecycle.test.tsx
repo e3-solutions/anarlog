@@ -65,11 +65,8 @@ vi.mock("./client", () => ({
   sharedRecordingsPreviewUrl: "http://localhost:8789",
 }));
 
-import {
-  SharedRecordingLifecycle,
-  SharedRecordingPreferences,
-  SharedRecordingQueue,
-} from "./lifecycle";
+import { SharedRecordingLifecycle } from "./lifecycle";
+import { SharedRecordingPreferences, SharedRecordingQueue } from "./settings";
 
 afterEach(() => {
   cleanup();

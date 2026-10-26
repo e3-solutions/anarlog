@@ -1027,6 +1027,18 @@ pub fn router(
             authenticator,
         })
 }
+pub(crate) fn wav_response(wav: Vec<u8>, audio_sha256: &str) -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, "audio/wav".to_owned()),
+            (header::CACHE_CONTROL, "no-store".to_owned()),
+            (header::ETAG, format!("\"{audio_sha256}\"")),
+        ],
+        wav,
+    )
+        .into_response()
+}
+
 async fn no_store(request: axum::extract::Request, next: Next) -> Response {
     let mut response = next.run(request).await;
     response.headers_mut().insert(
@@ -1154,15 +1166,7 @@ async fn audio(
 ) -> std::result::Result<Response, HttpError> {
     authorize(&state, &headers, &workspace)?;
     let (revision, wav) = state.service.canonical_audio(&workspace, &id).await?;
-    Ok((
-        [
-            (header::CONTENT_TYPE, "audio/wav".to_owned()),
-            (header::CACHE_CONTROL, "no-store".to_owned()),
-            (header::ETAG, format!("\"{}\"", revision.audio_sha256)),
-        ],
-        wav,
-    )
-        .into_response())
+    Ok(wav_response(wav, &revision.audio_sha256))
 }
 async fn transcript(
     State(state): State<HttpState>,
@@ -1222,12 +1226,5 @@ async fn historical_audio(
         .service
         .historical_audio(&workspace, &id, number)
         .await?;
-    Ok((
-        [
-            (header::CONTENT_TYPE, "audio/wav".to_owned()),
-            (header::ETAG, format!("\"{}\"", revision.audio_sha256)),
-        ],
-        wav,
-    )
-        .into_response())
+    Ok(wav_response(wav, &revision.audio_sha256))
 }

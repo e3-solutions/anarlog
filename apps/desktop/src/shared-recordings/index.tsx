@@ -14,8 +14,8 @@ import {
   type SharedRecordingAccount,
   type SharedRecordingRevision,
 } from "./client";
-import { SharedRecordingPreferences, SharedRecordingQueue } from "./lifecycle";
 import { downloadSharedRecordingAudio } from "./native";
+import { SharedRecordingPreferences, SharedRecordingQueue } from "./settings";
 
 import { useAuth } from "~/auth";
 

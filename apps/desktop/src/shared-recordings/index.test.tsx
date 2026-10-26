@@ -25,7 +25,7 @@ vi.mock("~/auth", () => ({
     signIn: async () => {},
   }),
 }));
-vi.mock("./lifecycle", () => ({
+vi.mock("./settings", () => ({
   SharedRecordingPreferences: () => null,
   SharedRecordingQueue: () => null,
 }));

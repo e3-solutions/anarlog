@@ -1,0 +1,376 @@
+name: E3 Shared Recordings Preview
+
+on:
+  workflow_dispatch:
+    inputs:
+      container_only:
+        description: Validate the isolated hosted backend container without deployment
+        type: boolean
+        default: false
+      hosted_preview:
+        description: Use the isolated hosted API and sign-in URLs instead of local services
+        type: boolean
+        default: false
+      backend_only:
+        description: Build only the isolated local backend
+        type: boolean
+        default: false
+      preview_instance:
+        description: Isolated app identity for the two-account test
+        type: choice
+        default: first
+        options:
+          - first
+          - second
+      native_checks_only:
+        description: Run native checks without signing or packaging
+        type: boolean
+        default: false
+      defer_notarization:
+        description: Produce only a signed NOT NOTARIZED diagnostic checkpoint for local notarization
+        type: boolean
+        default: false
+      signing_mode:
+        description: macOS signing mode
+        type: choice
+        required: true
+        default: developer-id
+        options:
+          - developer-id
+          - ad-hoc
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e3-shared-preview-${{ github.ref }}-${{ inputs.container_only && 'container' || inputs.backend_only && 'backend' || inputs.native_checks_only && 'checks' || inputs.preview_instance }}
+  cancel-in-progress: true
+
+jobs:
+  preview_container:
+    if: inputs.container_only == true && github.repository == 'e3-solutions/anarlog' && github.ref == 'refs/heads/chore/shared-meeting-recordings'
+    uses: ./.github/workflows/e3_shared_preview_container.yaml # zizmor: ignore[self-repository] -- Validate the reusable workflow from this exact isolated candidate.
+
+  build:
+    if: inputs.container_only != true && inputs.backend_only != true && github.repository == 'e3-solutions/anarlog' && github.ref == 'refs/heads/chore/shared-meeting-recordings'
+    runs-on: macos-26
+    timeout-minutes: 120
+    env:
+      TAURI_ENV_TARGET_TRIPLE: aarch64-apple-darwin
+      CARGO_TARGET_DIR: ${{ github.workspace }}/apps/desktop/src-tauri/target
+      NODE_OPTIONS: --max-old-space-size=4096
+      VITE_API_URL: ${{ inputs.hosted_preview && vars.ANARLOG_SHARED_PREVIEW_API_URL || 'http://localhost:8789' }}
+      VITE_APP_URL: ${{ inputs.hosted_preview && vars.ANARLOG_SHARED_PREVIEW_APP_URL || 'http://localhost:3000' }}
+      VITE_SHARED_RECORDINGS_PREVIEW_URL: ${{ inputs.hosted_preview && vars.ANARLOG_SHARED_PREVIEW_API_URL || 'http://localhost:8789' }}
+      VITE_SUPABASE_URL: ${{ vars.ANARLOG_SHARED_PREVIEW_SUPABASE_URL }}
+      VITE_SUPABASE_ANON_KEY: ${{ vars.ANARLOG_SHARED_PREVIEW_SUPABASE_PUBLISHABLE_KEY }}
+      PREVIEW_CONFIG: ${{ inputs.preview_instance == 'second' && 'tauri.shared-recordings-preview-second.json' || 'tauri.shared-recordings-preview.json' }}
+      PREVIEW_PRODUCT: ${{ inputs.preview_instance == 'second' && 'E3 Shared Recordings Preview Second' || 'E3 Shared Recordings Preview' }}
+      PREVIEW_BUNDLE_ID: ${{ inputs.preview_instance == 'second' && 'ai.e3group.meeting-capture-shared-preview-second' || 'ai.e3group.meeting-capture-shared-preview' }}
+    steps:
+      - if: inputs.hosted_preview == true
+        env:
+          HOSTED_API_URL: ${{ vars.ANARLOG_SHARED_PREVIEW_API_URL }}
+          HOSTED_APP_URL: ${{ vars.ANARLOG_SHARED_PREVIEW_APP_URL }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from urllib.parse import urlsplit
+          for name in ("HOSTED_API_URL", "HOSTED_APP_URL"):
+              url = urlsplit(os.environ[name])
+              if (url.scheme != "https" or not url.hostname or url.username or url.password
+                  or url.query or url.fragment or url.path not in ("", "/")
+                  or url.hostname in ("localhost", "127.0.0.1", "::1")):
+                  raise SystemExit(f"Configure {name} as the isolated hosted HTTPS origin before building")
+          PY
+      - id: signing-preflight
+        if: inputs.native_checks_only != true
+        env:
+          SIGNING_MODE: ${{ inputs.signing_mode }}
+          DEFER_NOTARIZATION: ${{ inputs.defer_notarization }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_ID: ${{ inputs.defer_notarization != true && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ inputs.defer_notarization != true && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import sys
+          mode = os.environ["SIGNING_MODE"]
+          if mode not in ("developer-id", "ad-hoc"):
+              sys.exit("Unsupported signing mode")
+          deferred = os.environ.get("DEFER_NOTARIZATION") == "true"
+          if deferred and mode != "developer-id":
+              sys.exit("Deferred notarization requires Developer ID signing")
+          if mode == "developer-id":
+              required = ("APPLE_CERTIFICATE", "APPLE_CERTIFICATE_PASSWORD", "KEYCHAIN_PASSWORD", "APPLE_TEAM_ID")
+              if not deferred:
+                  required += ("APPLE_ID", "APPLE_PASSWORD")
+              missing = [name for name in required if not os.environ.get(name, "").strip()]
+              if missing:
+                  sys.exit("Missing signing secrets: " + ", ".join(missing))
+          PY
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          lfs: true
+          submodules: recursive
+          persist-credentials: false
+      - if: inputs.native_checks_only != true && inputs.signing_mode == 'developer-id'
+        uses: ./.github/actions/apple_cert # zizmor: ignore[self-repository] -- Validate the signing identity before dependency installation or compilation.
+        id: apple-cert
+        with:
+          apple-certificate: ${{ secrets.APPLE_CERTIFICATE }}
+          apple-certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          keychain-password: ${{ secrets.KEYCHAIN_PASSWORD }}
+      - id: notarization-preflight
+        if: inputs.native_checks_only != true && inputs.signing_mode == 'developer-id' && inputs.defer_notarization != true
+        timeout-minutes: 2
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          node scripts/notarize-dmg.mjs --preflight
+      - uses: ./.github/actions/install_desktop_deps # zizmor: ignore[self-repository] -- Build helpers must match the checked-out candidate, including PR merge commits.
+        with:
+          target: macos
+      - uses: ./.github/actions/rust_install # zizmor: ignore[self-repository] -- Use the checked-out candidate's toolchain setup.
+        with:
+          platform: macos
+      - id: native-format
+        name: Validate native formatting before caching
+        run: rustfmt --check --edition 2024 plugins/permissions/src/ext.rs crates/detect/src/meeting_ax.rs plugins/transcription/src/listener/commands.rs plugins/transcription/src/shared_recording.rs crates/mp3/src/encoder.rs crates/mp3/tests/stream_encoder.rs
+      - name: Cache native desktop build dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Separate full workspace caches from the old registry-only entry.
+          # Match the pilot optimization below; Rust-cache hashes Cargo.lock/toolchain.
+          # Manual builds use their branch cache and can restore default-branch entries.
+          prefix-key: e3-pilot-native-v3-opt1
+          workspaces: . -> apps/desktop/src-tauri/target
+          # Preserve compiled dependencies even if Apple's later notarization fails.
+          cache-on-failure: ${{ steps.native-format.outcome == 'success' }}
+          cache-workspace-crates: true
+      - uses: ./.github/actions/pnpm_install # zizmor: ignore[self-repository] -- Use the checked-out candidate's workspace setup.
+      - run: echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
+      - name: Verify MP3 finalization preserves captured audio
+        run: cargo test --locked -p mp3
+      - run: cargo test --locked -p detect browser_inspection
+      - run: cargo test --locked -p detect browser_activation
+      - run: cargo test --locked -p detect chrome_tabs
+      - run: cargo test --locked -p detect slack_
+      - name: Validate native permission repairs before packaging
+        run: |
+          cargo test --locked -p tauri-plugin-permissions --features private-tcc --lib tests::
+      - name: Generate detect bindings with the owning exporter
+        run: |
+          pnpm exec prettier --version
+          pnpm exec cargo test --locked -p tauri-plugin-detect --lib test::export_types -- --exact
+          pnpm exec prettier --check plugins/detect/js/bindings.gen.ts
+      - name: Upload generated detect bindings
+        if: inputs.native_checks_only != true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: e3-detect-bindings-${{ github.sha }}
+          path: plugins/detect/js/bindings.gen.ts
+          retention-days: 7
+          if-no-files-found: error
+      - name: Validate shared recording native queue and source pipeline
+        run: |
+          # Writer latency checks must not compete with other tests' MP3 encoders.
+          cargo test --locked -p listener-core --lib -- --test-threads=1
+          cargo test --locked -p tauri-plugin-transcription --lib shared_recording::tests
+      - name: Generate transcription bindings with the owning exporter
+        run: |
+          pnpm exec cargo test --locked -p tauri-plugin-transcription --lib test::export_types -- --exact
+          pnpm exec prettier --check plugins/transcription/js/bindings.gen.ts
+      - name: Preserve generated preview bindings and permissions
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: shared-recording-native-bindings-${{ github.sha }}
+          path: |
+            plugins/transcription/js/bindings.gen.ts
+            plugins/transcription/permissions/
+          retention-days: 7
+          if-no-files-found: error
+      - run: pnpm -F @anlg/ui build
+      - name: Validate desktop against the generated native contracts
+        run: pnpm -F @anlg/desktop typecheck
+      - run: cargo test --locked -p storage
+      - name: Build isolated local shared-recording backend
+        if: inputs.native_checks_only != true && inputs.preview_instance != 'second'
+        run: cargo build --manifest-path enterprise/Cargo.toml --locked -p anarlog-enterprise-control-plane --bin shared-recordings-app --target aarch64-apple-darwin
+      - name: Preserve isolated local backend
+        if: inputs.native_checks_only != true && inputs.preview_instance != 'second'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: e3-shared-preview-local-backend-${{ github.sha }}
+          path: apps/desktop/src-tauri/target/aarch64-apple-darwin/debug/shared-recordings-app
+          retention-days: 7
+          if-no-files-found: error
+      - if: inputs.native_checks_only != true
+        run: cargo xtask prepare-binaries
+      - if: inputs.native_checks_only != true && inputs.signing_mode == 'developer-id'
+        env:
+          SIGNING_IDENTITY: ${{ steps.apple-cert.outputs.cert-id }}
+        run: |
+          set -euo pipefail
+          cloudsync_dylib="crates/cloudsync/vendor/cloudsync/macos/aarch64/cloudsync.dylib"
+          codesign --force --sign "$SIGNING_IDENTITY" --timestamp --options runtime "$cloudsync_dylib"
+          codesign --verify --strict --verbose=2 "$cloudsync_dylib"
+      - id: build-pilot
+        if: inputs.native_checks_only != true
+        env:
+          CARGO_PROFILE_RELEASE_OPT_LEVEL: "1"
+          SIGNING_MODE: ${{ inputs.signing_mode }}
+          SIGNING_IDENTITY: ${{ steps.apple-cert.outputs.cert-id }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          preview = json.loads(Path("apps/desktop/src-tauri", os.environ["PREVIEW_CONFIG"]).read_text())
+          if preview["identifier"] != os.environ["PREVIEW_BUNDLE_ID"]:
+              raise SystemExit("Preview bundle identity does not match the selected instance")
+          if not os.environ.get("VITE_SUPABASE_URL", "").startswith("https://"):
+              raise SystemExit("Preview Supabase URL is missing")
+          if not os.environ.get("VITE_SUPABASE_ANON_KEY", "").startswith("sb_publishable_"):
+              raise SystemExit("Preview builds require a publishable key, never a server secret")
+          signed = os.environ["SIGNING_MODE"] == "developer-id"
+          identity = os.environ["SIGNING_IDENTITY"] if signed else "-"
+          if signed and not identity.startswith("Developer ID Application:"):
+              raise SystemExit("A Developer ID Application signing identity is required")
+          config = {"bundle": {"macOS": {"signingIdentity": identity, "hardenedRuntime": True}}}
+          Path(os.environ["RUNNER_TEMP"], "e3-shared-preview-signing.json").write_text(json.dumps(config))
+          PY
+          # Submit separately after preserving the signed app, so an Apple queue
+          # delay cannot discard a completed native build.
+          unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID APPLE_API_ISSUER APPLE_API_KEY APPLE_API_KEY_PATH
+          if [[ "$SIGNING_MODE" == "ad-hoc" ]]; then
+            unset APPLE_SIGNING_IDENTITY APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD
+          fi
+          pnpm -F @anlg/desktop tauri build \
+            --target aarch64-apple-darwin \
+            --config "src-tauri/$PREVIEW_CONFIG" \
+            --config "$RUNNER_TEMP/e3-shared-preview-signing.json" \
+            --bundles app
+      - id: checkpoint-signed-pilot
+        if: inputs.native_checks_only != true && inputs.signing_mode == 'developer-id'
+        env:
+          BUILD_COMMIT: ${{ github.sha }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          app="apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/${PREVIEW_PRODUCT}.app"
+          codesign --verify --deep --strict --verbose=2 -R "=anchor apple generic and certificate leaf[subject.OU] = \"$APPLE_TEAM_ID\" and certificate leaf[field.1.2.840.113635.100.6.1.13] exists" "$app"
+          mkdir -p preview-signed-checkpoint
+          ditto -c -k --sequesterRsrc --keepParent "$app" preview-signed-checkpoint/E3-Shared-Recordings-Preview-arm64.zip
+          shasum -a 256 preview-signed-checkpoint/E3-Shared-Recordings-Preview-arm64.zip > preview-signed-checkpoint/SHA256SUMS
+          printf 'Commit: %s\nSigning: Developer ID signed; NOT NOTARIZED\nDiagnostic checkpoint only. Apple acceptance, stapling and Gatekeeper verification are pending. Do not treat this as the final installation artifact.\n' "$BUILD_COMMIT" > preview-signed-checkpoint/BUILD.txt
+      - if: inputs.native_checks_only != true && inputs.signing_mode == 'developer-id'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: e3-shared-preview-${{ inputs.preview_instance }}-signed-NOT-NOTARIZED-${{ github.sha }}
+          path: preview-signed-checkpoint/
+          if-no-files-found: error
+          retention-days: 7
+      - id: notarize-pilot
+        if: inputs.native_checks_only != true && inputs.signing_mode == 'developer-id' && inputs.defer_notarization != true
+        timeout-minutes: 45
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'JS'
+          import { createHash } from 'node:crypto';
+          import { readFileSync, writeFileSync } from 'node:fs';
+          import { notarizeDmg } from './scripts/notarize-dmg.mjs';
+          if (process.env.GITHUB_RUN_ATTEMPT !== '1') {
+            throw new Error('Do not resubmit after an unknown outcome; resume the saved submission ID with notarytool instead.');
+          }
+          const archive = 'preview-signed-checkpoint/E3-Shared-Recordings-Preview-arm64.zip';
+          await notarizeDmg({ dmgPath: archive, log(message) {
+            console.log(message);
+            const prefix = 'Apple notarization submission: ';
+            if (message.startsWith(prefix)) writeFileSync('preview-notary-submission.json', JSON.stringify({
+              submissionId: message.slice(prefix.length), commit: process.env.GITHUB_SHA,
+              zipSha256: createHash('sha256').update(readFileSync(archive)).digest('hex'),
+            }, null, 2));
+          }});
+          JS
+          xcrun stapler staple "apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/${PREVIEW_PRODUCT}.app"
+      - if: always() && inputs.native_checks_only != true && inputs.signing_mode == 'developer-id' && inputs.defer_notarization != true && steps.checkpoint-signed-pilot.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: e3-shared-preview-${{ inputs.preview_instance }}-notary-submission-${{ github.sha }}
+          path: preview-notary-submission.json
+          if-no-files-found: warn
+          retention-days: 14
+      - id: archive-pilot
+        if: inputs.native_checks_only != true && inputs.defer_notarization != true
+        shell: bash
+        env:
+          BUILD_COMMIT: ${{ github.sha }}
+          SIGNING_MODE: ${{ inputs.signing_mode }}
+        run: |
+          set -euo pipefail
+          app="apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/${PREVIEW_PRODUCT}.app"
+          test -d "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          if [[ "$SIGNING_MODE" == "developer-id" ]]; then
+            xcrun stapler validate "$app"
+            spctl --assess --type execute --verbose=4 "$app"
+            signing_label="Developer ID Application; Apple-notarized and stapled"
+            install_signing="This build is Developer ID signed and notarized. macOS still requires first-run microphone, system-audio, and Accessibility permissions."
+          else
+            signing_label="ad-hoc; not Apple-notarized"
+            install_signing="This explicitly selected ad-hoc build is not notarized; macOS may require System Settings > Privacy & Security > Open Anyway."
+          fi
+          mkdir -p preview-artifact
+          ditto -c -k --sequesterRsrc --keepParent "$app" preview-artifact/E3-Shared-Recordings-Preview-arm64.zip
+          shasum -a 256 preview-artifact/E3-Shared-Recordings-Preview-arm64.zip > preview-artifact/SHA256SUMS
+          printf 'Commit: %s\nTarget: aarch64-apple-darwin\nRequires: macOS 15 or later on Apple Silicon\nSigning mode: %s\nSigning: %s\nBundle identifier: %s\nRust optimization: level 1 for preview iteration\nAutomatic updates: disabled\nAPI: %s\nSign-in: %s\n' "$BUILD_COMMIT" "$SIGNING_MODE" "$signing_label" "$PREVIEW_BUNDLE_ID" "$VITE_API_URL" "$VITE_APP_URL" > preview-artifact/BUILD.txt
+          printf '%s\n' "Download this Actions artifact, unzip E3-Shared-Recordings-Preview-arm64.zip, and move the app to Applications. $install_signing" 'Install alongside the existing pilot; do not replace or quit the pilot. Preview apps use separate bundle IDs, storage, and login callbacks. Automatic updates are disabled.' "Sign-in service: $VITE_APP_URL. Shared-recording service: $VITE_API_URL. These services must be reachable from this Mac. Enable sharing explicitly after signing in to the test organization." > preview-artifact/INSTALL.txt
+      - if: inputs.native_checks_only != true && inputs.defer_notarization != true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: e3-shared-recordings-preview-${{ inputs.preview_instance }}-arm64-${{ github.sha }}
+          path: preview-artifact/
+          if-no-files-found: error
+          retention-days: 14
+
+  preview_backend:
+    if: inputs.container_only != true && inputs.backend_only == true && github.repository == 'e3-solutions/anarlog' && github.ref == 'refs/heads/chore/shared-meeting-recordings'
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/apps/desktop/src-tauri/target
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/rust_install # zizmor: ignore[self-repository] -- Use the checked-out preview toolchain.
+        with:
+          platform: macos
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            . -> apps/desktop/src-tauri/target
+            enterprise -> ../apps/desktop/src-tauri/target
+          prefix-key: e3-shared-preview-backend
+      - run: rustfmt --check --edition 2024 crates/api-nango/src/integrations.rs crates/api-nango/src/routes/google_meet_presence.rs
+      - run: cargo test --locked -p api-nango --lib
+      - run: cargo test --locked -p shared-recording
+      - run: cargo test --manifest-path enterprise/Cargo.toml --locked -p anarlog-enterprise-control-plane --test recording_app --test shared_recordings --test recording_transcription
+      - run: cargo build --manifest-path enterprise/Cargo.toml --locked -p anarlog-enterprise-control-plane --bin shared-recordings-app --target aarch64-apple-darwin
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: e3-shared-preview-local-backend-${{ github.sha }}
+          path: apps/desktop/src-tauri/target/aarch64-apple-darwin/debug/shared-recordings-app
+          retention-days: 7
+          if-no-files-found: error

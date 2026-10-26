@@ -824,11 +824,11 @@ msgstr "Auto-add future meetings?"
 msgid "Automate what happens before, during, or after meetings based on the conditions you choose."
 msgstr "Automate what happens before, during, or after meetings based on the conditions you choose."
 
-#: src/shared-recordings/lifecycle.tsx
+#: src/shared-recordings/settings.tsx
 msgid "Automatic sharing is off"
 msgstr "Automatic sharing is off"
 
-#: src/shared-recordings/lifecycle.tsx
+#: src/shared-recordings/settings.tsx
 msgid "Automatic sharing is on for this organization"
 msgstr "Automatic sharing is on for this organization"
 
@@ -1575,11 +1575,11 @@ msgstr "Connect Google Calendar"
 msgid "Connect Google Drive"
 msgstr "Connect Google Drive"
 
-#: src/shared-recordings/lifecycle.tsx
+#: src/shared-recordings/settings.tsx
 msgid "Connect Google Meet"
 msgstr "Connect Google Meet"
 
-#: src/shared-recordings/lifecycle.tsx
+#: src/shared-recordings/settings.tsx
 msgid "Connect Google Meet or Slack before enabling sharing."
 msgstr "Connect Google Meet or Slack before enabling sharing."
 
@@ -1606,7 +1606,7 @@ msgstr "Connect Outlook"
 
 #: src/session-sharing/delivery-panel.tsx
 #: src/settings/automations/starter-config.tsx
-#: src/shared-recordings/lifecycle.tsx
+#: src/shared-recordings/settings.tsx
 msgid "Connect Slack"
 msgstr "Connect Slack"
 
@@ -2434,7 +2434,7 @@ msgstr "Enable Cloud API & Connectors"
 msgid "Enable dictation"
 msgstr "Enable dictation"
 
-#: src/shared-recordings/lifecycle.tsx
+#: src/shared-recordings/settings.tsx
 msgid "Enable sharing"
 msgstr "Enable sharing"
 
@@ -3615,7 +3615,7 @@ msgstr "Meeting exports"
 msgid "Meeting history imported"
 msgstr "Meeting history imported"
 
-#: src/shared-recordings/lifecycle.tsx
+#: src/shared-recordings/settings.tsx
 msgid "Meeting identity could not be verified. Recording stays local; sharing will retry while the call is active."
 msgstr "Meeting identity could not be verified. Recording stays local; sharing will retry while the call is active."
 
@@ -4195,7 +4195,7 @@ msgstr "Only public repositories are supported."
 msgid "Only sync items from this {0}."
 msgstr "Only sync items from this {0}."
 
-#: src/shared-recordings/lifecycle.tsx
+#: src/shared-recordings/settings.tsx
 msgid "Only verified Google Meet and Slack huddle recordings are shared. Original audio stays local when offline; pending uploads retry after reconnecting."
 msgstr "Only verified Google Meet and Slack huddle recordings are shared. Original audio stays local when offline; pending uploads retry after reconnecting."
 
@@ -4728,7 +4728,7 @@ msgstr "Recording not found. It may have been deleted."
 msgid "Recording status prompts"
 msgstr "Recording status prompts"
 
-#: src/shared-recordings/lifecycle.tsx
+#: src/shared-recordings/settings.tsx
 msgid "recordings waiting to share"
 msgstr "recordings waiting to share"
 
@@ -5028,7 +5028,7 @@ msgstr "Retry permission check: {title}"
 msgid "Retry setup"
 msgstr "Retry setup"
 
-#: src/shared-recordings/lifecycle.tsx
+#: src/shared-recordings/settings.tsx
 msgid "Retry uploads"
 msgstr "Retry uploads"
 
@@ -5508,7 +5508,7 @@ msgstr "Shares (30d)"
 msgid "Sharing domain"
 msgstr "Sharing domain"
 
-#: src/shared-recordings/lifecycle.tsx
+#: src/shared-recordings/settings.tsx
 msgid "Sharing keeps a private local copy for retries, including when local audio retention is otherwise off. Organization members can read the published shared transcript."
 msgstr "Sharing keeps a private local copy for retries, including when local audio retention is otherwise off. Organization members can read the published shared transcript."
 
@@ -5516,7 +5516,7 @@ msgstr "Sharing keeps a private local copy for retries, including when local aud
 msgid "Sharing paused to protect your edits"
 msgstr "Sharing paused to protect your edits"
 
-#: src/shared-recordings/lifecycle.tsx
+#: src/shared-recordings/settings.tsx
 msgid "Sharing settings could not be saved. Local recording is unaffected."
 msgstr "Sharing settings could not be saved. Local recording is unaffected."
 
@@ -6220,7 +6220,7 @@ msgstr "The page you're looking for doesn't exist."
 msgid "The update download failed"
 msgstr "The update download failed"
 
-#: src/shared-recordings/lifecycle.tsx
+#: src/shared-recordings/settings.tsx
 msgid "The upload queue is unavailable. Local recording is unaffected."
 msgstr "The upload queue is unavailable. Local recording is unaffected."
 
@@ -6412,11 +6412,11 @@ msgstr "Turn action items into Linear issues"
 msgid "Turn assigned follow-ups into Linear issue drafts."
 msgstr "Turn assigned follow-ups into Linear issue drafts."
 
-#: src/shared-recordings/lifecycle.tsx
+#: src/shared-recordings/settings.tsx
 msgid "Turn off"
 msgstr "Turn off"
 
-#: src/shared-recordings/lifecycle.tsx
+#: src/shared-recordings/settings.tsx
 msgid "Turn off sharing before connecting another provider."
 msgstr "Turn off sharing before connecting another provider."
 

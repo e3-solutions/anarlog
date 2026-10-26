@@ -110,11 +110,15 @@ def main():
     signal.signal(signal.SIGINT, stop)
 
     def spawn(command, private=False, backend=False):
-        environment = os.environ.copy() if backend else {
-            key: os.environ[key]
-            for key in ("PATH", "HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "PORT")
-            if key in os.environ
-        }
+        environment = (
+            os.environ.copy()
+            if backend
+            else {
+                key: os.environ[key]
+                for key in ("PATH", "HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "PORT")
+                if key in os.environ
+            }
+        )
         process = subprocess.Popen(
             command,
             env=environment,
@@ -139,17 +143,37 @@ def main():
     try:
         spawn(
             [
-                "whisper-server", "--host", "127.0.0.1", "--port", "18796",
-                "--model", "/data/models/ggml-tiny.en.bin", "--threads", "2",
-                "--no-gpu", "--vad", "--vad-model", "/data/models/ggml-silero-v5.1.2.bin",
-                "--inference-path", "/v1/audio/transcriptions",
+                "whisper-server",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "18796",
+                "--model",
+                "/data/models/ggml-tiny.en.bin",
+                "--threads",
+                "2",
+                "--no-gpu",
+                "--vad",
+                "--vad-model",
+                "/data/models/ggml-silero-v5.1.2.bin",
+                "--inference-path",
+                "/v1/audio/transcriptions",
             ],
             private=True,
         )
         ready("http://127.0.0.1:18796/health", 200)
         spawn(["shared-recordings-app"], backend=True)
         ready("http://127.0.0.1:8789/v1/shared-recordings/me", 401)
-        spawn(["caddy", "run", "--config", "/opt/preview/Caddyfile", "--adapter", "caddyfile"])
+        spawn(
+            [
+                "caddy",
+                "run",
+                "--config",
+                "/opt/preview/Caddyfile",
+                "--adapter",
+                "caddyfile",
+            ]
+        )
         ready(f"http://127.0.0.1:{port}/health", 200)
         print("isolated shared recording preview ready", flush=True)
         while not stopping:
