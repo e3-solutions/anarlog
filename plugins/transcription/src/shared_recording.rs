@@ -30,6 +30,15 @@ pub struct Configuration {
     pub user_id: String,
     pub connections: Vec<Connection>,
 }
+impl Configuration {
+    fn unique_connection(&self, integration: &str) -> Option<&Connection> {
+        let mut connected = self.connections.iter().filter(|connection| {
+            connection.status == "connected" && connection.integration_id == integration
+        });
+        let connection = connected.next()?;
+        connected.next().is_none().then_some(connection)
+    }
+}
 #[derive(Clone, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Job {
@@ -90,6 +99,18 @@ struct Binding {
 impl Binding {
     fn valid_binding(&self) -> bool {
         !self.verification_pending && !self.admission.is_null()
+    }
+    fn quarantine(&mut self, reason: &str) {
+        self.admission = Value::Null;
+        let reason = self
+            .quarantine_reason
+            .get_or_insert_with(|| reason.into())
+            .as_str();
+        tracing::warn!(
+            reason,
+            session = key(&self.session_id),
+            "shared_recording_quarantined"
+        );
     }
 }
 #[derive(Clone, Serialize, Deserialize, specta::Type)]
@@ -213,6 +234,15 @@ fn private_directory(path: &Path) -> Result<(), String> {
     Ok(())
 }
 fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    write_private_from(path, bytes)
+}
+fn copy_private(source: &Path, target: &Path) -> Result<(), String> {
+    write_private_from(
+        target,
+        std::fs::File::open(source).map_err(|e| e.to_string())?,
+    )
+}
+fn write_private_from(path: &Path, mut source: impl std::io::Read) -> Result<(), String> {
     let tmp = path.with_extension("pending");
     let mut options = std::fs::OpenOptions::new();
     options.create(true).truncate(true).write(true);
@@ -221,28 +251,11 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    use std::io::Write;
     let mut file = options.open(&tmp).map_err(|e| e.to_string())?;
-    file.write_all(bytes)
+    std::io::copy(&mut source, &mut file)
         .and_then(|_| file.sync_all())
         .map_err(|e| e.to_string())?;
     std::fs::rename(tmp, path).map_err(|e| e.to_string())
-}
-fn copy_private(source: &Path, target: &Path) -> Result<(), String> {
-    let pending = target.with_extension("pending");
-    let mut options = std::fs::OpenOptions::new();
-    options.create(true).truncate(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut input = std::fs::File::open(source).map_err(|e| e.to_string())?;
-    let mut output = options.open(&pending).map_err(|e| e.to_string())?;
-    std::io::copy(&mut input, &mut output)
-        .and_then(|_| output.sync_all())
-        .map_err(|e| e.to_string())?;
-    std::fs::rename(pending, target).map_err(|e| e.to_string())
 }
 fn read<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>, String> {
     match std::fs::read(path) {
@@ -389,16 +402,8 @@ fn quarantine_binding(
     {
         return Err("Capture belongs to another sharing account".into());
     }
-    binding.admission = Value::Null;
+    binding.quarantine(reason);
     binding.verification_pending = false;
-    binding
-        .quarantine_reason
-        .get_or_insert_with(|| reason.into());
-    tracing::warn!(
-        reason = binding.quarantine_reason.as_deref().unwrap_or("unverified"),
-        session = key(session_id),
-        "shared_recording_quarantined"
-    );
     save(&path, &binding)
 }
 fn quarantine_configuration_change(
@@ -652,18 +657,7 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
                     && call_identity.is_some()
                     && binding.call_identity != call_identity)
             {
-                binding.admission = Value::Null;
-                binding
-                    .quarantine_reason
-                    .get_or_insert_with(|| "call_changed".into());
-                tracing::warn!(
-                    reason = binding
-                        .quarantine_reason
-                        .as_deref()
-                        .unwrap_or("call_changed"),
-                    session = key(&session_id),
-                    "shared_recording_quarantined"
-                );
+                binding.quarantine("call_changed");
                 save(&path, &binding)?;
                 return Err(
                     "Meeting changed during this recording; start a new recording to share it"
@@ -677,12 +671,7 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
             save(&path, &binding)?;
         }
         let first_admission = existing.is_none();
-        let connections: Vec<_> = config
-            .connections
-            .iter()
-            .filter(|c| c.status == "connected" && c.integration_id == integration)
-            .collect();
-        if connections.len() != 1 {
+        let Some(connection) = config.unique_connection(integration) else {
             if first_admission {
                 quarantine_unadmitted(
                     &dir,
@@ -694,8 +683,7 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
                 )?;
             }
             return Err("Connect exactly one account for this meeting provider".into());
-        }
-        let connection = connections[0];
+        };
         if let Some(binding) = existing.as_ref() {
             if binding
                 .connection_id
@@ -780,15 +768,12 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
     let current: Configuration =
         read(&dir.join("configuration.json"))?.ok_or("Shared recording disabled")?;
     bound(&current, &user_id)?;
-    let current_connections: Vec<_> = current
-        .connections
-        .iter()
-        .filter(|c| c.status == "connected" && c.integration_id == integration)
-        .collect();
     if current.organization_id != config.organization_id
         || current.api_base_url != config.api_base_url
-        || current_connections.len() != 1
-        || current_connections[0].connection_id != connection_id
+        || current
+            .unique_connection(integration)
+            .map(|connection| &connection.connection_id)
+            != Some(&connection_id)
     {
         return Err("Account configuration changed during admission".into());
     }
@@ -800,18 +785,7 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
             );
         }
         if binding.admission["occurrenceId"] != admission["occurrenceId"] {
-            binding.admission = Value::Null;
-            binding
-                .quarantine_reason
-                .get_or_insert_with(|| "occurrence_changed".into());
-            tracing::warn!(
-                reason = binding
-                    .quarantine_reason
-                    .as_deref()
-                    .unwrap_or("occurrence_changed"),
-                session = key(&session_id),
-                "shared_recording_quarantined"
-            );
+            binding.quarantine("occurrence_changed");
             save(&path, &binding)?;
             return Err(
                 "Provider occurrence changed during this recording; original stays local".into(),
@@ -978,27 +952,15 @@ pub async fn shared_recording_enqueue<R: tauri::Runtime>(
         .as_ref()
         .is_some_and(|binding| binding.admission.is_null());
     let binding = observed_binding.and_then(|b| b.valid_binding().then_some(b.admission));
-    let gaps = app
-        .state::<QueueState>()
-        .raw
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(&session_id)
-        .map(|t| t.gaps.clone())
-        .unwrap_or_default();
-    let storage_failed = queue_state
-        .raw
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(&session_id)
-        .is_some_and(|t| t.storage_failed);
-    let raw_frames = queue_state
-        .raw
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(&session_id)
-        .map(|timeline| timeline.frames)
-        .filter(|frames| *frames > 0);
+    let (gaps, storage_failed, raw_frames) = {
+        let raw = queue_state.raw.lock().unwrap_or_else(|e| e.into_inner());
+        let timeline = raw.get(&session_id);
+        (
+            timeline.map(|t| t.gaps.clone()).unwrap_or_default(),
+            timeline.is_some_and(|t| t.storage_failed),
+            timeline.map(|t| t.frames).filter(|frames| *frames > 0),
+        )
+    };
     let mut job = Job {
         id,
         session_id,
@@ -1155,16 +1117,10 @@ pub async fn shared_recording_flush<R: tauri::Runtime>(
                 "slack" => "slack",
                 _ => continue,
             };
-            let connections: Vec<_> = config
-                .connections
-                .iter()
-                .filter(|connection| {
-                    connection.status == "connected" && connection.integration_id == integration
-                })
-                .collect();
-            if connections.len() != 1
-                || binding.connection_id.as_deref() != Some(connections[0].connection_id.as_str())
-            {
+            let Some(connection) = config.unique_connection(integration) else {
+                continue;
+            };
+            if binding.connection_id.as_deref() != Some(connection.connection_id.as_str()) {
                 continue;
             }
             if shared_recording_observe(
@@ -1240,14 +1196,11 @@ fn verify_upload_binding(dir: &Path, job: &Job, state: &QueueState) -> Result<()
             "slack" => "slack",
             _ => return Err("Meeting provider changed; original retained".into()),
         };
-        let connections: Vec<_> = config
-            .connections
-            .iter()
-            .filter(|connection| {
-                connection.status == "connected" && connection.integration_id == integration
-            })
-            .collect();
-        if connections.len() != 1 || &connections[0].connection_id != connection_id {
+        if config
+            .unique_connection(integration)
+            .map(|connection| &connection.connection_id)
+            != Some(connection_id)
+        {
             return Err("Meeting connection changed; original retained".into());
         }
     }
@@ -1391,42 +1344,27 @@ pub(crate) fn snapshot_stopped<R: tauri::Runtime>(
     started_at_ms: Option<i64>,
     stopped_at_ms: i64,
 ) {
-    if let Some(timeline) = app
-        .state::<QueueState>()
-        .raw
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .get_mut(session_id)
-    {
+    let state = app.state::<QueueState>();
+    let capture_start = {
+        let mut raw = state.raw.lock().unwrap_or_else(|error| error.into_inner());
+        let Some(timeline) = raw.get_mut(session_id) else {
+            return;
+        };
         timeline.stopped_at_ms = Some(stopped_at_ms);
-    }
+        timeline.owner.as_ref().map(|_| timeline.started_at_ms)
+    };
     let Some(audio_path) = audio_path.map(str::to_string) else {
         return;
     };
-    let enabled = app
-        .state::<QueueState>()
-        .raw
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(session_id)
-        .is_some_and(|t| t.owner.is_some());
-    if !enabled {
+    let Some(capture_start) = capture_start else {
         return;
-    }
-    app.state::<QueueState>()
+    };
+    state
         .pins
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .insert(session_id.to_string());
-    let raw_started_at_ms = app
-        .state::<QueueState>()
-        .raw
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(session_id)
-        .map(|t| t.started_at_ms)
-        .filter(|ms| *ms > 0);
-    let started_at_ms = raw_started_at_ms.or(started_at_ms);
+    let started_at_ms = Some(capture_start).filter(|ms| *ms > 0).or(started_at_ms);
     let app = app.clone();
     let session_id = session_id.to_string();
     tauri::async_runtime::spawn(async move {

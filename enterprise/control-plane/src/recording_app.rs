@@ -5,7 +5,7 @@ use axum::{
     extract::{DefaultBodyLimit, Path, State},
     http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     middleware::{self, Next},
-    response::Response,
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -20,7 +20,7 @@ use crate::{
     recording_transcription::RecordingProcessor,
     shared_recordings::{
         CaptureUpload, OccurrenceManifest, RecordingError, Revision, SharedRecordingService,
-        TimingBasis, wav_response,
+        TimingBasis,
     },
 };
 
@@ -110,6 +110,18 @@ pub fn router(state: RecordingAppState) -> Router {
         .layer(DefaultBodyLimit::max(140 * 1024 * 1024))
         .layer(middleware::from_fn(no_store))
         .with_state(state)
+}
+
+fn wav_response(wav: Vec<u8>, audio_sha256: &str) -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, "audio/wav".to_owned()),
+            (header::CACHE_CONTROL, "no-store".to_owned()),
+            (header::ETAG, format!("\"{audio_sha256}\"")),
+        ],
+        wav,
+    )
+        .into_response()
 }
 
 async fn no_store(request: axum::extract::Request, next: Next) -> Response {

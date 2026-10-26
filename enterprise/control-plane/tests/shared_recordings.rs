@@ -1,20 +1,9 @@
-use std::sync::Arc;
-
-use anarlog_enterprise_control_plane::{
-    auth::StaticTokenAuthenticator,
-    shared_recordings::{
-        CaptureMetadata, CreateOccurrence, Provider, RecordingError, SharedRecordingService,
-        TimingBasis, Transcript, router,
-    },
+use anarlog_enterprise_control_plane::shared_recordings::{
+    CaptureMetadata, CreateOccurrence, Provider, RecordingError, SharedRecordingService,
+    TimingBasis, Transcript,
 };
 use anlg_shared_recording::{FrameRange, SAMPLE_RATE, decode_source, encode_wav, sha256};
-use axum::{
-    body::{Body, to_bytes},
-    http::{Request, StatusCode, header},
-};
-use base64::{Engine, engine::general_purpose::STANDARD};
-use serde_json::{Value, json};
-use tower::ServiceExt;
+use serde_json::json;
 
 fn occurrence(id: &str) -> CreateOccurrence {
     CreateOccurrence {
@@ -418,100 +407,49 @@ async fn audio_alignment_extending_a_capture_preserves_its_corrected_tail() {
 }
 
 #[tokio::test]
-async fn http_requires_workspace_service_authority_and_rejects_room_aliases_and_incomplete_audio() {
+async fn provider_aliases_and_incomplete_audio_cannot_admit_sources() {
     let directory = tempfile::tempdir().unwrap();
-    let service = Arc::new(
-        SharedRecordingService::open(directory.path())
-            .await
-            .unwrap(),
-    );
-    let auth = Arc::new(
-        StaticTokenAuthenticator::new([("workspace".into(), "operator-token".into())]).unwrap(),
-    );
-    let app = router(service.clone(), auth);
-    let uri = "/v1/workspaces/workspace/shared-recordings/meeting";
-    let response = app
-        .clone()
-        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+    let service = SharedRecordingService::open(directory.path())
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/v1/workspaces/other/shared-recordings/meeting")
-                .header(header::AUTHORIZATION, "Bearer operator-token")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
     let mut room = occurrence("call");
     room.provider_occurrence_id = "https://meet.google.com/abc-defg-hij".into();
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(uri)
-                .header(header::AUTHORIZATION, "Bearer operator-token")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_vec(&room).unwrap()))
-                .unwrap(),
-        )
+    assert!(matches!(
+        service
+            .create_occurrence("workspace", "meeting", room)
+            .await,
+        Err(RecordingError::Invalid(_))
+    ));
+    service
+        .create_occurrence("workspace", "meeting", occurrence("call"))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(uri)
-                .header(header::AUTHORIZATION, "Bearer operator-token")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_vec(&occurrence("call")).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("{uri}/captures/first"))
-                .header(header::AUTHORIZATION, "Bearer operator-token")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from("{\"wavBase64\":\"partial"))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let manifest = service.manifest("workspace", "meeting").await.unwrap();
-    assert!(manifest.captures.is_empty());
     let wav = encode_wav(&[42; 12]).unwrap();
-    let request =
-        json!({"metadata":metadata("first",&wav,0,vec![]),"wavBase64":STANDARD.encode(&wav)});
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("{uri}/captures/first"))
-                .header(header::AUTHORIZATION, "Bearer operator-token")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_vec(&request).unwrap()))
-                .unwrap(),
-        )
+    let source = metadata("first", &wav, 0, vec![]);
+    assert!(matches!(
+        service
+            .upload(
+                "workspace",
+                "meeting",
+                "first",
+                source.clone(),
+                &wav[..wav.len() - 1]
+            )
+            .await,
+        Err(RecordingError::Invalid(_))
+    ));
+    assert!(
+        service
+            .manifest("workspace", "meeting")
+            .await
+            .unwrap()
+            .captures
+            .is_empty()
+    );
+    service
+        .upload("workspace", "meeting", "first", source, &wav)
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
     assert_eq!(
         service
             .manifest("workspace", "meeting")
@@ -520,21 +458,5 @@ async fn http_requires_workspace_service_authority_and_rejects_room_aliases_and_
             .captures
             .len(),
         1
-    );
-    let response = app
-        .oneshot(
-            Request::builder()
-                .uri(uri)
-                .header(header::AUTHORIZATION, "Bearer operator-token")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let json: Value =
-        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
-    assert_eq!(
-        json["occurrence"]["providerOccurrenceId"],
-        "conferenceRecords/call"
     );
 }

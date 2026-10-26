@@ -1,20 +1,10 @@
 use std::{io::Write, sync::Arc, time::Duration};
 
-use axum::{
-    Json, Router,
-    extract::{Path, State},
-    http::{HeaderMap, StatusCode, header},
-    response::{IntoResponse, Response},
-    routing::post,
-};
 use owhisper_client::{BatchClient, DeepgramAdapter, OpenAIAdapter};
 use owhisper_interface::{ListenParams, batch};
 use tokio::sync::Mutex;
 
-use crate::{
-    auth::WorkspaceAuthenticator,
-    shared_recordings::{RecordingError, Revision, SharedRecordingService, Transcript},
-};
+use crate::shared_recordings::{RecordingError, Revision, SharedRecordingService, Transcript};
 
 pub enum RecordingTranscriber {
     Deepgram(BatchClient<DeepgramAdapter>),
@@ -158,63 +148,4 @@ fn validate_response(response: &batch::Response, duration_frames: u64) -> anyhow
         }
     }
     Ok(())
-}
-
-#[derive(Clone)]
-struct HttpState {
-    processor: Arc<RecordingProcessor>,
-    authenticator: Arc<dyn WorkspaceAuthenticator>,
-}
-
-pub fn router(
-    processor: Arc<RecordingProcessor>,
-    authenticator: Arc<dyn WorkspaceAuthenticator>,
-) -> Router {
-    Router::new()
-        .route(
-            "/v1/workspaces/{workspace}/shared-recordings/{id}/process",
-            post(process),
-        )
-        .with_state(HttpState {
-            processor,
-            authenticator,
-        })
-}
-
-async fn process(
-    State(state): State<HttpState>,
-    Path((workspace, id)): Path<(String, String)>,
-    headers: HeaderMap,
-) -> Response {
-    let auth = state.authenticator.authenticate(
-        headers
-            .get(header::AUTHORIZATION)
-            .and_then(|value| value.to_str().ok()),
-    );
-    let status = match auth {
-        Ok(auth) if auth.workspace_id.as_ref() == workspace => None,
-        Ok(_) => Some(StatusCode::FORBIDDEN),
-        Err(_) => Some(StatusCode::UNAUTHORIZED),
-    };
-    if let Some(status) = status {
-        return (status, "workspace service credentials required").into_response();
-    }
-    match state.processor.process(&workspace, &id).await {
-        Ok(revision) => ([(header::CACHE_CONTROL, "no-store")], Json(revision)).into_response(),
-        Err(error) => {
-            let status = match error.downcast_ref::<RecordingError>() {
-                Some(RecordingError::NotFound) => StatusCode::NOT_FOUND,
-                Some(RecordingError::Conflict) => StatusCode::CONFLICT,
-                Some(RecordingError::Invalid(_)) => StatusCode::BAD_REQUEST,
-                _ => StatusCode::BAD_GATEWAY,
-            };
-            // Provider errors may contain private transcript text or authorization details.
-            (
-                status,
-                [(header::CACHE_CONTROL, "no-store")],
-                "processing incomplete; audio retained, retry the request",
-            )
-                .into_response()
-        }
-    }
 }
