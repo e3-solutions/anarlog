@@ -131,7 +131,7 @@ jobs:
           if [[ "$DEFER_NOTARIZATION" == "true" ]]; then
             unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
           fi
-          node apps/desktop/scripts/build-e3.mjs --target aarch64-apple-darwin --bundles app,dmg --ci
+          node apps/desktop/scripts/build-e3.mjs --target aarch64-apple-darwin --features disable-analytics --bundles app,dmg --ci
       - id: package
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
