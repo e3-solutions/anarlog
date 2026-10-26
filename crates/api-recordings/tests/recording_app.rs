@@ -23,7 +23,10 @@ use wiremock::{
 };
 
 fn sha256(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn encode_wav(samples: &[i16]) -> Result<Vec<u8>, hound::Error> {

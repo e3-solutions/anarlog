@@ -812,7 +812,10 @@ fn key_hash(parts: &[&str]) -> String {
     )
 }
 pub(crate) fn hex_sha(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 fn map_constraint(error: sqlx::Error) -> RecordingError {
     if error
