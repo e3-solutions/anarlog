@@ -23,8 +23,6 @@ anlg-meeting-capture = { path = "../crates/meeting-capture", package = "meeting-
 anlg-nango = { path = "../crates/nango", package = "nango" }
 anlg-session-ingest = { path = "../crates/session-ingest", package = "session-ingest", default-features = false }
 anlg-shared-recording = { path = "../crates/shared-recording", package = "shared-recording" }
-owhisper-client = { path = "../crates/owhisper-client", package = "owhisper-client" }
-owhisper-interface = { path = "../crates/owhisper-interface", package = "owhisper-interface" }
 
 anyhow = "1"
 async-trait = "0.1"

@@ -10,7 +10,7 @@ use axum::{
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::Serialize;
-use tower_http::cors::CorsLayer;
+use tower_http::{cors::CorsLayer, limit::RequestBodyLimitLayer};
 
 use crate::{
     recording_identity::{AdmissionRequest, RecordingIdentityResolver, ResolvedOccurrence},
@@ -74,7 +74,7 @@ pub fn provider_router(config: anlg_api_nango::NangoConfig) -> Router {
     )
 }
 
-pub fn router(state: RecordingAppState) -> Router {
+pub fn router(state: RecordingAppState, provider_routes: Router, cors: CorsLayer) -> Router {
     Router::new()
         .route("/v1/shared-recordings/me", get(me))
         .route("/v1/orgs/{workspace}/shared-recordings", get(library))
@@ -107,9 +107,13 @@ pub fn router(state: RecordingAppState) -> Router {
             "/v1/orgs/{workspace}/shared-recordings/{id}/seal",
             post(seal),
         )
-        .layer(DefaultBodyLimit::max(140 * 1024 * 1024))
-        .layer(middleware::from_fn(no_store))
         .with_state(state)
+        .merge(provider_routes)
+        .route("/health", get(|| async { "ready" }))
+        .layer(DefaultBodyLimit::max(140 * 1024 * 1024))
+        .layer(cors)
+        .layer(RequestBodyLimitLayer::new(140 * 1024 * 1024))
+        .layer(middleware::from_fn(response_headers))
 }
 
 fn wav_response(wav: Vec<u8>, audio_sha256: &str) -> Response {
@@ -124,12 +128,17 @@ fn wav_response(wav: Vec<u8>, audio_sha256: &str) -> Response {
         .into_response()
 }
 
-async fn no_store(request: axum::extract::Request, next: Next) -> Response {
+async fn response_headers(request: axum::extract::Request, next: Next) -> Response {
     let mut response = next.run(request).await;
     response.headers_mut().insert(
         header::CACHE_CONTROL,
         axum::http::HeaderValue::from_static("no-store"),
     );
+    response.headers_mut().insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    response.headers_mut().remove(header::SERVER);
     response
 }
 
@@ -182,28 +191,15 @@ async fn admit(
     let session = state.members.authorize(&headers, &workspace).await?;
     let resolver = state.identities.as_ref().ok_or(MemberError::Unresolved)?;
     let mut resolved = resolver.resolve(&session.auth, &request).await?;
-    state
-        .service
-        .automatic_admit(
-            &workspace,
-            &resolved.occurrence_id,
-            resolved.provider.clone(),
-            &resolved.provider_occurrence_id,
-            resolved.provider_started_at_ms,
-        )
-        .await
-        .map_err(storage_error)?;
     resolved.provider_started_at_ms = state
         .service
-        .occurrence_epoch(&workspace, &resolved.occurrence_id)
-        .await
-        .map_err(storage_error)?;
-    state
-        .service
-        .grant_actor_admission(
+        .admit_actor(
             &workspace,
             &resolved.occurrence_id,
             &session.auth.claims.sub,
+            resolved.provider.clone(),
+            &resolved.provider_occurrence_id,
+            resolved.provider_started_at_ms,
         )
         .await
         .map_err(storage_error)?;

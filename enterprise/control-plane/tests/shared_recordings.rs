@@ -1,17 +1,9 @@
 use anarlog_enterprise_control_plane::shared_recordings::{
-    CaptureMetadata, CreateOccurrence, Provider, RecordingError, SharedRecordingService,
-    TimingBasis, Transcript,
+    CaptureMetadata, Provider, RecordingError, SharedRecordingService, TimingBasis, Transcript,
 };
 use anlg_shared_recording::{FrameRange, SAMPLE_RATE, decode_source, encode_wav, sha256};
 use serde_json::json;
 
-fn occurrence(id: &str) -> CreateOccurrence {
-    CreateOccurrence {
-        provider: Provider::GoogleMeet,
-        provider_occurrence_id: format!("conferenceRecords/{id}"),
-        duration_frames: 12,
-    }
-}
 fn metadata(id: &str, wav: &[u8], rank: u32, gaps: Vec<FrameRange>) -> CaptureMetadata {
     CaptureMetadata {
         uploader_id: format!("user-{id}"),
@@ -43,9 +35,61 @@ async fn immutable_inputs_recover_without_duplicates_and_late_revisions_invalida
     let first = encode_wav(&[10; 12]).unwrap();
     let fallback = encode_wav(&[20; 12]).unwrap();
     service
-        .create_occurrence("workspace", "meeting", occurrence("actual-call"))
+        .admit_actor(
+            "workspace",
+            "meeting",
+            "user-first",
+            Provider::GoogleMeet,
+            "conferenceRecords/actual-call",
+            Some(0),
+        )
         .await
         .unwrap();
+    assert_eq!(
+        service
+            .admit_actor(
+                "workspace",
+                "meeting",
+                "user-second",
+                Provider::GoogleMeet,
+                "conferenceRecords/actual-call",
+                Some(999)
+            )
+            .await
+            .unwrap(),
+        Some(0)
+    );
+    assert!(
+        service
+            .actor_admitted("workspace", "meeting", "user-first")
+            .await
+            .unwrap()
+    );
+    assert!(
+        service
+            .actor_admitted("workspace", "meeting", "user-second")
+            .await
+            .unwrap()
+    );
+    assert!(matches!(
+        service
+            .admit_actor(
+                "workspace",
+                "meeting",
+                "unverified-user",
+                Provider::GoogleMeet,
+                "conferenceRecords/different-call",
+                Some(0)
+            )
+            .await,
+        Err(RecordingError::Conflict)
+    ));
+    assert!(
+        !service
+            .actor_admitted("workspace", "meeting", "unverified-user")
+            .await
+            .unwrap()
+    );
     let first_metadata = metadata("first", &first, 0, vec![FrameRange { start: 4, end: 8 }]);
     service
         .upload(
@@ -225,9 +269,10 @@ async fn immutable_inputs_recover_without_duplicates_and_late_revisions_invalida
         .unwrap();
     assert!(
         service
-            .historical_revision("workspace", "meeting", 1)
+            .revision_audio("workspace", "meeting", &old.revision)
             .await
             .unwrap()
+            .0
             .transcript
             .is_some()
     );
@@ -253,7 +298,14 @@ async fn immutable_inputs_recover_without_duplicates_and_late_revisions_invalida
         vec![10, 10, 10, 10, 20, 20, 20, 20, 10, 10, 10, 10]
     );
     service
-        .create_occurrence("workspace", "tomorrow", occurrence("next-call"))
+        .admit_actor(
+            "workspace",
+            "tomorrow",
+            "user-first",
+            Provider::GoogleMeet,
+            "conferenceRecords/next-call",
+            Some(0),
+        )
         .await
         .unwrap();
     assert!(matches!(
@@ -289,7 +341,7 @@ async fn immutable_inputs_recover_without_duplicates_and_late_revisions_invalida
         .unwrap();
     assert!(matches!(
         recovered
-            .historical_revision("workspace", "meeting", 1)
+            .revision_audio("workspace", "meeting", &old.revision)
             .await,
         Err(RecordingError::NotFound)
     ));
@@ -319,7 +371,14 @@ async fn immutable_inputs_recover_without_duplicates_and_late_revisions_invalida
         .unwrap();
     assert!(matches!(
         recovered
-            .create_occurrence("workspace", "meeting", occurrence("actual-call"))
+            .admit_actor(
+                "workspace",
+                "meeting",
+                "user-first",
+                Provider::GoogleMeet,
+                "conferenceRecords/actual-call",
+                Some(0)
+            )
             .await,
         Err(RecordingError::Conflict)
     ));
@@ -344,9 +403,10 @@ async fn audio_alignment_extending_a_capture_preserves_its_corrected_tail() {
         .await
         .unwrap();
     service
-        .automatic_admit(
+        .admit_actor(
             "workspace",
             "aligned-tail",
+            "user-first",
             Provider::GoogleMeet,
             "conferenceRecords/aligned-tail",
             Some(0),
@@ -412,16 +472,28 @@ async fn provider_aliases_and_incomplete_audio_cannot_admit_sources() {
     let service = SharedRecordingService::open(directory.path())
         .await
         .unwrap();
-    let mut room = occurrence("call");
-    room.provider_occurrence_id = "https://meet.google.com/abc-defg-hij".into();
     assert!(matches!(
         service
-            .create_occurrence("workspace", "meeting", room)
+            .admit_actor(
+                "workspace",
+                "meeting",
+                "user-first",
+                Provider::GoogleMeet,
+                "https://meet.google.com/abc-defg-hij",
+                Some(0)
+            )
             .await,
         Err(RecordingError::Invalid(_))
     ));
     service
-        .create_occurrence("workspace", "meeting", occurrence("call"))
+        .admit_actor(
+            "workspace",
+            "meeting",
+            "user-first",
+            Provider::GoogleMeet,
+            "conferenceRecords/call",
+            Some(0),
+        )
         .await
         .unwrap();
     let wav = encode_wav(&[42; 12]).unwrap();

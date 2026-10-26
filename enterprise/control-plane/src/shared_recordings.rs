@@ -253,16 +253,18 @@ impl SharedRecordingService {
         Ok(items)
     }
 
-    pub async fn automatic_admit(
+    pub async fn admit_actor(
         &self,
         workspace: &str,
         id: &str,
+        actor: &str,
         provider: Provider,
         provider_occurrence_id: &str,
         provider_started_at_ms: Option<i64>,
-    ) -> Result<OccurrenceManifest> {
+    ) -> Result<Option<i64>> {
         identifier(workspace)?;
         identifier(id)?;
+        identifier(actor)?;
         let occurrence = CreateOccurrence {
             provider,
             provider_occurrence_id: provider_occurrence_id.to_owned(),
@@ -270,48 +272,36 @@ impl SharedRecordingService {
         };
         validate_occurrence(&occurrence)?;
         let _guard = self.gate.lock().await;
+        let mut transaction = self.pool.begin().await?;
         let key = format!(
             "{:?}:{}",
             occurrence.provider, occurrence.provider_occurrence_id
         );
-        if let Some(existing) =
-            sqlx::query("SELECT provider_key,deleted FROM occurrences WHERE workspace=? AND id=?")
-                .bind(workspace)
-                .bind(id)
-                .fetch_optional(&self.pool)
-                .await?
+        let epoch = if let Some(existing) = sqlx::query(
+            "SELECT provider_key,deleted,provider_started_at_ms FROM occurrences WHERE workspace=? AND id=?",
+        )
+        .bind(workspace)
+        .bind(id)
+        .fetch_optional(&mut *transaction)
+        .await?
         {
             if existing.get::<i64, _>("deleted") != 0
                 || existing.get::<String, _>("provider_key") != key
             {
                 return Err(RecordingError::Conflict);
             }
+            existing.get::<Option<i64>, _>("provider_started_at_ms")
         } else {
+            let epoch = provider_started_at_ms.unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
             sqlx::query("INSERT INTO occurrences(workspace,id,provider_key,metadata,automatic,provider_started_at_ms) VALUES(?,?,?,?,1,?)")
                 .bind(workspace).bind(id).bind(key).bind(serde_json::to_string(&occurrence)?)
-                .bind(provider_started_at_ms.unwrap_or_else(|| chrono::Utc::now().timestamp_millis()))
-                .execute(&self.pool).await.map_err(map_constraint)?;
-        }
-        self.manifest_unlocked(workspace, id).await
-    }
-
-    pub async fn occurrence_epoch(&self, workspace: &str, id: &str) -> Result<Option<i64>> {
-        sqlx::query_scalar("SELECT provider_started_at_ms FROM occurrences WHERE workspace=? AND id=? AND deleted=0")
-            .bind(workspace).bind(id).fetch_optional(&self.pool).await?.ok_or(RecordingError::NotFound)
-    }
-
-    pub async fn grant_actor_admission(
-        &self,
-        workspace: &str,
-        id: &str,
-        actor: &str,
-    ) -> Result<()> {
-        identifier(actor)?;
-        let _guard = self.gate.lock().await;
-        self.occurrence_unlocked(workspace, id).await?;
+                .bind(epoch).execute(&mut *transaction).await.map_err(map_constraint)?;
+            Some(epoch)
+        };
         sqlx::query("INSERT INTO admissions(workspace,occurrence,actor) VALUES(?,?,?) ON CONFLICT DO NOTHING")
-            .bind(workspace).bind(id).bind(actor).execute(&self.pool).await?;
-        Ok(())
+            .bind(workspace).bind(id).bind(actor).execute(&mut *transaction).await?;
+        transaction.commit().await?;
+        Ok(epoch)
     }
 
     pub async fn actor_admitted(&self, workspace: &str, id: &str, actor: &str) -> Result<bool> {
@@ -335,45 +325,6 @@ impl SharedRecordingService {
             return Err(RecordingError::Conflict);
         }
         Ok((revision, wav))
-    }
-
-    pub async fn create_occurrence(
-        &self,
-        workspace: &str,
-        id: &str,
-        request: CreateOccurrence,
-    ) -> Result<OccurrenceManifest> {
-        identifier(workspace)?;
-        identifier(id)?;
-        validate_occurrence(&request)?;
-        let _guard = self.gate.lock().await;
-        let metadata = serde_json::to_string(&request)?;
-        let key = format!("{:?}:{}", request.provider, request.provider_occurrence_id);
-        if let Some(row) =
-            sqlx::query("SELECT metadata,deleted FROM occurrences WHERE workspace=? AND id=?")
-                .bind(workspace)
-                .bind(id)
-                .fetch_optional(&self.pool)
-                .await?
-        {
-            if row.get::<i64, _>("deleted") != 0 || row.get::<String, _>("metadata") != metadata {
-                return Err(RecordingError::Conflict);
-            }
-        } else {
-            let result = sqlx::query(
-                "INSERT INTO occurrences(workspace,id,provider_key,metadata) VALUES(?,?,?,?)",
-            )
-            .bind(workspace)
-            .bind(id)
-            .bind(key)
-            .bind(metadata)
-            .execute(&self.pool)
-            .await;
-            if let Err(error) = result {
-                return Err(map_constraint(error));
-            }
-        }
-        self.manifest_unlocked(workspace, id).await
     }
 
     pub async fn upload(
@@ -666,44 +617,6 @@ impl SharedRecordingService {
         .fetch_one(&self.pool)
         .await?;
         let wav = std::fs::read(self.directory.join(object))?;
-        if hex_sha(&wav) != revision.audio_sha256 {
-            return Err(RecordingError::Conflict);
-        }
-        Ok((revision, wav))
-    }
-
-    pub async fn historical_revision(
-        &self,
-        workspace: &str,
-        id: &str,
-        number: u64,
-    ) -> Result<Revision> {
-        let _guard = self.gate.lock().await;
-        self.occurrence_unlocked(workspace, id).await?;
-        let json: Option<String> = sqlx::query_scalar(
-            "SELECT revision_json FROM revisions WHERE workspace=? AND occurrence=? AND number=?",
-        )
-        .bind(workspace)
-        .bind(id)
-        .bind(number as i64)
-        .fetch_optional(&self.pool)
-        .await?;
-        Ok(serde_json::from_str(
-            &json.ok_or(RecordingError::NotFound)?,
-        )?)
-    }
-
-    pub async fn historical_audio(
-        &self,
-        workspace: &str,
-        id: &str,
-        number: u64,
-    ) -> Result<(Revision, Vec<u8>)> {
-        let _guard = self.gate.lock().await;
-        self.occurrence_unlocked(workspace, id).await?;
-        let row=sqlx::query("SELECT revision_json,object FROM revisions WHERE workspace=? AND occurrence=? AND number=?").bind(workspace).bind(id).bind(number as i64).fetch_optional(&self.pool).await?.ok_or(RecordingError::NotFound)?;
-        let revision: Revision = serde_json::from_str(&row.get::<String, _>("revision_json"))?;
-        let wav = std::fs::read(self.directory.join(row.get::<String, _>("object")))?;
         if hex_sha(&wav) != revision.audio_sha256 {
             return Err(RecordingError::Conflict);
         }

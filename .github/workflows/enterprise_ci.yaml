@@ -43,6 +43,6 @@ jobs:
       - run: cargo test --manifest-path enterprise/Cargo.toml --locked -p anarlog-enterprise-control-plane --test upgrade
       - run: cargo test --locked -p shared-recording
       - run: cargo clippy --locked -p shared-recording --all-targets --no-deps -- -D warnings
-      - run: cargo test --manifest-path enterprise/Cargo.toml --locked -p anarlog-enterprise-control-plane --lib --test shared_recordings --test recording_transcription --test recording_app
-      - run: cargo clippy --manifest-path enterprise/Cargo.toml --locked -p anarlog-enterprise-control-plane --tests --lib --no-deps -- -D warnings
+      - run: cargo test --manifest-path enterprise/Cargo.toml --locked -p anarlog-enterprise-control-plane --lib --bin shared-recordings-app --test shared_recordings --test recording_transcription --test recording_app
+      - run: cargo clippy --manifest-path enterprise/Cargo.toml --locked -p anarlog-enterprise-control-plane --tests --lib --bin shared-recordings-app --no-deps -- -D warnings
       - run: cargo clippy --manifest-path enterprise/Cargo.toml --locked -p anarlog-enterprise-google-meet-worker --tests --lib -- -D warnings

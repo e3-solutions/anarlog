@@ -33,17 +33,22 @@ docker run --detach --name "$name" \
   -e NANGO_WEBHOOK_SIGNING_KEY=disposable-smoke-key \
   "$image" >/dev/null
 
-for ((attempt = 0; attempt < 240; attempt++)); do
-  if [[ "$(docker inspect --format '{{.State.Running}}' "$name")" != true ]]; then
-    echo "Preview exited before readiness" >&2
-    docker logs "$name"
-    exit 1
-  fi
-  if docker exec "$name" python3 /opt/preview/entrypoint.py healthcheck; then
-    break
-  fi
-  sleep 1
-done
+wait_ready() {
+  for ((attempt = 0; attempt < 240; attempt++)); do
+    if [[ "$(docker inspect --format '{{.State.Running}}' "$name")" != true ]]; then
+      echo "Preview exited before readiness" >&2
+      docker logs "$name"
+      exit 1
+    fi
+    if docker exec "$name" python3 /opt/preview/entrypoint.py healthcheck; then
+      return
+    fi
+    sleep 1
+  done
+  echo "Preview did not become ready" >&2
+  return 1
+}
+wait_ready
 
 binding="$(docker port "$name" 8080/tcp)"
 python3 - "$binding" <<'PY'
@@ -60,10 +65,51 @@ for path, expected in (
     try:
         with urllib.request.urlopen(base + path, timeout=3) as response:
             actual = response.status
+            assert response.headers["Cache-Control"] == "no-store"
+            assert response.headers["X-Content-Type-Options"] == "nosniff"
+            assert response.headers.get("Server") is None
     except urllib.error.HTTPError as error:
         actual = error.code
+        assert error.headers["Cache-Control"] == "no-store"
+        assert error.headers["X-Content-Type-Options"] == "nosniff"
+        assert error.headers.get("Server") is None
     assert actual == expected, (path, actual, expected)
-print("public health/auth/private-ASR smoke passed")
+request = urllib.request.Request(base + "/nango/session", data=b"", method="POST", headers={"Content-Length": str(140 * 1024 * 1024 + 1)})
+try:
+    urllib.request.urlopen(request, timeout=3)
+except urllib.error.HTTPError as error:
+    assert error.code == 413, error.code
+else:
+    raise SystemExit("Public body limit missing")
+print("public health/auth/body-limit/private-ASR smoke passed")
+PY
+
+docker exec -i "$name" python3 - <<'PY'
+import pathlib, sqlite3
+root = pathlib.Path("/data/recordings")
+assert root.stat().st_mode & 0o777 == 0o700
+with sqlite3.connect(root / "recordings.sqlite") as database:
+    assert database.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+    assert {"occurrences", "captures", "revisions", "admissions"} <= {row[0] for row in database.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+(root / "smoke-persistence-marker").write_text("disposable-volume-proof")
+PY
+docker restart --time 20 "$name" >/dev/null
+wait_ready
+docker exec -i "$name" python3 - <<'PY'
+import pathlib, sqlite3
+root = pathlib.Path("/data/recordings")
+assert (root / "smoke-persistence-marker").read_text() == "disposable-volume-proof"
+with sqlite3.connect(root / "recordings.sqlite") as database:
+    assert database.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+listeners = []
+for table in ("/proc/net/tcp", "/proc/net/tcp6"):
+    for line in pathlib.Path(table).read_text().splitlines()[1:]:
+        fields = line.split()
+        address, port = fields[1].split(":")
+        if int(port, 16) == 18796 and fields[3] == "0A":
+            listeners.append(address)
+assert listeners == ["0100007F"], listeners
+print("persistent restart and private-ASR socket smoke passed")
 PY
 
 docker exec -i "$name" python3 - <<'PY'

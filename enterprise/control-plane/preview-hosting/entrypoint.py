@@ -92,9 +92,9 @@ def main():
         XDG_DATA_HOME="/data/runtime",
         XDG_CONFIG_HOME="/data/runtime",
         ANARLOG_SHARED_RECORDINGS_DIR="/data/recordings",
-        ANARLOG_SHARED_RECORDINGS_BIND="127.0.0.1:8789",
+        ANARLOG_SHARED_RECORDINGS_BIND=f"0.0.0.0:{port}",
+        ANARLOG_SHARED_RECORDINGS_ALLOW_PUBLIC_BIND="true",
         ANARLOG_SHARED_RECORDINGS_TRANSCRIPTION_URL="http://127.0.0.1:18796/v1",
-        ANARLOG_SHARED_RECORDINGS_TRANSCRIPTION_ADAPTER="openai",
         ANARLOG_SHARED_RECORDINGS_TRANSCRIPTION_MODEL="tiny.en",
         ANARLOG_SHARED_RECORDINGS_TRANSCRIPTION_KEY="",
     )
@@ -163,17 +163,6 @@ def main():
         )
         ready("http://127.0.0.1:18796/health", 200)
         spawn(["shared-recordings-app"], backend=True)
-        ready("http://127.0.0.1:8789/v1/shared-recordings/me", 401)
-        spawn(
-            [
-                "caddy",
-                "run",
-                "--config",
-                "/opt/preview/Caddyfile",
-                "--adapter",
-                "caddyfile",
-            ]
-        )
         ready(f"http://127.0.0.1:{port}/health", 200)
         print("isolated shared recording preview ready", flush=True)
         while not stopping:
@@ -182,7 +171,7 @@ def main():
             time.sleep(1)
         return 0
     finally:
-        # Close public ingress first; never leave a proxy serving a failed stack.
+        # Stop the public API before the private ASR.
         for child in reversed(children):
             if child.poll() is None:
                 try:

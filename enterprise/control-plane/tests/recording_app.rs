@@ -135,27 +135,24 @@ async fn signed_members_share_one_library_without_spoofing_uploader_or_retaining
             .unwrap(),
     );
     service
-        .automatic_admit(
+        .admit_actor(
             "org",
             "meeting",
+            "member-a",
             Provider::GoogleMeet,
             "conferenceRecords/provider-fixture",
             Some(chrono::Utc::now().timestamp_millis() - 100),
         )
         .await
         .unwrap();
-    service
-        .grant_actor_admission("org", "meeting", "member-a")
-        .await
-        .unwrap();
-    let app = recording_app::router(RecordingAppState {
-        service: service.clone(),
-        members: RecordingMemberAuth::new(&upstream.uri(), "fixture-anon").unwrap(),
-        identities: None,
-        processor: None,
-    })
-    .merge(recording_app::provider_router(
-        anlg_api_nango::NangoConfig {
+    let app = recording_app::router(
+        RecordingAppState {
+            service: service.clone(),
+            members: RecordingMemberAuth::new(&upstream.uri(), "fixture-anon").unwrap(),
+            identities: None,
+            processor: None,
+        },
+        recording_app::provider_router(anlg_api_nango::NangoConfig {
             nango: serde_json::from_value(json!({
                 "nango_api_base": upstream.uri(),
                 "nango_api_key": "fixture-api-key",
@@ -165,8 +162,62 @@ async fn signed_members_share_one_library_without_spoofing_uploader_or_retaining
             supabase_url: upstream.uri(),
             supabase_anon_key: "fixture-anon".into(),
             supabase_service_role_key: Some("fixture-service".into()),
-        },
-    ));
+        }),
+        recording_app::local_preview_cors(None).unwrap(),
+    );
+    let preflight = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("OPTIONS")
+                .uri("/nango/session")
+                .header(header::ORIGIN, "http://localhost:3000")
+                .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(preflight.status(), StatusCode::OK);
+    assert_eq!(preflight.headers()[header::CACHE_CONTROL], "no-store");
+    assert_eq!(
+        preflight.headers()[header::X_CONTENT_TYPE_OPTIONS],
+        "nosniff"
+    );
+    for (path, expected) in [
+        ("/health", StatusCode::OK),
+        ("/unknown", StatusCode::NOT_FOUND),
+        ("/v1/audio/transcriptions", StatusCode::NOT_FOUND),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(
+            response.headers()[header::X_CONTENT_TYPE_OPTIONS],
+            "nosniff"
+        );
+        assert!(!response.headers().contains_key(header::SERVER));
+    }
+    for path in ["/nango/session", "/v1/orgs/org/shared-recordings/admit"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header(header::CONTENT_LENGTH, (140 * 1024 * 1024 + 1).to_string())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    }
     assert_eq!(
         app.clone()
             .oneshot(request("POST", "/nango/session", "invalid", json!({})))

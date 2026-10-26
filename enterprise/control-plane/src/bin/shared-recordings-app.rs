@@ -15,13 +15,10 @@ async fn main() -> anyhow::Result<()> {
         directory.is_absolute(),
         "set an absolute isolated recording directory"
     );
-    let bind: SocketAddr = env::var("ANARLOG_SHARED_RECORDINGS_BIND")
-        .unwrap_or_else(|_| "127.0.0.1:8789".into())
-        .parse()?;
-    anyhow::ensure!(
-        bind.ip().is_loopback(),
-        "local app preview binds only to loopback"
-    );
+    let bind = preview_bind(
+        env::var("ANARLOG_SHARED_RECORDINGS_BIND").ok().as_deref(),
+        env::var("ANARLOG_SHARED_RECORDINGS_ALLOW_PUBLIC_BIND").as_deref() == Ok("true"),
+    )?;
     let web_origin = env::var("ANARLOG_SHARED_RECORDINGS_WEB_ORIGIN").ok();
     let cors = recording_app::local_preview_cors(web_origin.as_deref())?;
     let supabase_url = env::var("SUPABASE_URL")?;
@@ -53,15 +50,12 @@ async fn main() -> anyhow::Result<()> {
     };
     let service = Arc::new(SharedRecordingService::open(directory).await?);
     let processor = if let Ok(api_base) = env::var("ANARLOG_SHARED_RECORDINGS_TRANSCRIPTION_URL") {
-        let provider = env::var("ANARLOG_SHARED_RECORDINGS_TRANSCRIPTION_ADAPTER")?;
         let model = env::var("ANARLOG_SHARED_RECORDINGS_TRANSCRIPTION_MODEL")?;
         let api_key = env::var("ANARLOG_SHARED_RECORDINGS_TRANSCRIPTION_KEY").unwrap_or_default();
-        let transcriber = RecordingTranscriber::new(&provider, api_base, api_key, model.clone())?;
+        let transcriber = RecordingTranscriber::new(api_base, api_key, model)?;
         Some(Arc::new(RecordingProcessor::new(
             service.clone(),
             transcriber,
-            provider,
-            model,
         )))
     } else {
         tracing::warn!("transcription endpoint missing: canonical recordings remain pending");
@@ -77,13 +71,45 @@ async fn main() -> anyhow::Result<()> {
     println!("shared-recordings-app http://{}", listener.local_addr()?);
     axum::serve(
         listener,
-        recording_app::router(state)
-            .merge(provider_routes)
-            .layer(cors),
+        recording_app::router(state, provider_routes, cors),
     )
     .with_graceful_shutdown(async {
         let _ = tokio::signal::ctrl_c().await;
     })
     .await?;
     Ok(())
+}
+
+fn preview_bind(address: Option<&str>, allow_public: bool) -> anyhow::Result<SocketAddr> {
+    let bind: SocketAddr = address.unwrap_or("127.0.0.1:8789").parse()?;
+    anyhow::ensure!(
+        bind.ip().is_loopback() || allow_public,
+        "public binding requires ANARLOG_SHARED_RECORDINGS_ALLOW_PUBLIC_BIND=true"
+    );
+    Ok(bind)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::preview_bind;
+
+    #[test]
+    fn public_binding_requires_explicit_opt_in_for_ipv4_and_ipv6() {
+        assert!(preview_bind(None, false).unwrap().ip().is_loopback());
+        for address in ["127.0.0.1:8789", "[::1]:8789"] {
+            assert!(preview_bind(Some(address), false).is_ok());
+        }
+        for address in [
+            "0.0.0.0:8080",
+            "[::]:8080",
+            "192.0.2.1:8080",
+            "[2001:db8::1]:8080",
+        ] {
+            assert!(preview_bind(Some(address), false).is_err());
+            assert_eq!(
+                preview_bind(Some(address), true).unwrap().to_string(),
+                address
+            );
+        }
+    }
 }
