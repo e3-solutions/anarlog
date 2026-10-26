@@ -179,7 +179,7 @@ jobs:
               'plugins': {'updater': {'pubkey': os.environ['E3_UPDATER_PUBLIC_KEY']}}
           }))
           PY
-          cargo run --locked -p updater-core --bin verify-updater-signature -- e3-release/E3-Scribe.app.tar.gz e3-release/E3-Scribe.app.tar.gz.sig "$RUNNER_TEMP/e3-updater-verify.json"
+          cargo run --locked --release --target aarch64-apple-darwin -p updater-core --bin verify-updater-signature -- e3-release/E3-Scribe.app.tar.gz e3-release/E3-Scribe.app.tar.gz.sig "$RUNNER_TEMP/e3-updater-verify.json"
           (cd e3-release && shasum -a 256 E3-Scribe-arm64.dmg E3-Scribe.app.tar.gz E3-Scribe.app.tar.gz.sig BUILD.json > SHA256SUMS)
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

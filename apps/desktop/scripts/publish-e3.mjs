@@ -43,6 +43,17 @@ export async function publish(directory, env = process.env, request = fetch) {
       "BUILD.json must match the release version and source commit",
     );
   }
+  if (
+    !env.E3_APP_IDENTIFIER ||
+    build.bundleIdentifier !== env.E3_APP_IDENTIFIER ||
+    build.signed !== true ||
+    build.notarized !== true ||
+    build.updaterEnabled !== true
+  ) {
+    throw new Error(
+      "Release must be signed, notarized, updater-enabled, and match E3_APP_IDENTIFIER",
+    );
+  }
   const signature = (
     await readFile(resolve(directory, files[2]), "utf8")
   ).trim();

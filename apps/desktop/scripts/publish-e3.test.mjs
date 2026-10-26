@@ -28,21 +28,34 @@ test("an incomplete release cannot replace the working updater feed", async () =
     objects.set(key, data);
     return new Response(null);
   };
+  const build = {
+    version: "0.2.0",
+    sourceSHA: "a".repeat(40),
+    bundleIdentifier: "ai.e3group.meeting-capture-shared-preview",
+    signed: true,
+    notarized: false,
+    updaterEnabled: true,
+  };
   try {
     await Promise.all([
       writeFile(join(directory, "E3-Scribe-arm64.dmg"), "installer"),
       writeFile(join(directory, "E3-Scribe.app.tar.gz"), "archive"),
       writeFile(join(directory, "E3-Scribe.app.tar.gz.sig"), "a".repeat(100)),
-      writeFile(
-        join(directory, "BUILD.json"),
-        JSON.stringify({ version: "0.2.0", sourceSHA: "a".repeat(40) }),
-      ),
+      writeFile(join(directory, "BUILD.json"), JSON.stringify(build)),
     ]);
     const env = {
       E3_RELEASE_VERSION: "0.2.0",
+      E3_APP_IDENTIFIER: build.bundleIdentifier,
       SUPABASE_URL: "https://example.supabase.co",
       SUPABASE_SERVICE_ROLE_KEY: "private-test",
     };
+    await assert.rejects(
+      publish(directory, env, request),
+      /must be signed, notarized/,
+    );
+    assert.equal(objects.size, 1);
+    build.notarized = true;
+    await writeFile(join(directory, "BUILD.json"), JSON.stringify(build));
     await assert.rejects(publish(directory, env, request), /Upload failed/);
     assert.equal(
       JSON.parse(objects.get("update/darwin-aarch64.json")).version,
