@@ -385,6 +385,9 @@ fn inspect_browser_app(
     let _ = ax_app.set_messaging_timeout_secs(0.6);
     let (roots, unscoped, meeting_web_area_missing) =
         collect_browser_meeting_roots(&ax_app, &mut warnings);
+    if roots.is_empty() {
+        log_browser_scope_failure(pid, &warnings);
+    }
     request_browser_accessibility(&app, pid, &ax_app, meeting_web_area_missing);
     let inventory = chrome_tabs::inspect(&app.id, pid);
     let mut rows = browser_inspections_from_roots(app, pid, true, roots, unscoped, warnings);
@@ -403,6 +406,28 @@ fn inspect_browser_app(
         row.open_call_identities = inventory.clone();
     }
     rows
+}
+
+#[cfg(target_os = "macos")]
+fn log_browser_scope_failure(pid: i32, warnings: &[String]) {
+    static LAST_LOG: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+    let now = Instant::now();
+    {
+        let mut last = LAST_LOG.lock().unwrap_or_else(|error| error.into_inner());
+        if last.is_some_and(|previous| {
+            now.saturating_duration_since(previous) < Duration::from_secs(30)
+        }) {
+            return;
+        }
+        *last = Some(now);
+    }
+    // One event per native process per 30 seconds, with no per-PID cache growth.
+    let diagnostic = warnings
+        .iter()
+        .find(|warning| warning.starts_with("browser AX scope diagnostic:"))
+        .map(String::as_str)
+        .unwrap_or("browser AX window discovery unavailable");
+    tracing::info!(pid, diagnostic, "browser_meeting_scope_unavailable");
 }
 
 #[cfg(any(test, target_os = "macos", target_os = "linux"))]
@@ -559,7 +584,7 @@ pub fn describe_browser_ax(pid: i32) -> Vec<String> {
     lines.extend(hits.into_iter().take(12));
     for (index, window) in windows.iter().enumerate() {
         let title = string_attr(window, ax::attr::title());
-        let (web_area, web_complete) = active_web_area_element(window, focused.as_deref());
+        let (web_area, web_complete, _) = active_web_area_element(window, focused.as_deref());
         let url = web_area.as_ref().and_then(|area| url_attr(area));
         let web_title = web_area
             .as_ref()
@@ -577,7 +602,13 @@ pub fn describe_browser_ax(pid: i32) -> Vec<String> {
         ));
         let mut web_areas = Vec::new();
         let mut visited_areas = 0;
-        let listed = collect_web_area_elements(window, 0, &mut visited_areas, &mut web_areas);
+        let listed = collect_web_area_elements(
+            window,
+            0,
+            &mut visited_areas,
+            &mut web_areas,
+            &mut WebAreaSearchDiagnostics::default(),
+        );
         lines.push(format!(
             "  web_areas={} list_complete={}",
             web_areas.len(),
@@ -1793,12 +1824,27 @@ fn collect_browser_meeting_windows(
         return (Vec::new(), true, false);
     }
 
-    let roots = windows
+    let window_count = windows.len();
+    let mut scope_diagnostics = Vec::new();
+    let roots: Vec<_> = windows
         .into_iter()
         .filter_map(|window| {
             let window_title = string_attr(&window, ax::attr::title());
-            let (web_area, web_area_search_complete) =
+            let (web_area, web_area_search_complete, diagnostic) =
                 active_web_area_element(&window, focused_web_area.as_deref());
+            if scope_diagnostics.len() < 4 {
+                scope_diagnostics.push(format!(
+                    "focused={} visited={} web_areas={} depth_limit={} node_limit={} role_unavailable={} child_error={:?} child_type_mismatch={}",
+                    diagnostic.focused,
+                    diagnostic.visited,
+                    diagnostic.web_areas,
+                    diagnostic.depth_limit,
+                    diagnostic.node_limit,
+                    diagnostic.role_unavailable,
+                    diagnostic.child_error,
+                    diagnostic.child_type_mismatch,
+                ));
+            }
             if !web_area_search_complete {
                 if browser_window_has_provider_signal(None, window_title.as_deref()) {
                     has_unscoped_meeting_window = true;
@@ -1868,6 +1914,15 @@ fn collect_browser_meeting_windows(
         })
         .collect();
 
+    if roots.is_empty() {
+        // Only counts and native error codes: never expose page text, URLs or titles.
+        warnings.push(format!(
+            "browser AX scope diagnostic: windows={window_count} focused_web_area={} searches=[{}]",
+            focused_web_area.is_some(),
+            scope_diagnostics.join(", ")
+        ));
+    }
+
     (roots, has_unscoped_meeting_window, meeting_web_area_missing)
 }
 
@@ -1890,24 +1945,46 @@ fn focused_web_area_element(ax_app: &ax::UiElement) -> Option<arc::R<ax::UiEleme
 }
 
 #[cfg(target_os = "macos")]
+#[derive(Default)]
+struct WebAreaSearchDiagnostics {
+    focused: bool,
+    visited: usize,
+    web_areas: usize,
+    depth_limit: bool,
+    node_limit: bool,
+    role_unavailable: bool,
+    child_error: Option<i32>,
+    child_type_mismatch: bool,
+}
+
+#[cfg(target_os = "macos")]
 fn active_web_area_element(
     window: &ax::UiElement,
     focused_web_area: Option<&ax::UiElement>,
-) -> (Option<arc::R<ax::UiElement>>, bool) {
+) -> (
+    Option<arc::R<ax::UiElement>>,
+    bool,
+    WebAreaSearchDiagnostics,
+) {
+    let mut diagnostic = WebAreaSearchDiagnostics::default();
     if let Some(focused_web_area) = focused_web_area {
         let belongs_to_window = ax_element_attr(focused_web_area, ax::attr::window())
             .is_some_and(|focused_window| focused_window.equal(window));
         if belongs_to_window {
-            return (Some(focused_web_area.retained()), true);
+            diagnostic.focused = true;
+            return (Some(focused_web_area.retained()), true, diagnostic);
         }
     }
 
     let mut web_areas = Vec::new();
     let mut visited = 0;
-    let complete = collect_web_area_elements(window, 0, &mut visited, &mut web_areas);
+    let complete =
+        collect_web_area_elements(window, 0, &mut visited, &mut web_areas, &mut diagnostic);
+    diagnostic.visited = visited;
+    diagnostic.web_areas = web_areas.len();
     match unique_scope_for_search(web_areas.len(), complete) {
-        UniqueMatch::One(index) => (Some(web_areas.remove(index)), true),
-        UniqueMatch::Missing | UniqueMatch::Ambiguous => (None, complete),
+        UniqueMatch::One(index) => (Some(web_areas.remove(index)), true, diagnostic),
+        UniqueMatch::Missing | UniqueMatch::Ambiguous => (None, complete, diagnostic),
     }
 }
 
@@ -1917,13 +1994,17 @@ fn collect_web_area_elements(
     depth: usize,
     visited: &mut usize,
     web_areas: &mut Vec<arc::R<ax::UiElement>>,
+    diagnostic: &mut WebAreaSearchDiagnostics,
 ) -> bool {
     if depth > MAX_TREE_DEPTH || *visited >= MAX_NODES {
+        diagnostic.depth_limit |= depth > MAX_TREE_DEPTH;
+        diagnostic.node_limit |= *visited >= MAX_NODES;
         return false;
     }
     *visited += 1;
 
     let Some(role) = string_attr(element, ax::attr::role()) else {
+        diagnostic.role_unavailable = true;
         return false;
     };
     if role == "AXWebArea" {
@@ -1931,12 +2012,23 @@ fn collect_web_area_elements(
         return true;
     }
 
-    let Some(children) = ax_element_array(element, ax::attr::children()) else {
-        return !ax_role_may_have_children(&role);
+    let children = match ax_element_array_result(element, ax::attr::children()) {
+        Ok(children) => children,
+        Err(error) => {
+            if ax_role_may_have_children(&role) {
+                match error {
+                    Some(code) => {
+                        diagnostic.child_error.get_or_insert(code);
+                    }
+                    None => diagnostic.child_type_mismatch = true,
+                }
+            }
+            return !ax_role_may_have_children(&role);
+        }
     };
     let mut complete = true;
     for child in children.iter() {
-        complete &= collect_web_area_elements(child, depth + 1, visited, web_areas);
+        complete &= collect_web_area_elements(child, depth + 1, visited, web_areas, diagnostic);
     }
     complete
 }
@@ -2314,11 +2406,19 @@ fn ax_element_array(
     element: &ax::UiElement,
     attr: &ax::Attr,
 ) -> Option<arc::R<cf::ArrayOf<ax::UiElement>>> {
-    let value = ax_attr_value(element, attr).ok()?;
+    ax_element_array_result(element, attr).ok()
+}
+
+#[cfg(target_os = "macos")]
+fn ax_element_array_result(
+    element: &ax::UiElement,
+    attr: &ax::Attr,
+) -> Result<arc::R<cf::ArrayOf<ax::UiElement>>, Option<i32>> {
+    let value = ax_attr_value(element, attr).map_err(Some)?;
     if value.get_type_id() != cf::Array::type_id() {
-        return None;
+        return Err(None);
     }
-    Some(unsafe {
+    Ok(unsafe {
         std::mem::transmute::<arc::R<cf::Type>, arc::R<cf::ArrayOf<ax::UiElement>>>(value)
     })
 }
