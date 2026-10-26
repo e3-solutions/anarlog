@@ -237,16 +237,16 @@ jobs:
           test "$(rustc -vV | awk '/^host:/ {print $2}')" = aarch64-apple-darwin
           env -u CARGO_TARGET_DIR TAURI_ENV_TARGET_TRIPLE=aarch64-apple-darwin cargo xtask prepare-binaries
           pnpm -F desktop tauri build --debug --bundles app --ci --no-sign \
-            --config '{"bundle":{"createUpdaterArtifacts":false,"externalBin":["binaries/char-chrome-native-host","binaries/check-permissions","resources/cli/anarlog-cli"]}}'
+            --config '{"identifier":"ai.e3group.meeting-capture-shared-preview","plugins":{"deep-link":{"desktop":{"schemes":["e3-shared-recordings-preview"]}}},"bundle":{"createUpdaterArtifacts":false,"externalBin":["binaries/char-chrome-native-host","binaries/check-permissions","resources/cli/anarlog-cli"]}}'
           artifact_dir="$RUNNER_TEMP/anarlog-dev-macos"
           mkdir -p "$artifact_dir"
           target_dir=$(cd apps/desktop/src-tauri && cargo metadata --no-deps --format-version 1 | jq -r .target_directory)
           app_name=$(node -p 'require("./apps/desktop/src-tauri/tauri.conf.json").productName')
           app="$target_dir/debug/bundle/macos/$app_name.app"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = com.hyprnote.dev
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = ai.e3group.meeting-capture-shared-preview
           ditto -c -k --keepParent "$app" "$artifact_dir/Anarlog-Dev.zip"
           jq -n --arg source "$GITHUB_SHA" --arg run "$GITHUB_RUN_ID" --arg version "$APP_VERSION" --arg validation "$VALIDATION_STATUS" \
-            '{validationStatus:$validation,sourceSha:$source,runId:$run,appVersion:$version,bundleId:"com.hyprnote.dev",target:"aarch64-apple-darwin",profile:"debug",signed:false}' \
+            '{validationStatus:$validation,sourceSha:$source,runId:$run,appVersion:$version,bundleId:"ai.e3group.meeting-capture-shared-preview",target:"aarch64-apple-darwin",profile:"debug",signed:false}' \
             > "$artifact_dir/BUILD.json"
           (cd "$artifact_dir" && shasum -a 256 Anarlog-Dev.zip BUILD.json > SHA256SUMS)
       - name: Upload normal macOS QA app
