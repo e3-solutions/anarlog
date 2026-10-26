@@ -63,7 +63,7 @@ export function SharedRecordingPreferences({
         <p className="text-muted-foreground">
           Sharing keeps a private local copy for retries, including when local
           audio retention is otherwise off. Organization members can read the
-          published shared transcript.
+          source transcripts and listen to their audio.
         </p>
         {!account.connections.some(
           (connection) => connection.status === "connected",

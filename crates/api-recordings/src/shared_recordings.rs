@@ -3,11 +3,9 @@ use std::{
     path::{Path as FsPath, PathBuf},
 };
 
-use anlg_shared_recording::{
-    FrameRange, MAX_FRAMES, MAX_SOURCES, Manifest, align_clock_hints, decode_source, render,
-};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use sqlx::{
     Row, SqlitePool,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
@@ -15,6 +13,51 @@ use sqlx::{
 use tokio::sync::Mutex;
 
 const MAX_AUDIO_BYTES: usize = 100 * 1024 * 1024;
+
+const MAX_FRAMES: u64 = 16_000 * 60 * 60 * 4;
+const MAX_SOURCES: usize = 32;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FrameRange {
+    pub start: u64,
+    pub end: u64,
+}
+
+fn validate_wav(wav: &[u8], gaps: &[FrameRange]) -> Result<u64> {
+    let invalid = || {
+        RecordingError::Invalid(
+            "expected nonempty 16 kHz mono PCM16 WAV and valid source gaps".into(),
+        )
+    };
+    if wav.len() as u64 > MAX_FRAMES * 2 + 4096 || gaps.len() > 4096 {
+        return Err(invalid());
+    }
+    let mut reader = hound::WavReader::new(std::io::Cursor::new(wav)).map_err(|_| invalid())?;
+    let spec = reader.spec();
+    let frames = u64::from(reader.len());
+    if spec.channels != 1
+        || spec.sample_rate != 16_000
+        || spec.bits_per_sample != 16
+        || spec.sample_format != hound::SampleFormat::Int
+        || frames == 0
+        || frames > MAX_FRAMES
+        || gaps
+            .iter()
+            .any(|gap| gap.start >= gap.end || gap.end > frames)
+    {
+        return Err(invalid());
+    }
+    let mut decoded = 0;
+    for sample in reader.samples::<i16>() {
+        sample.map_err(|_| invalid())?;
+        decoded += 1;
+    }
+    if decoded != frames {
+        return Err(invalid());
+    }
+    Ok(frames)
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum RecordingError {
@@ -95,10 +138,18 @@ pub struct Transcript {
 pub struct Revision {
     pub number: u64,
     pub revision: String,
-    pub audio_sha256: String,
-    pub manifest: Manifest,
+    #[serde(default = "legacy_kind")]
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest: Option<Value>,
     pub transcript: Option<Transcript>,
     pub transcript_status: String,
+}
+
+fn legacy_kind() -> String {
+    "legacy_audio".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -106,6 +157,9 @@ pub struct Revision {
 pub struct CaptureProvenance {
     pub capture_id: String,
     pub metadata: CaptureMetadata,
+    pub frame_count: u64,
+    pub transcript: Option<Transcript>,
+    pub transcript_status: String,
     pub deleted: bool,
 }
 
@@ -204,6 +258,17 @@ impl SharedRecordingService {
         )
         .execute(&pool)
         .await?;
+        let capture_columns = sqlx::query("PRAGMA table_info(captures)")
+            .fetch_all(&pool)
+            .await?;
+        if !capture_columns
+            .iter()
+            .any(|column| column.get::<String, _>("name") == "transcript_json")
+        {
+            sqlx::query("ALTER TABLE captures ADD COLUMN transcript_json TEXT")
+                .execute(&pool)
+                .await?;
+        }
         let service = Self {
             pool,
             directory,
@@ -223,7 +288,7 @@ impl SharedRecordingService {
                 .into_iter()
                 .collect();
         retained.extend(
-            sqlx::query_scalar::<_, String>("SELECT object FROM revisions")
+            sqlx::query_scalar::<_, String>("SELECT object FROM revisions WHERE object<>''")
                 .fetch_all(&self.pool)
                 .await?,
         );
@@ -309,22 +374,68 @@ impl SharedRecordingService {
             .bind(workspace).bind(id).bind(actor).fetch_one(&self.pool).await?)
     }
 
-    pub async fn revision_audio(
+    pub async fn source_audio(
         &self,
         workspace: &str,
         id: &str,
-        revision_hash: &str,
-    ) -> Result<(Revision, Vec<u8>)> {
+        capture_id: &str,
+    ) -> Result<(CaptureProvenance, Vec<u8>)> {
         let _guard = self.gate.lock().await;
-        self.occurrence_unlocked(workspace, id).await?;
-        let row = sqlx::query("SELECT revision_json,object FROM revisions WHERE workspace=? AND occurrence=? AND revision=? ORDER BY number DESC LIMIT 1")
-            .bind(workspace).bind(id).bind(revision_hash).fetch_optional(&self.pool).await?.ok_or(RecordingError::NotFound)?;
-        let revision: Revision = serde_json::from_str(&row.get::<String, _>("revision_json"))?;
-        let wav = std::fs::read(self.directory.join(row.get::<String, _>("object")))?;
-        if hex_sha(&wav) != revision.audio_sha256 {
+        let capture = self
+            .manifest_unlocked(workspace, id)
+            .await?
+            .captures
+            .into_iter()
+            .find(|capture| capture.capture_id == capture_id && !capture.deleted)
+            .ok_or(RecordingError::NotFound)?;
+        let object: String = sqlx::query_scalar(
+            "SELECT object FROM captures WHERE workspace=? AND occurrence=? AND id=? AND deleted=0",
+        )
+        .bind(workspace)
+        .bind(id)
+        .bind(capture_id)
+        .fetch_one(&self.pool)
+        .await?;
+        let wav = std::fs::read(self.directory.join(object))?;
+        if hex_sha(&wav) != capture.metadata.sha256 {
             return Err(RecordingError::Conflict);
         }
-        Ok((revision, wav))
+        Ok((capture, wav))
+    }
+
+    pub async fn save_source_transcript(
+        &self,
+        workspace: &str,
+        id: &str,
+        capture_id: &str,
+        expected_sha: &str,
+        transcript: Transcript,
+    ) -> Result<()> {
+        validate_transcript(&transcript)?;
+        let _guard = self.gate.lock().await;
+        self.occurrence_unlocked(workspace, id).await?;
+        let row = sqlx::query("SELECT metadata,transcript_json FROM captures WHERE workspace=? AND occurrence=? AND id=? AND deleted=0")
+            .bind(workspace).bind(id).bind(capture_id).fetch_optional(&self.pool).await?.ok_or(RecordingError::NotFound)?;
+        let metadata: CaptureMetadata = serde_json::from_str(&row.get::<String, _>("metadata"))?;
+        if metadata.sha256 != expected_sha {
+            return Err(RecordingError::Conflict);
+        }
+        if let Some(existing) = row.get::<Option<String>, _>("transcript_json") {
+            if serde_json::from_str::<Transcript>(&existing)? != transcript {
+                return Err(RecordingError::Conflict);
+            }
+            return Ok(());
+        }
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query("UPDATE captures SET transcript_json=? WHERE workspace=? AND occurrence=? AND id=? AND deleted=0")
+            .bind(serde_json::to_string(&transcript)?).bind(workspace).bind(id).bind(capture_id).execute(&mut *transaction).await?;
+        sqlx::query("UPDATE occurrences SET changed=1 WHERE workspace=? AND id=?")
+            .bind(workspace)
+            .bind(id)
+            .execute(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
+        Ok(())
     }
 
     pub async fn upload(
@@ -350,19 +461,17 @@ impl SharedRecordingService {
                 "audio or gap limit exceeded".into(),
             ));
         }
-        let source = decode_source(
-            capture_id.to_owned(),
-            metadata.rank,
-            metadata.offset_frames,
-            wav,
-            metadata.gaps.clone(),
-        )
-        .map_err(|error| RecordingError::Invalid(error.to_string()))?;
-        if source.sha256 != metadata.sha256 {
+        let frames = validate_wav(wav, &metadata.gaps)?;
+        if metadata.offset_frames.unsigned_abs() > MAX_FRAMES {
+            return Err(RecordingError::Invalid(
+                "capture timing hint exceeds supported limits".into(),
+            ));
+        }
+        if hex_sha(wav) != metadata.sha256 {
             return Err(RecordingError::Conflict);
         }
         let _guard = self.gate.lock().await;
-        let (mut occurrence, _, _, _) = self.occurrence_unlocked(workspace, id).await?;
+        let (mut occurrence, _, _) = self.occurrence_unlocked(workspace, id).await?;
         let automatic: bool =
             sqlx::query_scalar("SELECT automatic FROM occurrences WHERE workspace=? AND id=?")
                 .bind(workspace)
@@ -370,10 +479,7 @@ impl SharedRecordingService {
                 .fetch_one(&self.pool)
                 .await?;
         if automatic {
-            let end = metadata
-                .offset_frames
-                .saturating_add(source.samples.len() as i64)
-                .max(1) as u64;
+            let end = metadata.offset_frames.saturating_add(frames as i64).max(1) as u64;
             if end > MAX_FRAMES {
                 return Err(RecordingError::Invalid(
                     "automatic occurrence exceeds supported timeline".into(),
@@ -408,7 +514,7 @@ impl SharedRecordingService {
         let limits=sqlx::query("SELECT count(*) AS count,coalesce(sum(frames),0) AS frames FROM captures WHERE workspace=? AND occurrence=? AND deleted=0")
             .bind(workspace).bind(id).fetch_one(&self.pool).await?;
         if limits.get::<i64, _>("count") >= MAX_SOURCES as i64
-            || limits.get::<i64, _>("frames") as u64 + source.samples.len() as u64 > MAX_FRAMES * 2
+            || limits.get::<i64, _>("frames") as u64 + frames > MAX_FRAMES * 2
         {
             return Err(RecordingError::Invalid(
                 "occurrence source limit exceeded".into(),
@@ -421,7 +527,7 @@ impl SharedRecordingService {
         );
         let mut transaction = self.pool.begin().await?;
         if let Err(error) = sqlx::query("INSERT INTO captures(workspace,occurrence,id,identity,metadata,object,frames,size_bytes) VALUES(?,?,?,?,?,?,?,?)")
-            .bind(workspace).bind(id).bind(capture_id).bind(identity).bind(json).bind(&object).bind(source.samples.len() as i64).bind(wav.len() as i64).execute(&mut *transaction).await { return Err(map_constraint(error)); }
+            .bind(workspace).bind(id).bind(capture_id).bind(identity).bind(json).bind(&object).bind(frames as i64).bind(wav.len() as i64).execute(&mut *transaction).await { return Err(map_constraint(error)); }
         write_atomic(&self.directory.join(&object), wav)?;
         if automatic {
             sqlx::query("UPDATE occurrences SET metadata=? WHERE workspace=? AND id=?")
@@ -449,26 +555,20 @@ impl SharedRecordingService {
         &self,
         workspace: &str,
         id: &str,
-    ) -> Result<(CreateOccurrence, Option<Revision>, bool, u64)> {
-        let row = sqlx::query("SELECT metadata,current_json,changed,next_revision FROM occurrences WHERE workspace=? AND id=? AND deleted=0")
+    ) -> Result<(CreateOccurrence, Option<Revision>, bool)> {
+        let row = sqlx::query("SELECT metadata,current_json,changed FROM occurrences WHERE workspace=? AND id=? AND deleted=0")
             .bind(workspace).bind(id).fetch_optional(&self.pool).await?.ok_or(RecordingError::NotFound)?;
         let metadata = serde_json::from_str(&row.get::<String, _>("metadata"))?;
         let revision = row
             .get::<Option<String>, _>("current_json")
             .map(|json| serde_json::from_str(&json))
             .transpose()?;
-        Ok((
-            metadata,
-            revision,
-            row.get::<i64, _>("changed") != 0,
-            row.get::<i64, _>("next_revision") as u64,
-        ))
+        Ok((metadata, revision, row.get::<i64, _>("changed") != 0))
     }
 
     async fn manifest_unlocked(&self, workspace: &str, id: &str) -> Result<OccurrenceManifest> {
-        let (occurrence, current, inputs_changed, _) =
-            self.occurrence_unlocked(workspace, id).await?;
-        let rows = sqlx::query("SELECT id,metadata,deleted FROM captures WHERE workspace=? AND occurrence=? ORDER BY id")
+        let (occurrence, current, inputs_changed) = self.occurrence_unlocked(workspace, id).await?;
+        let rows = sqlx::query("SELECT id,metadata,deleted,frames,transcript_json FROM captures WHERE workspace=? AND occurrence=? ORDER BY id")
             .bind(workspace).bind(id).fetch_all(&self.pool).await?;
         let captures = rows
             .into_iter()
@@ -476,6 +576,18 @@ impl SharedRecordingService {
                 Ok(CaptureProvenance {
                     capture_id: row.get("id"),
                     metadata: serde_json::from_str(&row.get::<String, _>("metadata"))?,
+                    frame_count: row.get::<i64, _>("frames") as u64,
+                    transcript: row
+                        .get::<Option<String>, _>("transcript_json")
+                        .map(|json| serde_json::from_str(&json))
+                        .transpose()?,
+                    transcript_status: if row.get::<Option<String>, _>("transcript_json").is_some()
+                    {
+                        "ready"
+                    } else {
+                        "pending"
+                    }
+                    .into(),
                     deleted: row.get::<i64, _>("deleted") != 0,
                 })
             })
@@ -501,7 +613,7 @@ impl SharedRecordingService {
         .ok_or(RecordingError::NotFound)
     }
 
-    pub async fn seal(&self, workspace: &str, id: &str) -> Result<Revision> {
+    pub async fn seal(&self, workspace: &str, id: &str) -> Result<OccurrenceManifest> {
         let _guard = self.gate.lock().await;
         self.occurrence_unlocked(workspace, id).await?;
         let has_capture:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM captures WHERE workspace=? AND occurrence=? AND deleted=0)").bind(workspace).bind(id).fetch_one(&self.pool).await?;
@@ -513,162 +625,7 @@ impl SharedRecordingService {
             .bind(id)
             .execute(&self.pool)
             .await?;
-        self.finalize_unlocked(workspace, id).await
-    }
-
-    pub async fn finalize(&self, workspace: &str, id: &str) -> Result<Revision> {
-        let _guard = self.gate.lock().await;
-        self.finalize_unlocked(workspace, id).await
-    }
-
-    async fn finalize_unlocked(&self, workspace: &str, id: &str) -> Result<Revision> {
-        let (occurrence, current, _, number) = self.occurrence_unlocked(workspace, id).await?;
-        let rows = sqlx::query("SELECT id,metadata,object FROM captures WHERE workspace=? AND occurrence=? AND deleted=0 ORDER BY id")
-            .bind(workspace).bind(id).fetch_all(&self.pool).await?;
-        if rows.is_empty() {
-            return Err(RecordingError::Conflict);
-        }
-        let mut sources = Vec::with_capacity(rows.len());
-        for row in rows {
-            let metadata: CaptureMetadata =
-                serde_json::from_str(&row.get::<String, _>("metadata"))?;
-            let bytes = std::fs::read(self.directory.join(row.get::<String, _>("object")))?;
-            let group = key_hash(&[
-                &metadata.uploader_id,
-                &metadata.device_id,
-                &metadata.local_capture_id,
-            ]);
-            let trusted = matches!(
-                metadata.timing_basis,
-                TimingBasis::ProviderTimeline | TimingBasis::OperatorVerified
-            );
-            let source = decode_source(
-                row.get("id"),
-                metadata.rank,
-                metadata.offset_frames,
-                &bytes,
-                metadata.gaps,
-            )
-            .map_err(|error| RecordingError::Invalid(error.to_string()))?;
-            if source.sha256 != metadata.sha256 {
-                return Err(RecordingError::Conflict);
-            }
-            sources.push((source, group, trusted));
-        }
-        let sources = align_clock_hints(sources);
-        let duration_frames = sources
-            .iter()
-            .map(|source| (source.offset_frames + source.samples.len() as i64).max(0) as u64)
-            .max()
-            .unwrap_or(0)
-            .max(occurrence.duration_frames);
-        let canonical = render(duration_frames, &sources)
-            .map_err(|error| RecordingError::Invalid(error.to_string()))?;
-        if let Some(current) = current.filter(|current| current.revision == canonical.revision) {
-            let object = format!(
-                "canonical-{}-{}.wav",
-                key_hash(&[workspace, id]),
-                current.revision
-            );
-            let path = self.directory.join(object);
-            if std::fs::read(&path).ok().as_deref() != Some(canonical.wav.as_slice()) {
-                write_atomic(&path, &canonical.wav)?;
-            }
-            sqlx::query("UPDATE occurrences SET changed=0 WHERE workspace=? AND id=?")
-                .bind(workspace)
-                .bind(id)
-                .execute(&self.pool)
-                .await?;
-            return Ok(current);
-        }
-        let revision = Revision {
-            number,
-            revision: canonical.revision,
-            audio_sha256: canonical.sha256,
-            manifest: canonical.manifest,
-            transcript: None,
-            transcript_status: "pending".into(),
-        };
-        let object = format!(
-            "canonical-{}-{}.wav",
-            key_hash(&[workspace, id]),
-            revision.revision
-        );
-        write_atomic(&self.directory.join(&object), &canonical.wav)?;
-        let mut transaction = self.pool.begin().await?;
-        sqlx::query("INSERT INTO revisions(workspace,occurrence,number,revision,object,revision_json) VALUES(?,?,?,?,?,?)")
-            .bind(workspace).bind(id).bind(number as i64).bind(&revision.revision).bind(object).bind(serde_json::to_string(&revision)?).execute(&mut *transaction).await?;
-        sqlx::query("UPDATE occurrences SET current_json=?,next_revision=?,changed=0 WHERE workspace=? AND id=?")
-            .bind(serde_json::to_string(&revision)?).bind((number+1) as i64).bind(workspace).bind(id).execute(&mut *transaction).await?;
-        transaction.commit().await?;
-        Ok(revision)
-    }
-
-    pub async fn canonical_audio(&self, workspace: &str, id: &str) -> Result<(Revision, Vec<u8>)> {
-        let _guard = self.gate.lock().await;
-        let (_, revision, _, _) = self.occurrence_unlocked(workspace, id).await?;
-        let revision = revision.ok_or(RecordingError::NotFound)?;
-        let object: String = sqlx::query_scalar(
-            "SELECT object FROM revisions WHERE workspace=? AND occurrence=? AND number=?",
-        )
-        .bind(workspace)
-        .bind(id)
-        .bind(revision.number as i64)
-        .fetch_one(&self.pool)
-        .await?;
-        let wav = std::fs::read(self.directory.join(object))?;
-        if hex_sha(&wav) != revision.audio_sha256 {
-            return Err(RecordingError::Conflict);
-        }
-        Ok((revision, wav))
-    }
-
-    pub async fn save_transcript(
-        &self,
-        workspace: &str,
-        id: &str,
-        expected_revision: &str,
-        expected_audio_sha: &str,
-        transcript: Transcript,
-    ) -> Result<Revision> {
-        identifier(&transcript.provider)?;
-        identifier(&transcript.model)?;
-        if serde_json::to_vec(&transcript.result)?.len() > 16 * 1024 * 1024 {
-            return Err(RecordingError::Invalid("transcript limit exceeded".into()));
-        }
-        let _guard = self.gate.lock().await;
-        let (_, revision, _, _) = self.occurrence_unlocked(workspace, id).await?;
-        let mut revision = revision.ok_or(RecordingError::Conflict)?;
-        if revision.revision != expected_revision || revision.audio_sha256 != expected_audio_sha {
-            return Err(RecordingError::Conflict);
-        }
-        if let Some(existing) = &revision.transcript {
-            if existing != &transcript {
-                return Err(RecordingError::Conflict);
-            }
-            return Ok(revision);
-        }
-        revision.transcript = Some(transcript);
-        revision.transcript_status = "ready".into();
-        let json = serde_json::to_string(&revision)?;
-        let mut transaction = self.pool.begin().await?;
-        sqlx::query("UPDATE occurrences SET current_json=? WHERE workspace=? AND id=?")
-            .bind(&json)
-            .bind(workspace)
-            .bind(id)
-            .execute(&mut *transaction)
-            .await?;
-        sqlx::query(
-            "UPDATE revisions SET revision_json=? WHERE workspace=? AND occurrence=? AND number=?",
-        )
-        .bind(json)
-        .bind(workspace)
-        .bind(id)
-        .bind(revision.number as i64)
-        .execute(&mut *transaction)
-        .await?;
-        transaction.commit().await?;
-        Ok(revision)
+        self.manifest_unlocked(workspace, id).await
     }
 
     pub async fn delete_capture(&self, workspace: &str, id: &str, capture_id: &str) -> Result<()> {
@@ -690,7 +647,7 @@ impl SharedRecordingService {
         }
         let derived = self.derived_objects_unlocked(workspace, id).await?;
         let mut transaction = self.pool.begin().await?;
-        sqlx::query("UPDATE captures SET deleted=1 WHERE workspace=? AND occurrence=? AND id=?")
+        sqlx::query("UPDATE captures SET deleted=1,transcript_json=NULL WHERE workspace=? AND occurrence=? AND id=?")
             .bind(workspace)
             .bind(id)
             .bind(capture_id)
@@ -743,11 +700,13 @@ impl SharedRecordingService {
         .bind(id)
         .execute(&mut *transaction)
         .await?;
-        sqlx::query("UPDATE captures SET deleted=1 WHERE workspace=? AND occurrence=?")
-            .bind(workspace)
-            .bind(id)
-            .execute(&mut *transaction)
-            .await?;
+        sqlx::query(
+            "UPDATE captures SET deleted=1,transcript_json=NULL WHERE workspace=? AND occurrence=?",
+        )
+        .bind(workspace)
+        .bind(id)
+        .execute(&mut *transaction)
+        .await?;
         sqlx::query("DELETE FROM revisions WHERE workspace=? AND occurrence=?")
             .bind(workspace)
             .bind(id)
@@ -764,14 +723,32 @@ impl SharedRecordingService {
     }
 
     async fn derived_objects_unlocked(&self, workspace: &str, id: &str) -> Result<Vec<String>> {
-        let objects: Vec<String> =
-            sqlx::query_scalar("SELECT object FROM revisions WHERE workspace=? AND occurrence=?")
-                .bind(workspace)
-                .bind(id)
-                .fetch_all(&self.pool)
-                .await?;
+        let objects: Vec<String> = sqlx::query_scalar(
+            "SELECT object FROM revisions WHERE workspace=? AND occurrence=? AND object<>''",
+        )
+        .bind(workspace)
+        .bind(id)
+        .fetch_all(&self.pool)
+        .await?;
         Ok(objects)
     }
+}
+
+fn validate_transcript(transcript: &Transcript) -> Result<()> {
+    identifier(&transcript.provider)?;
+    if transcript.model.is_empty()
+        || transcript.model.len() > 256
+        || !transcript
+            .model
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"/_-.:".contains(&byte))
+        || serde_json::to_vec(&transcript.result)?.len() > 16 * 1024 * 1024
+    {
+        return Err(RecordingError::Invalid(
+            "invalid transcript model or size".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn identifier(value: &str) -> Result<()> {
@@ -834,8 +811,8 @@ fn key_hash(parts: &[&str]) -> String {
             .as_bytes(),
     )
 }
-fn hex_sha(bytes: &[u8]) -> String {
-    anlg_shared_recording::sha256(bytes)
+pub(crate) fn hex_sha(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
 }
 fn map_constraint(error: sqlx::Error) -> RecordingError {
     if error

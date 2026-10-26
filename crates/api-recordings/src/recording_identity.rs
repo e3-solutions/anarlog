@@ -149,7 +149,7 @@ fn resolved(
     };
     let occurrence_id = format!(
         "meeting-{}",
-        anlg_shared_recording::sha256(
+        crate::shared_recordings::hex_sha(
             format!("{provider_name}:{provider_occurrence_id}").as_bytes()
         )
     );

@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicU8, Ordering},
 };
 
-use anlg_shared_recording::{FrameRange, encode_wav, sha256};
+use api_recordings::shared_recordings::FrameRange;
 use api_recordings::{
     recording_transcription::{RecordingProcessor, RecordingTranscriber},
     shared_recordings::{
@@ -11,14 +11,14 @@ use api_recordings::{
     },
 };
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{method, path},
 };
 
 #[tokio::test]
-async fn real_http_provider_receives_exact_canonical_bytes_and_recovers_without_duplicate_success()
-{
+async fn each_original_is_transcribed_independently_and_partial_asr_retries_keep_cached_sources() {
     let directory = tempfile::tempdir().unwrap();
     let service = Arc::new(
         SharedRecordingService::open(directory.path())
@@ -42,12 +42,13 @@ async fn real_http_provider_receives_exact_canonical_bytes_and_recovers_without_
         .await;
     let redirect_url = redirect.uri();
     let provider_mode = mode.clone();
-    let expected =
-        encode_wav(&[vec![100; 16000], vec![200; 8000], vec![100; 8000]].concat()).unwrap();
+    let expected_a = encode_wav(&[100; 32000]).unwrap();
+    let expected_b = encode_wav(&[200; 32000]).unwrap();
     Mock::given(method("POST"))
         .and(path("/audio/transcriptions"))
         .respond_with(move |request: &wiremock::Request| {
-            if multipart_field(request, "file") != Some(expected.as_slice())
+            let source = multipart_field(request, "file");
+            if ![Some(expected_a.as_slice()),Some(expected_b.as_slice())].contains(&source)
                 || multipart_field(request, "model") != Some(b"fixture-v1")
                 || multipart_field(request, "response_format") != Some(b"json")
                 || request
@@ -60,8 +61,11 @@ async fn real_http_provider_receives_exact_canonical_bytes_and_recovers_without_
             }
             match provider_mode.load(Ordering::SeqCst) {
                 0 => ResponseTemplate::new(503),
-                1 => ResponseTemplate::new(200)
-                    .set_body_json(json!({"text": "  synthetic fixture\n"})),
+                1 => {
+                    if source == Some(expected_b.as_slice()) { ResponseTemplate::new(503) }
+                    else { ResponseTemplate::new(200).set_body_json(json!({"text":"source A"})) }
+                },
+                5 => ResponseTemplate::new(200).set_body_json(json!({"text":if source == Some(expected_a.as_slice()) { "source A" } else { "source B" }})),
                 2 => ResponseTemplate::new(200)
                     .set_body_json(json!({"text": "x".repeat(8 * 1024 * 1024)})),
                 3 => ResponseTemplate::new(302).insert_header("Location", redirect_url.as_str()),
@@ -131,31 +135,42 @@ async fn real_http_provider_receives_exact_canonical_bytes_and_recovers_without_
         mode.store(failure, Ordering::SeqCst);
         assert!(processor.process("workspace", "meeting").await.is_err());
     }
-    let (pending, canonical) = service
-        .canonical_audio("workspace", "meeting")
-        .await
-        .unwrap();
-    assert_eq!(pending.transcript_status, "pending");
-    assert_eq!(sha256(&canonical), pending.audio_sha256);
-    mode.store(1, Ordering::SeqCst);
-    let ready = processor.process("workspace", "meeting").await.unwrap();
-    assert_eq!(ready.revision, pending.revision);
-    let result = &ready.transcript.as_ref().unwrap().result;
     assert_eq!(
-        result,
-        &json!({
-            "metadata": {"timing_source": "synthetic_text"},
-            "results": {"channels": [{"alternatives": [{
-                "transcript": "synthetic fixture", "confidence": 1.0, "words": []
-            }]}]}
-        })
+        service
+            .source_audio("workspace", "meeting", "alice")
+            .await
+            .unwrap()
+            .1,
+        primary
     );
-    assert_eq!(ready.transcript.as_ref().unwrap().provider, "openai");
-    assert_eq!(ready.transcript.as_ref().unwrap().model, "fixture-v1");
+    assert_eq!(
+        service
+            .source_audio("workspace", "meeting", "bob")
+            .await
+            .unwrap()
+            .1,
+        fallback
+    );
+    mode.store(1, Ordering::SeqCst);
+    assert!(processor.process("workspace", "meeting").await.is_err());
+    let partial = service.manifest("workspace", "meeting").await.unwrap();
+    assert_eq!(partial.captures[0].transcript_status, "ready");
+    assert_eq!(partial.captures[1].transcript_status, "pending");
+    mode.store(5, Ordering::SeqCst);
+    let ready = processor.process("workspace", "meeting").await.unwrap();
+    assert!(ready.current.is_none());
+    assert_eq!(
+        ready.captures[0].transcript.as_ref().unwrap().result,
+        json!({"text":"source A"})
+    );
+    assert_eq!(
+        ready.captures[1].transcript.as_ref().unwrap().result,
+        json!({"text":"source B"})
+    );
     mode.store(0, Ordering::SeqCst);
     let retried = processor.process("workspace", "meeting").await.unwrap();
-    assert_eq!(retried.transcript, ready.transcript);
-    assert_eq!(retried.number, ready.number);
+    assert_eq!(retried.captures[0].transcript, ready.captures[0].transcript);
+    assert_eq!(retried.captures[1].transcript, ready.captures[1].transcript);
     let changed_model = RecordingProcessor::new(
         service.clone(),
         RecordingTranscriber::new(provider.uri(), String::new(), "fixture-v2".into()).unwrap(),
@@ -189,4 +204,28 @@ fn multipart_field<'a>(request: &'a wiremock::Request, name: &str) -> Option<&'a
         .position(|bytes| bytes == delimiter.as_bytes())?
         + offset;
     Some(&request.body[offset..end])
+}
+
+fn encode_wav(samples: &[i16]) -> Result<Vec<u8>, hound::Error> {
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    let mut writer = hound::WavWriter::new(
+        &mut bytes,
+        hound::WavSpec {
+            channels: 1,
+            sample_rate: 16000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        },
+    )?;
+    for sample in samples {
+        writer.write_sample(*sample)?;
+    }
+    writer.finalize()?;
+    Ok(bytes.into_inner())
+}
+fn sha256(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }

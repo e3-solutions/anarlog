@@ -3,7 +3,6 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use anlg_shared_recording::{encode_wav, sha256};
 use api_recordings::{
     recording_app::{self, RecordingAppState},
     recording_members::RecordingMemberships,
@@ -16,11 +15,34 @@ use axum::{
 use base64::{Engine, engine::general_purpose::STANDARD};
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use tower::ServiceExt;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{header as has_header, method, path},
 };
+
+fn sha256(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn encode_wav(samples: &[i16]) -> Result<Vec<u8>, hound::Error> {
+    let mut buffer = std::io::Cursor::new(Vec::new());
+    let mut writer = hound::WavWriter::new(
+        &mut buffer,
+        hound::WavSpec {
+            channels: 1,
+            sample_rate: 16000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        },
+    )?;
+    for sample in samples {
+        writer.write_sample(*sample)?;
+    }
+    writer.finalize()?;
+    Ok(buffer.into_inner())
+}
 
 const TEST_KEY: &str = "-----BEGIN PRIVATE KEY-----\n\
 MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgWTFfCGljY6aw3Hrt\n\
@@ -188,6 +210,31 @@ async fn signed_members_share_one_library_without_spoofing_uploader_or_retaining
     let manifest = service.manifest("org", "meeting").await.unwrap();
     assert_eq!(manifest.captures[0].metadata.uploader_id, "member-a");
     assert_eq!(manifest.captures[0].metadata.rank, 0);
+    let original = format!("{source}/audio");
+    for reader in [&a, &b] {
+        let response = app
+            .clone()
+            .oneshot(request("GET", &original, reader, Value::Null))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "audio/wav");
+        assert_eq!(
+            to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap()
+                .as_ref(),
+            wav
+        );
+    }
+    assert_eq!(
+        app.clone()
+            .oneshot(request("GET", &original, &outsider, Value::Null))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
     assert_eq!(
         app.clone()
             .oneshot(request("DELETE", source, &b, Value::Null))

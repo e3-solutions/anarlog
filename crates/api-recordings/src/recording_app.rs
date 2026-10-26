@@ -33,13 +33,12 @@ pub struct RecordingAppState {
     pub processor: Option<Arc<RecordingProcessor>>,
 }
 
-const PATHS: [&str; 10] = [
+const PATHS: [&str; 9] = [
     "/v1/shared-recordings/me",
     "/v1/orgs/{workspace}/shared-recordings",
     "/v1/orgs/{workspace}/shared-recordings/admit",
     "/v1/orgs/{workspace}/shared-recordings/{id}",
-    "/v1/orgs/{workspace}/shared-recordings/{id}/audio",
-    "/v1/orgs/{workspace}/shared-recordings/{id}/revisions/{revision}/audio",
+    "/v1/orgs/{workspace}/shared-recordings/{id}/captures/{source}/audio",
     "/v1/orgs/{workspace}/shared-recordings/{id}/transcript",
     "/v1/orgs/{workspace}/shared-recordings/{id}/captures/{source}",
     "/v1/orgs/{workspace}/shared-recordings/{id}/process",
@@ -58,8 +57,7 @@ pub fn router(state: RecordingAppState, auth: AuthState) -> Router {
         library_path,
         admission,
         occurrence,
-        canonical_audio,
-        historical_audio,
+        original_audio,
         text,
         capture,
         processing,
@@ -70,8 +68,7 @@ pub fn router(state: RecordingAppState, auth: AuthState) -> Router {
         .route(library_path, get(library))
         .route(admission, post(admit))
         .route(occurrence, get(manifest).delete(delete_occurrence))
-        .route(canonical_audio, get(audio))
-        .route(historical_audio, get(revision_audio))
+        .route(original_audio, get(audio))
         .route(text, get(transcript))
         .route(capture, post(upload).delete(delete_capture))
         .route(processing, post(process))
@@ -207,16 +204,16 @@ async fn transcript(
 }
 async fn audio(
     State(state): State<RecordingAppState>,
-    Path((workspace, id)): Path<(String, String)>,
+    Path((workspace, id, source)): Path<(String, String, String)>,
     Extension(auth): Extension<AuthContext>,
 ) -> Result<Response, MemberError> {
     state.members.authorize(&auth, &workspace).await?;
-    let (revision, wav) = state
+    let (capture, wav) = state
         .service
-        .canonical_audio(&workspace, &id)
+        .source_audio(&workspace, &id, &source)
         .await
         .map_err(storage_error)?;
-    Ok(wav_response(wav, &revision.audio_sha256))
+    Ok(wav_response(wav, &capture.metadata.sha256))
 }
 
 async fn upload(
@@ -253,11 +250,11 @@ async fn process(
     State(state): State<RecordingAppState>,
     Path((workspace, id)): Path<(String, String)>,
     Extension(auth): Extension<AuthContext>,
-) -> Result<Json<Revision>, MemberError> {
+) -> Result<Json<OccurrenceManifest>, MemberError> {
     state.members.authorize(&auth, &workspace).await?;
     let processor = state.processor.as_ref().ok_or(MemberError::Upstream)?;
     match processor.process(&workspace, &id).await {
-        Ok(revision) => Ok(Json(revision)),
+        Ok(manifest) => Ok(Json(manifest)),
         Err(error) => {
             if let Some(error) = error.downcast_ref::<RecordingError>() {
                 return Err(match error {
@@ -276,7 +273,7 @@ async fn seal(
     State(state): State<RecordingAppState>,
     Path((workspace, id)): Path<(String, String)>,
     Extension(auth): Extension<AuthContext>,
-) -> Result<Json<Revision>, MemberError> {
+) -> Result<Json<OccurrenceManifest>, MemberError> {
     let membership = state.members.authorize(&auth, &workspace).await?;
     require_manager(&membership)?;
     Ok(Json(
@@ -343,18 +340,4 @@ fn storage_error(error: RecordingError) -> MemberError {
             MemberError::Upstream
         }
     }
-}
-
-async fn revision_audio(
-    State(state): State<RecordingAppState>,
-    Path((workspace, id, revision)): Path<(String, String, String)>,
-    Extension(auth): Extension<AuthContext>,
-) -> Result<Response, MemberError> {
-    state.members.authorize(&auth, &workspace).await?;
-    let (revision, wav) = state
-        .service
-        .revision_audio(&workspace, &id, &revision)
-        .await
-        .map_err(storage_error)?;
-    Ok(wav_response(wav, &revision.audio_sha256))
 }

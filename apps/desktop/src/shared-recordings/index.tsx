@@ -7,12 +7,12 @@ import { cn } from "@anlg/utils";
 
 import {
   listSharedRecordings,
-  downloadSharedRecordingAudio,
+  downloadSharedRecordingSource,
   readSharedRecording,
   readSharedRecordingAccount,
   transcriptText,
   type SharedRecordingAccount,
-  type SharedRecordingRevision,
+  type SharedRecordingSource,
 } from "./client";
 import { SharedRecordingPreferences, SharedRecordingQueue } from "./settings";
 
@@ -160,7 +160,14 @@ function OrganizationRecordings({
               </span>
               <span className="text-muted-foreground block text-xs">
                 {item.captures.filter((capture) => !capture.deleted).length}{" "}
-                sources · {item.current?.transcriptStatus ?? "awaiting audio"}
+                sources ·{" "}
+                {
+                  item.captures.filter(
+                    (capture) =>
+                      !capture.deleted && capture.transcriptStatus === "ready",
+                  ).length
+                }{" "}
+                transcribed
               </span>
             </button>
           ))}
@@ -175,8 +182,8 @@ function OrganizationRecordings({
             />
           ) : (
             <p className="text-muted-foreground p-4 text-sm">
-              Select a meeting to play its shared recording and read its
-              transcript.
+              Select a meeting to read its source transcripts and play the
+              original audio recordings.
             </p>
           )}
         </div>
@@ -219,7 +226,7 @@ function RecordingDetail({
       <ErrorMessage error={detail.error} retry={() => void detail.refetch()} />
     );
   if (!detail.data) return <p className="text-sm">Loading recording…</p>;
-  const { current, captures, inputsChanged } = detail.data;
+  const { captures } = detail.data;
   return (
     <div className="space-y-4 pr-2">
       <h2 className="text-lg font-medium">
@@ -227,68 +234,58 @@ function RecordingDetail({
           ? "Google Meet"
           : "Slack huddle"}
       </h2>
-      {inputsChanged ? (
-        <p className="text-muted-foreground text-sm">
-          New audio is waiting for processing. The published audio and
-          transcript below belong to the same revision.
-        </p>
-      ) : null}
-      {current ? (
-        <>
-          <RecordingAudio
-            key={current.revision}
-            userId={userId}
-            organizationId={organizationId}
-            occurrenceId={occurrenceId}
-            revision={current}
-          />
-          <p className="text-muted-foreground text-xs">
-            Revision {current.number} ·{" "}
-            {formatTime(
-              current.manifest.duration_frames / current.manifest.sample_rate,
-            )}{" "}
-            · {current.transcriptStatus}
-          </p>
-          <div className="text-sm leading-relaxed whitespace-pre-wrap">
-            {transcriptText(current) ||
-              (current.transcript
-                ? "No speech was returned for this recording."
-                : "Transcription is pending. The audio is retained.")}
-          </div>
-          <details className="text-sm">
-            <summary className="cursor-pointer">Audio sources and gaps</summary>
-            <p className="text-muted-foreground mt-2 text-xs">
-              Device clocks are timing hints. Another person's audio fills gaps
-              only when overlapping audio confirms alignment. Unresolved gaps
-              remain silent.
-            </p>
-            <ul className="mt-2 space-y-1 text-xs">
-              {current.manifest.selections.map((selection) => (
-                <li key={selection.start_frame}>
-                  {formatTime(
-                    selection.start_frame / current.manifest.sample_rate,
-                  )}
-                  –
-                  {formatTime(
-                    selection.end_frame / current.manifest.sample_rate,
-                  )}{" "}
-                  ·{" "}
-                  {selection.capture_id
-                    ? (captures.find(
-                        (capture) => capture.captureId === selection.capture_id,
-                      )?.metadata.uploaderId ?? selection.capture_id)
-                    : "Missing audio · silence"}
-                </li>
-              ))}
-            </ul>
-          </details>
-        </>
-      ) : (
-        <p className="text-muted-foreground text-sm">
-          Audio is being collected. No canonical recording has been published
-          yet.
-        </p>
-      )}
+      <h3 className="font-medium">Original audio and transcripts</h3>
+      <p className="text-muted-foreground text-sm">
+        Each recording and its transcript stay separate. Start times are device
+        clock estimates.
+      </p>
+      <ul className="space-y-4">
+        {captures
+          .filter((capture) => !capture.deleted)
+          .map((capture) => (
+            <li
+              key={`${capture.captureId}:${capture.metadata.sha256}`}
+              className="space-y-2 border-t pt-3"
+            >
+              <p className="text-sm">
+                {capture.metadata.uploaderId} · source{" "}
+                {(capture.metadata.segmentSequence ?? 0) + 1} · starts{" "}
+                {formatTime(capture.metadata.offsetFrames / 16000)} ·{" "}
+                {formatTime(capture.frameCount / 16000)} long
+              </p>
+              {capture.metadata.gaps.length ? (
+                <p className="text-muted-foreground text-xs">
+                  Missing audio within this source:{" "}
+                  {capture.metadata.gaps
+                    .map(
+                      (gap) =>
+                        `${formatTime(gap.start / 16000)}–${formatTime(gap.end / 16000)}`,
+                    )
+                    .join(", ")}
+                </p>
+              ) : null}
+              <details className="text-sm">
+                <summary>
+                  Source transcript · {capture.transcriptStatus}
+                </summary>
+                <p className="pt-2 whitespace-pre-wrap">
+                  {transcriptText(capture) ||
+                    (capture.transcriptStatus === "ready"
+                      ? "No speech was returned for this source."
+                      : capture.transcriptStatus === "error"
+                        ? "Source transcription failed. Original audio is retained."
+                        : "Source transcription is pending. Original audio is retained.")}
+                </p>
+              </details>
+              <RecordingAudio
+                userId={userId}
+                organizationId={organizationId}
+                occurrenceId={occurrenceId}
+                source={capture}
+              />
+            </li>
+          ))}
+      </ul>
       <Button
         variant="outline"
         onClick={() =>
@@ -307,12 +304,12 @@ function RecordingAudio({
   userId,
   organizationId,
   occurrenceId,
-  revision,
+  source,
 }: {
   userId: string;
   organizationId: string;
   occurrenceId: string;
-  revision: SharedRecordingRevision;
+  source: SharedRecordingSource;
 }) {
   const auth = useAuth();
   const { getSessionForRequest } = auth;
@@ -338,21 +335,21 @@ function RecordingAudio({
       userId,
       organizationId,
       occurrenceId,
-      revision.revision,
-      revision.audioSha256,
+      source.captureId,
+      source.metadata.sha256,
       playbackId,
     ],
     queryFn: async ({ signal }) => {
       const session = await getSessionForRequest();
       if (!session || session.user.id !== userId)
         throw new Error("Account changed.");
-      const blob = await downloadSharedRecordingAudio(
+      const blob = await downloadSharedRecordingSource(
         {
           userId,
           organizationId,
           occurrenceId,
-          revision: revision.revision,
-          audioSha256: revision.audioSha256,
+          captureId: source.captureId,
+          sha256: source.metadata.sha256,
           accessToken: session.access_token,
         },
         signal,
@@ -365,6 +362,7 @@ function RecordingAudio({
       resource.current.url = url;
       return url;
     },
+    enabled: false,
     retry: false,
     gcTime: 0,
     staleTime: Infinity,
@@ -398,8 +396,12 @@ function RecordingAudio({
     >
       <track kind="captions" />
     </audio>
+  ) : audio.isFetching ? (
+    <p className="text-muted-foreground text-sm">Loading source audio…</p>
   ) : (
-    <p className="text-muted-foreground text-sm">Loading shared audio…</p>
+    <Button variant="outline" onClick={() => void audio.refetch()}>
+      Load audio
+    </Button>
   );
 }
 
@@ -415,7 +417,9 @@ function ErrorMessage({ error, retry }: { error: Error; retry: () => void }) {
 }
 
 function formatTime(seconds: number) {
-  return `${Math.floor(seconds / 60)}:${Math.floor(seconds % 60)
+  const sign = seconds < 0 ? "−" : "";
+  seconds = Math.abs(seconds);
+  return `${sign}${Math.floor(seconds / 60)}:${Math.floor(seconds % 60)
     .toString()
     .padStart(2, "0")}`;
 }

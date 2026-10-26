@@ -101,5 +101,7 @@ current organization membership on each request. Optional
 `ANARLOG_SHARED_RECORDINGS_TRANSCRIPTION_URL` and
 `ANARLOG_SHARED_RECORDINGS_TRANSCRIPTION_MODEL` configure an OpenAI-compatible
 JSON endpoint; `ANARLOG_SHARED_RECORDINGS_TRANSCRIPTION_KEY` is optional. Without
-an endpoint, recordings remain pending. No extra listener or Supabase schema is
-required; existing recording files and revisions retain their format.
+an endpoint, source transcripts remain pending. Each immutable uploaded audio source
+has its own cached transcript, capture identity, and verified meeting identity.
+There is no audio stitching or transcript consolidation. No extra listener or
+Supabase schema is required; existing files and historical revisions stay readable.

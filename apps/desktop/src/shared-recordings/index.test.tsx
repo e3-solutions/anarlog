@@ -28,8 +28,9 @@ vi.mock("./settings", () => ({
   SharedRecordingPreferences: () => null,
   SharedRecordingQueue: () => null,
 }));
-vi.mock("./client", () => ({
-  downloadSharedRecordingAudio: mocks.downloadAudio,
+vi.mock("./client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./client")>()),
+  downloadSharedRecordingSource: mocks.downloadAudio,
   readSharedRecordingAccount: async (token: string) => ({
     userId: token,
     workspaces: [
@@ -46,12 +47,9 @@ vi.mock("./client", () => ({
         durationFrames: 16000,
       },
       captures: [],
-      current: null,
-      inputsChanged: false,
     },
   ],
   readSharedRecording: mocks.readRecording,
-  transcriptText: () => "",
 }));
 
 import { SharedRecordingsAccount } from "./index";
@@ -59,20 +57,30 @@ import { SharedRecordingsAccount } from "./index";
 beforeEach(() => {
   mocks.readRecording.mockResolvedValue({
     occurrence: { provider: "slack_huddle" },
-    captures: [],
-    inputsChanged: false,
-    current: {
-      revision: "revision-one",
-      number: 1,
-      audioSha256: "checksum",
+    captures: ["source-one", "source-two"].map((captureId, index) => ({
+      captureId,
+      deleted: false,
+      frameCount: 16000,
       transcriptStatus: "ready",
-      transcript: null,
-      manifest: {
-        duration_frames: 16000,
-        sample_rate: 16000,
-        selections: [],
+      transcript: {
+        provider: "asr",
+        model: "model",
+        result: {
+          results: {
+            channels: [
+              { alternatives: [{ transcript: "Original source decision." }] },
+            ],
+          },
+        },
       },
-    },
+      metadata: {
+        uploaderId: index ? "second-contributor" : "first-contributor",
+        segmentSequence: 0,
+        sha256: captureId,
+        offsetFrames: index * 16000,
+        gaps: [],
+      },
+    })),
   });
   vi.stubGlobal(
     "URL",
@@ -113,6 +121,9 @@ it("cancels the previous account's audio and removes its recordings when account
   });
   const view = renderAccount();
   fireEvent.click(await screen.findByText("conferenceRecords/account-one"));
+  fireEvent.click(
+    (await screen.findAllByRole("button", { name: "Load audio" }))[0],
+  );
   await waitFor(() => expect(signal).toBeDefined());
   mocks.userId = "account-two";
   view.rerender(view.content());
@@ -123,15 +134,23 @@ it("cancels the previous account's audio and removes its recordings when account
   view.client.clear();
 });
 
-it("shows media delivery failures and reloads shared audio when retried", async () => {
+it("shows original source transcripts and separate players, and retries failed source audio", async () => {
   mocks.downloadAudio.mockResolvedValue(
     new Blob(["RIFF"], { type: "audio/wav" }),
   );
   const view = renderAccount();
   fireEvent.click(await screen.findByText("conferenceRecords/account-one"));
+  fireEvent.click(
+    (await screen.findAllByRole("button", { name: "Load audio" }))[0],
+  );
   await waitFor(() =>
     expect(view.container.querySelector("audio")).toBeTruthy(),
   );
+  expect(
+    screen.getByRole("heading", { name: "Original audio and transcripts" }),
+  ).toBeTruthy();
+  fireEvent.click(screen.getAllByText("Source transcript · ready")[0]);
+  expect(screen.getAllByText("Original source decision.")[0]).toBeTruthy();
   const audio = view.container.querySelector("audio")!;
   Object.defineProperty(audio, "error", { value: { code: 4 } });
   fireEvent.error(audio);
@@ -141,6 +160,10 @@ it("shows media delivery failures and reloads shared audio when retried", async 
   await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   await waitFor(() =>
     expect(view.container.querySelector("audio")).toBeTruthy(),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Load audio" }));
+  await waitFor(() =>
+    expect(view.container.querySelectorAll("audio")).toHaveLength(2),
   );
   view.unmount();
   view.client.clear();

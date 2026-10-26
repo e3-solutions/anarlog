@@ -7,11 +7,11 @@ edition = "2024"
 anlg-api-auth = { workspace = true }
 anlg-api-nango = { workspace = true }
 anlg-http = { workspace = true }
-anlg-shared-recording = { workspace = true }
 anyhow = { workspace = true }
 axum = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }
+hound = { workspace = true }
 reqwest = { workspace = true, features = ["json", "multipart", "query", "stream"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

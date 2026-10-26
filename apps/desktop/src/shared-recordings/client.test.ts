@@ -8,7 +8,7 @@ vi.mock("~/env", () => ({
 }));
 
 import {
-  downloadSharedRecordingAudio,
+  downloadSharedRecordingSource,
   readSharedRecordingAccount,
 } from "./client";
 
@@ -29,8 +29,8 @@ it("plays only complete checksum-verified audio for the current account and reje
     userId: "user",
     organizationId: "org",
     occurrenceId: "meeting",
-    revision: "revision",
-    audioSha256: checksum,
+    captureId: "source",
+    sha256: checksum,
     accessToken: "token",
   };
   let owner = "user";
@@ -40,7 +40,7 @@ it("plays only complete checksum-verified audio for the current account and reje
       ? Response.json({ userId: owner, workspaces: [], connections: [] })
       : audio(),
   );
-  const result = await downloadSharedRecordingAudio(
+  const result = await downloadSharedRecordingSource(
     input,
     new AbortController().signal,
   );
@@ -49,26 +49,26 @@ it("plays only complete checksum-verified audio for the current account and reje
 
   audio = () => new Response("tampered");
   await expect(
-    downloadSharedRecordingAudio(input, new AbortController().signal),
+    downloadSharedRecordingSource(input, new AbortController().signal),
   ).rejects.toThrow("checksum mismatch");
   audio = () =>
     new Response("oversized", {
       headers: { "content-length": String(512 * 1024 * 1024 + 1) },
     });
   await expect(
-    downloadSharedRecordingAudio(input, new AbortController().signal),
+    downloadSharedRecordingSource(input, new AbortController().signal),
   ).rejects.toThrow("playback size limit");
   audio = () => new Response(new Uint8Array());
   await expect(
-    downloadSharedRecordingAudio(input, new AbortController().signal),
+    downloadSharedRecordingSource(input, new AbortController().signal),
   ).rejects.toThrow("empty");
   audio = () => new Response("forbidden", { status: 403 });
   await expect(
-    downloadSharedRecordingAudio(input, new AbortController().signal),
+    downloadSharedRecordingSource(input, new AbortController().signal),
   ).rejects.toThrow("does not have access");
   owner = "other-user";
   await expect(
-    downloadSharedRecordingAudio(input, new AbortController().signal),
+    downloadSharedRecordingSource(input, new AbortController().signal),
   ).rejects.toThrow("Account does not match");
 
   mocks.fetch.mockResolvedValueOnce(new Response("Not found", { status: 404 }));
@@ -79,7 +79,7 @@ it("plays only complete checksum-verified audio for the current account and reje
   const before = new AbortController();
   before.abort();
   await expect(
-    downloadSharedRecordingAudio(input, before.signal),
+    downloadSharedRecordingSource(input, before.signal),
   ).rejects.toThrow();
   const pending = new AbortController();
   let finish!: (response: Response) => void;
@@ -89,7 +89,7 @@ it("plays only complete checksum-verified audio for the current account and reje
         finish = resolve;
       }),
   );
-  const canceled = downloadSharedRecordingAudio(input, pending.signal);
+  const canceled = downloadSharedRecordingSource(input, pending.signal);
   pending.abort();
   finish(Response.json({ userId: "user", workspaces: [], connections: [] }));
   await expect(canceled).rejects.toThrow();
