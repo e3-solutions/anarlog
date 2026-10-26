@@ -1,4 +1,3 @@
-import { Trans } from "@lingui/react/macro";
 import { lazy, Suspense, useState } from "react";
 
 import { Users } from "@anlg/ui/components/icons";
@@ -28,19 +27,15 @@ export function SharedRecordingsLauncher() {
         onClick={() => setOpen(true)}
       >
         <Users className="size-4" />
-        <Trans>Organization recordings</Trans>
+        Organization recordings
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="flex h-[85vh] max-w-5xl flex-col overflow-hidden">
           <DialogHeader>
-            <DialogTitle>
-              <Trans>Organization recordings</Trans>
-            </DialogTitle>
+            <DialogTitle>Organization recordings</DialogTitle>
             <DialogDescription>
-              <Trans>
-                One shared recording and transcript for each meeting. Local
-                recording continues independently.
-              </Trans>
+              One shared recording and transcript for each meeting. Local
+              recording continues independently.
             </DialogDescription>
           </DialogHeader>
           {open ? (

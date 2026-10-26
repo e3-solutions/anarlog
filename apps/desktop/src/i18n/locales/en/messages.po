@@ -784,17 +784,9 @@ msgstr "Audio available"
 msgid "Audio file retention"
 msgstr "Audio file retention"
 
-#: src/shared-recordings/index.tsx
-msgid "Audio is being collected. No canonical recording has been published yet."
-msgstr "Audio is being collected. No canonical recording has been published yet."
-
 #: src/session-sharing/attachment-controls.tsx
 msgid "Audio is not available on this device."
 msgstr "Audio is not available on this device."
-
-#: src/shared-recordings/index.tsx
-msgid "Audio sources and gaps"
-msgstr "Audio sources and gaps"
 
 #: src/lock/screen.tsx
 msgid "Authenticate to continue."
@@ -823,14 +815,6 @@ msgstr "Auto-add future meetings?"
 #: src/settings/automations/index.tsx
 msgid "Automate what happens before, during, or after meetings based on the conditions you choose."
 msgstr "Automate what happens before, during, or after meetings based on the conditions you choose."
-
-#: src/shared-recordings/settings.tsx
-msgid "Automatic sharing is off"
-msgstr "Automatic sharing is off"
-
-#: src/shared-recordings/settings.tsx
-msgid "Automatic sharing is on for this organization"
-msgstr "Automatic sharing is on for this organization"
 
 #: src/settings/general/app-settings.tsx
 msgid "Automatically install updates"
@@ -1575,14 +1559,6 @@ msgstr "Connect Google Calendar"
 msgid "Connect Google Drive"
 msgstr "Connect Google Drive"
 
-#: src/shared-recordings/settings.tsx
-msgid "Connect Google Meet"
-msgstr "Connect Google Meet"
-
-#: src/shared-recordings/settings.tsx
-msgid "Connect Google Meet or Slack before enabling sharing."
-msgstr "Connect Google Meet or Slack before enabling sharing."
-
 #: src/auth/connect-local-library-dialog.tsx
 #: src/auth/context.tsx
 msgid "Connect library"
@@ -1606,7 +1582,6 @@ msgstr "Connect Outlook"
 
 #: src/session-sharing/delivery-panel.tsx
 #: src/settings/automations/starter-config.tsx
-#: src/shared-recordings/settings.tsx
 msgid "Connect Slack"
 msgstr "Connect Slack"
 
@@ -2232,10 +2207,6 @@ msgstr "Developers"
 msgid "Device authentication is not available on this computer."
 msgstr "Device authentication is not available on this computer."
 
-#: src/shared-recordings/index.tsx
-msgid "Device clocks are timing hints. Another person's audio fills gaps only when overlapping audio confirms alignment. Unresolved gaps remain silent."
-msgstr "Device clocks are timing hints. Another person's audio fills gaps only when overlapping audio confirms alignment. Unresolved gaps remain silent."
-
 #: src/settings/sync/index.tsx
 msgid "Device limit reached"
 msgstr "Device limit reached"
@@ -2433,10 +2404,6 @@ msgstr "Enable Cloud API & Connectors"
 #: src/settings/dictation.tsx
 msgid "Enable dictation"
 msgstr "Enable dictation"
-
-#: src/shared-recordings/settings.tsx
-msgid "Enable sharing"
-msgstr "Enable sharing"
 
 #: src/settings/automations/index.tsx
 #: src/settings/automations/workflow-builder.tsx
@@ -3404,21 +3371,9 @@ msgstr "Loading devices"
 msgid "Loading edit…"
 msgstr "Loading edit…"
 
-#: src/shared-recordings/index.tsx
-msgid "Loading meetings…"
-msgstr "Loading meetings…"
-
 #: src/settings/ai/shared/model-combobox.tsx
 msgid "Loading models..."
 msgstr "Loading models..."
-
-#: src/shared-recordings/index.tsx
-msgid "Loading organizations…"
-msgstr "Loading organizations…"
-
-#: src/shared-recordings/index.tsx
-msgid "Loading recording…"
-msgstr "Loading recording…"
 
 #: src/settings/team/index.tsx
 msgid "Loading scheduled captures…"
@@ -3428,10 +3383,6 @@ msgstr "Loading scheduled captures…"
 #: src/settings/hydration-boundary.tsx
 msgid "Loading settings"
 msgstr "Loading settings"
-
-#: src/shared-recordings/index.tsx
-msgid "Loading shared audio…"
-msgstr "Loading shared audio…"
 
 #: src/settings/sync/log.tsx
 msgid "Loading sync logs"
@@ -3614,10 +3565,6 @@ msgstr "Meeting exports"
 #: src/onboarding/index.tsx
 msgid "Meeting history imported"
 msgstr "Meeting history imported"
-
-#: src/shared-recordings/settings.tsx
-msgid "Meeting identity could not be verified. Recording stays local; sharing will retry while the call is active."
-msgstr "Meeting identity could not be verified. Recording stays local; sharing will retry while the call is active."
 
 #: src/session/components/outer-header/overflow/index.tsx
 msgid "Meeting info"
@@ -3803,10 +3750,6 @@ msgstr "Need more time? Refer a friend."
 #: src/settings/automations/workflow-builder.tsx
 msgid "Needs setup"
 msgstr "Needs setup"
-
-#: src/shared-recordings/index.tsx
-msgid "New audio is waiting for processing. The published audio and transcript below belong to the same revision."
-msgstr "New audio is waiting for processing. The published audio and transcript below belong to the same revision."
 
 #: src/sidebar/automations.tsx
 msgid "New automation"
@@ -4037,10 +3980,6 @@ msgstr "No results found."
 msgid "No shared notes"
 msgstr "No shared notes"
 
-#: src/shared-recordings/index.tsx
-msgid "No shared recordings yet. Enable sharing before joining a supported meeting."
-msgstr "No shared recordings yet. Enable sharing before joining a supported meeting."
-
 #: src/settings/stats/insights.tsx
 msgid "No single busiest day"
 msgstr "No single busiest day"
@@ -4173,10 +4112,6 @@ msgstr "On-device models can take a few minutes to warm up before text appears."
 msgid "On-device transcription, recordings, and your own keys."
 msgstr "On-device transcription, recordings, and your own keys."
 
-#: src/shared-recordings/launcher.tsx
-msgid "One shared recording and transcript for each meeting. Local recording continues independently."
-msgstr "One shared recording and transcript for each meeting. Local recording continues independently."
-
 #: src/folders/folder-editor.tsx
 #: src/settings/general/default-share-access.tsx
 msgid "Only me"
@@ -4194,10 +4129,6 @@ msgstr "Only public repositories are supported."
 #: src/settings/todo/provider-content.tsx
 msgid "Only sync items from this {0}."
 msgstr "Only sync items from this {0}."
-
-#: src/shared-recordings/settings.tsx
-msgid "Only verified Google Meet and Slack huddle recordings are shared. Original audio stays local when offline; pending uploads retry after reconnecting."
-msgstr "Only verified Google Meet and Slack huddle recordings are shared. Original audio stays local when offline; pending uploads retry after reconnecting."
 
 #: src/calendar/components/apple/permission.tsx
 #: src/task/resource-view.tsx
@@ -4326,17 +4257,12 @@ msgid "Ordering, {orderingLabel}"
 msgstr "Ordering, {orderingLabel}"
 
 #: src/contacts/details.tsx
-#: src/shared-recordings/index.tsx
 msgid "Organization"
 msgstr "Organization"
 
 #: src/contacts/organization-details.tsx
 msgid "Organization name"
 msgstr "Organization name"
-
-#: src/shared-recordings/launcher.tsx
-msgid "Organization recordings"
-msgstr "Organization recordings"
 
 #: src/settings/referrals.tsx
 msgid "Original offer: {amount} off your subscription after your friend's first payment."
@@ -4728,10 +4654,6 @@ msgstr "Recording not found. It may have been deleted."
 msgid "Recording status prompts"
 msgstr "Recording status prompts"
 
-#: src/shared-recordings/settings.tsx
-msgid "recordings waiting to share"
-msgstr "recordings waiting to share"
-
 #: src/main/windows-title-bar.tsx
 msgid "Redo"
 msgstr "Redo"
@@ -4741,7 +4663,6 @@ msgid "Refer friends, get a month free"
 msgstr "Refer friends, get a month free"
 
 #: src/settings/referrals.tsx
-#: src/shared-recordings/index.tsx
 msgid "Refresh"
 msgstr "Refresh"
 
@@ -5011,7 +4932,6 @@ msgstr "Retention (days)"
 #: src/settings/general/storage/legacy-cleanup.tsx
 #: src/settings/sync/index.tsx
 #: src/settings/sync/log.tsx
-#: src/shared-recordings/index.tsx
 #: src/sidebar/toast/registry.tsx
 msgid "Retry"
 msgstr "Retry"
@@ -5028,10 +4948,6 @@ msgstr "Retry permission check: {title}"
 msgid "Retry setup"
 msgstr "Retry setup"
 
-#: src/shared-recordings/settings.tsx
-msgid "Retry uploads"
-msgstr "Retry uploads"
-
 #: src/session/components/pending-proposals-banner.tsx
 msgid "Review memo"
 msgstr "Review memo"
@@ -5043,10 +4959,6 @@ msgstr "Review summary"
 #: src/settings/team/index.tsx
 msgid "Review transfer"
 msgstr "Review transfer"
-
-#: src/shared-recordings/index.tsx
-msgid "Revision"
-msgstr "Revision"
 
 #: src/settings/developers/api-key-row.tsx
 msgid "Revoke"
@@ -5263,10 +5175,6 @@ msgstr "See all folders"
 #: src/session/components/note-input/template-picker.tsx
 msgid "See all templates"
 msgstr "See all templates"
-
-#: src/shared-recordings/index.tsx
-msgid "Select a meeting to play its shared recording and read its transcript."
-msgstr "Select a meeting to play its shared recording and read its transcript."
 
 #: src/settings/ai/shared/model-combobox.tsx
 #: src/settings/ai/stt/select.tsx
@@ -5508,17 +5416,9 @@ msgstr "Shares (30d)"
 msgid "Sharing domain"
 msgstr "Sharing domain"
 
-#: src/shared-recordings/settings.tsx
-msgid "Sharing keeps a private local copy for retries, including when local audio retention is otherwise off. Organization members can read the published shared transcript."
-msgstr "Sharing keeps a private local copy for retries, including when local audio retention is otherwise off. Organization members can read the published shared transcript."
-
 #: src/session-sharing/management-panel.tsx
 msgid "Sharing paused to protect your edits"
 msgstr "Sharing paused to protect your edits"
-
-#: src/shared-recordings/settings.tsx
-msgid "Sharing settings could not be saved. Local recording is unaffected."
-msgstr "Sharing settings could not be saved. Local recording is unaffected."
 
 #: src/sidebar/timeline/item.tsx
 msgid "Show All Recurring Events"
@@ -5609,7 +5509,6 @@ msgstr "Show words in the floating panel as you speak. Uses a live connection to
 #: src/settings/referrals.tsx
 #: src/settings/sync/index.tsx
 #: src/shared-notes/index.tsx
-#: src/shared-recordings/index.tsx
 #: src/sidebar/toast/registry.tsx
 msgid "Sign in"
 msgstr "Sign in"
@@ -5832,10 +5731,6 @@ msgstr "Source: OpenRouter (AI routing service)"
 #: src/session/components/note-input/enhanced/enhance-error.tsx
 msgid "Source: OpenRouter or the AI model provider"
 msgstr "Source: OpenRouter or the AI model provider"
-
-#: src/shared-recordings/index.tsx
-msgid "sources"
-msgstr "sources"
 
 #: src/settings/general/notification.tsx
 msgid "Sparkle"
@@ -6220,10 +6115,6 @@ msgstr "The page you're looking for doesn't exist."
 msgid "The update download failed"
 msgstr "The update download failed"
 
-#: src/shared-recordings/settings.tsx
-msgid "The upload queue is unavailable. Local recording is unaffected."
-msgstr "The upload queue is unavailable. Local recording is unaffected."
-
 #: src/settings/appearance/theme.tsx
 msgid "Theme"
 msgstr "Theme"
@@ -6411,14 +6302,6 @@ msgstr "Turn action items into Linear issues"
 #: src/automations/starters.tsx
 msgid "Turn assigned follow-ups into Linear issue drafts."
 msgstr "Turn assigned follow-ups into Linear issue drafts."
-
-#: src/shared-recordings/settings.tsx
-msgid "Turn off"
-msgstr "Turn off"
-
-#: src/shared-recordings/settings.tsx
-msgid "Turn off sharing before connecting another provider."
-msgstr "Turn off sharing before connecting another provider."
 
 #: src/calendar/components/apple/permission.tsx
 msgid "Turn on Anarlog in System Settings → Privacy & Security → Calendars, then return here."
@@ -6902,10 +6785,6 @@ msgstr "Your {days}-day Pro trial starts now. Pro will continue automatically wh
 #: src/settings/general/account.tsx
 msgid "Your Account"
 msgstr "Your Account"
-
-#: src/shared-recordings/index.tsx
-msgid "Your account has no organization access. Ask an organization administrator to add you."
-msgstr "Your account has no organization access. Ask an organization administrator to add you."
 
 #: src/settings/stats/badge-collection.tsx
 msgid "Your badges"

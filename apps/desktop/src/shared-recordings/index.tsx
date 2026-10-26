@@ -1,4 +1,3 @@
-import { Trans } from "@lingui/react/macro";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useId, useRef, useState } from "react";
 
@@ -44,7 +43,7 @@ export function SharedRecordingsAccount() {
     return (
       <div className="p-6">
         <Button disabled={signIn.isPending} onClick={() => signIn.mutate()}>
-          <Trans>Sign in</Trans>
+          Sign in
         </Button>
       </div>
     );
@@ -57,11 +56,7 @@ export function SharedRecordingsAccount() {
       />
     );
   if (!account.data)
-    return (
-      <p className="p-6 text-sm">
-        <Trans>Loading organizations…</Trans>
-      </p>
-    );
+    return <p className="p-6 text-sm">Loading organizations…</p>;
   return (
     <OrganizationRecordings key={session.user.id} account={account.data} />
   );
@@ -95,17 +90,15 @@ function OrganizationRecordings({
   if (!account.workspaces.length) {
     return (
       <p className="p-6 text-sm">
-        <Trans>
-          Your account has no organization access. Ask an organization
-          administrator to add you.
-        </Trans>
+        Your account has no organization access. Ask an organization
+        administrator to add you.
       </p>
     );
   }
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
       <label className="flex items-center gap-3 text-sm">
-        <Trans>Organization</Trans>
+        Organization
         <select
           aria-label="Organization"
           className="bg-background rounded-md border p-2"
@@ -136,16 +129,12 @@ function OrganizationRecordings({
             />
           ) : null}
           {recordings.isPending ? (
-            <p className="text-sm">
-              <Trans>Loading meetings…</Trans>
-            </p>
+            <p className="text-sm">Loading meetings…</p>
           ) : null}
           {recordings.data?.length === 0 ? (
             <p className="text-muted-foreground text-sm">
-              <Trans>
-                No shared recordings yet. Enable sharing before joining a
-                supported meeting.
-              </Trans>
+              No shared recordings yet. Enable sharing before joining a
+              supported meeting.
             </p>
           ) : null}
           {recordings.data?.map((item) => (
@@ -171,8 +160,7 @@ function OrganizationRecordings({
               </span>
               <span className="text-muted-foreground block text-xs">
                 {item.captures.filter((capture) => !capture.deleted).length}{" "}
-                <Trans>sources</Trans> ·{" "}
-                {item.current?.transcriptStatus ?? "awaiting audio"}
+                sources · {item.current?.transcriptStatus ?? "awaiting audio"}
               </span>
             </button>
           ))}
@@ -187,10 +175,8 @@ function OrganizationRecordings({
             />
           ) : (
             <p className="text-muted-foreground p-4 text-sm">
-              <Trans>
-                Select a meeting to play its shared recording and read its
-                transcript.
-              </Trans>
+              Select a meeting to play its shared recording and read its
+              transcript.
             </p>
           )}
         </div>
@@ -232,12 +218,7 @@ function RecordingDetail({
     return (
       <ErrorMessage error={detail.error} retry={() => void detail.refetch()} />
     );
-  if (!detail.data)
-    return (
-      <p className="text-sm">
-        <Trans>Loading recording…</Trans>
-      </p>
-    );
+  if (!detail.data) return <p className="text-sm">Loading recording…</p>;
   const { current, captures, inputsChanged } = detail.data;
   return (
     <div className="space-y-4 pr-2">
@@ -248,10 +229,8 @@ function RecordingDetail({
       </h2>
       {inputsChanged ? (
         <p className="text-muted-foreground text-sm">
-          <Trans>
-            New audio is waiting for processing. The published audio and
-            transcript below belong to the same revision.
-          </Trans>
+          New audio is waiting for processing. The published audio and
+          transcript below belong to the same revision.
         </p>
       ) : null}
       {current ? (
@@ -264,7 +243,7 @@ function RecordingDetail({
             revision={current}
           />
           <p className="text-muted-foreground text-xs">
-            <Trans>Revision</Trans> {current.number} ·{" "}
+            Revision {current.number} ·{" "}
             {formatTime(
               current.manifest.duration_frames / current.manifest.sample_rate,
             )}{" "}
@@ -277,15 +256,11 @@ function RecordingDetail({
                 : "Transcription is pending. The audio is retained.")}
           </div>
           <details className="text-sm">
-            <summary className="cursor-pointer">
-              <Trans>Audio sources and gaps</Trans>
-            </summary>
+            <summary className="cursor-pointer">Audio sources and gaps</summary>
             <p className="text-muted-foreground mt-2 text-xs">
-              <Trans>
-                Device clocks are timing hints. Another person's audio fills
-                gaps only when overlapping audio confirms alignment. Unresolved
-                gaps remain silent.
-              </Trans>
+              Device clocks are timing hints. Another person's audio fills gaps
+              only when overlapping audio confirms alignment. Unresolved gaps
+              remain silent.
             </p>
             <ul className="mt-2 space-y-1 text-xs">
               {current.manifest.selections.map((selection) => (
@@ -310,10 +285,8 @@ function RecordingDetail({
         </>
       ) : (
         <p className="text-muted-foreground text-sm">
-          <Trans>
-            Audio is being collected. No canonical recording has been published
-            yet.
-          </Trans>
+          Audio is being collected. No canonical recording has been published
+          yet.
         </p>
       )}
       <Button
@@ -324,7 +297,7 @@ function RecordingDetail({
           })
         }
       >
-        <Trans>Refresh</Trans>
+        Refresh
       </Button>
     </div>
   );
@@ -426,9 +399,7 @@ function RecordingAudio({
       <track kind="captions" />
     </audio>
   ) : (
-    <p className="text-muted-foreground text-sm">
-      <Trans>Loading shared audio…</Trans>
-    </p>
+    <p className="text-muted-foreground text-sm">Loading shared audio…</p>
   );
 }
 
@@ -437,7 +408,7 @@ function ErrorMessage({ error, retry }: { error: Error; retry: () => void }) {
     <div role="alert" className="space-y-2 p-3 text-sm">
       <p>{error.message}</p>
       <Button variant="outline" size="sm" onClick={retry}>
-        <Trans>Retry</Trans>
+        Retry
       </Button>
     </div>
   );

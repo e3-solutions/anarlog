@@ -1,4 +1,3 @@
-import { Trans } from "@lingui/react/macro";
 import {
   skipToken,
   useMutation,
@@ -53,31 +52,25 @@ export function SharedRecordingPreferences({
     <div className="flex items-start justify-between gap-4 rounded-lg border p-3">
       <div className="space-y-1 text-sm">
         <p className="font-medium">
-          {enabled ? (
-            <Trans>Automatic sharing is on for this organization</Trans>
-          ) : (
-            <Trans>Automatic sharing is off</Trans>
-          )}
+          {enabled
+            ? "Automatic sharing is on for this organization"
+            : "Automatic sharing is off"}
         </p>
         <p className="text-muted-foreground">
-          <Trans>
-            Only verified Google Meet and Slack huddle recordings are shared.
-            Original audio stays local when offline; pending uploads retry after
-            reconnecting.
-          </Trans>
+          Only verified Google Meet and Slack huddle recordings are shared.
+          Original audio stays local when offline; pending uploads retry after
+          reconnecting.
         </p>
         <p className="text-muted-foreground">
-          <Trans>
-            Sharing keeps a private local copy for retries, including when local
-            audio retention is otherwise off. Organization members can read the
-            published shared transcript.
-          </Trans>
+          Sharing keeps a private local copy for retries, including when local
+          audio retention is otherwise off. Organization members can read the
+          published shared transcript.
         </p>
         {!account.connections.some(
           (connection) => connection.status === "connected",
         ) ? (
           <p className="text-muted-foreground">
-            <Trans>Connect Google Meet or Slack before enabling sharing.</Trans>
+            Connect Google Meet or Slack before enabling sharing.
           </p>
         ) : null}
         <div className="flex gap-2">
@@ -99,11 +92,9 @@ export function SharedRecordingPreferences({
                   })
                 }
               >
-                {integrationId === "google-meet" ? (
-                  <Trans>Connect Google Meet</Trans>
-                ) : (
-                  <Trans>Connect Slack</Trans>
-                )}
+                {integrationId === "google-meet"
+                  ? "Connect Google Meet"
+                  : "Connect Slack"}
               </Button>
             );
           })}
@@ -118,15 +109,12 @@ export function SharedRecordingPreferences({
             ),
         ) ? (
           <p className="text-muted-foreground">
-            <Trans>Turn off sharing before connecting another provider.</Trans>
+            Turn off sharing before connecting another provider.
           </p>
         ) : null}
         {config.error || update.error ? (
           <p role="alert">
-            <Trans>
-              Sharing settings could not be saved. Local recording is
-              unaffected.
-            </Trans>
+            Sharing settings could not be saved. Local recording is unaffected.
           </p>
         ) : null}
       </div>
@@ -142,7 +130,7 @@ export function SharedRecordingPreferences({
         }
         onClick={() => update.mutate()}
       >
-        {enabled ? <Trans>Turn off</Trans> : <Trans>Enable sharing</Trans>}
+        {enabled ? "Turn off" : "Enable sharing"}
       </Button>
     </div>
   );
@@ -181,22 +169,15 @@ export function SharedRecordingQueue({ userId }: { userId: string }) {
   if (queue.error)
     return (
       <p role="alert" className="text-sm">
-        <Trans>
-          The upload queue is unavailable. Local recording is unaffected.
-        </Trans>
+        The upload queue is unavailable. Local recording is unaffected.
       </p>
     );
   if (!pending.length)
     return observation.error || observation.data?.blocked ? (
       <p role="status" className="text-muted-foreground text-sm">
-        {observation.data?.quarantined ? (
-          "Meeting activity could not be verified throughout this recording. Original audio stays local; start a new recording in a new note with one verified call to share."
-        ) : (
-          <Trans>
-            Meeting identity could not be verified. Recording stays local;
-            sharing will retry while the call is active.
-          </Trans>
-        )}
+        {observation.data?.quarantined
+          ? "Meeting activity could not be verified throughout this recording. Original audio stays local; start a new recording in a new note with one verified call to share."
+          : "Meeting identity could not be verified. Recording stays local; sharing will retry while the call is active."}
       </p>
     ) : null;
   return (
@@ -206,9 +187,7 @@ export function SharedRecordingQueue({ userId }: { userId: string }) {
     >
       <span>
         {retryable.length > 0 ? (
-          <>
-            {retryable.length} <Trans>recordings waiting to share</Trans>
-          </>
+          <>{retryable.length} recordings waiting to share</>
         ) : null}
         {retryable.some((job) => job.state === "error")
           ? " · upload will retry"
@@ -234,7 +213,7 @@ export function SharedRecordingQueue({ userId }: { userId: string }) {
           disabled={retry.isPending}
           onClick={() => retry.mutate()}
         >
-          <Trans>Retry uploads</Trans>
+          Retry uploads
         </Button>
       ) : null}
     </div>
