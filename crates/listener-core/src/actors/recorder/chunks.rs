@@ -59,9 +59,9 @@ impl Encoder {
         Ok(bytes)
     }
 
-    fn finish(mut self) -> Result<Vec<u8>, ActorProcessingErr> {
+    fn finish(self) -> Result<Vec<u8>, ActorProcessingErr> {
         let mut bytes = Vec::new();
-        self.encoder.flush(&mut bytes)?;
+        self.encoder.finish(&mut bytes)?;
         Ok(bytes)
     }
 }

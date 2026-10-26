@@ -98,6 +98,7 @@ jobs:
       - uses: ./.github/actions/rust_install
         with:
           platform: ${{ matrix.platform }}
+          cache-on-failure: ${{ inputs.build_macos_app || false }}
       - if: github.event_name == 'workflow_dispatch' || inputs.rebuild_cloudsync
         run: crates/cloudsync/scripts/rebuild-macos.sh
       - if: github.event_name == 'workflow_dispatch' || inputs.rebuild_cloudsync
@@ -216,8 +217,10 @@ jobs:
             plugins/db/permissions/schemas/schema.json
 
       - name: Build normal macOS QA app
-        if: github.event_name == 'workflow_dispatch' && inputs.build_macos_app
+        id: qa_app
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.build_macos_app }}
         env:
+          VALIDATION_STATUS: ${{ job.status }}
           CARGO_TARGET_DIR: ${{ github.workspace }}/target
           VITE_API_URL: ${{ vars.ANARLOG_QA_API_URL }}
           VITE_APP_URL: ${{ vars.ANARLOG_QA_APP_URL }}
@@ -241,12 +244,12 @@ jobs:
           app="$target_dir/debug/bundle/macos/Anarlog Dev.app"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = com.hyprnote.dev
           ditto -c -k --keepParent "$app" "$artifact_dir/Anarlog-Dev.zip"
-          jq -n --arg source "$GITHUB_SHA" --arg run "$GITHUB_RUN_ID" --arg version "$APP_VERSION" \
-            '{sourceSha:$source,runId:$run,appVersion:$version,bundleId:"com.hyprnote.dev",target:"aarch64-apple-darwin",profile:"debug",signed:false}' \
+          jq -n --arg source "$GITHUB_SHA" --arg run "$GITHUB_RUN_ID" --arg version "$APP_VERSION" --arg validation "$VALIDATION_STATUS" \
+            '{validationStatus:$validation,sourceSha:$source,runId:$run,appVersion:$version,bundleId:"com.hyprnote.dev",target:"aarch64-apple-darwin",profile:"debug",signed:false}' \
             > "$artifact_dir/BUILD.json"
           (cd "$artifact_dir" && shasum -a 256 Anarlog-Dev.zip BUILD.json > SHA256SUMS)
       - name: Upload normal macOS QA app
-        if: github.event_name == 'workflow_dispatch' && inputs.build_macos_app
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.build_macos_app && steps.qa_app.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: anarlog-dev-macos-${{ github.sha }}

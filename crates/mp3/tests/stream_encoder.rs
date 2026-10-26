@@ -31,7 +31,7 @@ fn mono_stream_encoder_f32_roundtrips_across_multiple_chunks() -> TestResult {
 }
 
 #[test]
-fn stereo_stream_encoder_flush_preserves_the_final_partial_pcm_frame() -> TestResult {
+fn stereo_stream_encoder_finish_preserves_the_final_partial_pcm_frame() -> TestResult {
     let case = Case {
         channels: 2,
         frames: 7_000,
@@ -45,7 +45,7 @@ fn stereo_stream_encoder_flush_preserves_the_final_partial_pcm_frame() -> TestRe
     encoder.encode_f32(&left[..2_048], &right[..2_048], &mut output)?;
     encoder.encode_f32(&left[2_048..5_120], &right[2_048..5_120], &mut output)?;
     encoder.encode_f32(&left[5_120..], &right[5_120..], &mut output)?;
-    encoder.flush(&mut output)?;
+    encoder.finish(&mut output)?;
 
     assert!(!output.is_empty(), "streaming encoder produced no mp3 data");
 

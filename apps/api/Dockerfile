@@ -23,8 +23,8 @@ WORKDIR /app
 COPY --from=planner /app/recipe.json recipe.json
 # cargo-chef does not include this non-workspace path dependency in its recipe.
 COPY crates/tiptap/vendor crates/tiptap/vendor
-RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
-    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+RUN --mount=type=cache,id=anarlog-api-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=anarlog-api-cargo-git,target=/usr/local/cargo/git,sharing=locked \
     cargo chef cook --release --recipe-path recipe.json -p api
 COPY Cargo.toml Cargo.lock ./
 RUN sed -i '/^members = \[/,/^\]/c\members = ["apps/api", "crates/*"]' Cargo.toml
@@ -33,11 +33,11 @@ COPY packages/pricing/src/trial-policy.json packages/pricing/src/trial-policy.js
 COPY apps/api apps/api
 ARG GH_SHA
 ENV GH_SHA=${GH_SHA}
-RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
-    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+RUN --mount=type=cache,id=anarlog-api-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=anarlog-api-cargo-git,target=/usr/local/cargo/git,sharing=locked \
     cargo clean -p progenitor-utils
-RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
-    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+RUN --mount=type=cache,id=anarlog-api-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=anarlog-api-cargo-git,target=/usr/local/cargo/git,sharing=locked \
     cargo build --locked --release -p api
 
 FROM debian:bookworm-slim AS api-runtime

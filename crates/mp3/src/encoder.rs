@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use mp3lame_encoder::{Builder as LameBuilder, DualPcm, FlushGap, MonoPcm};
+use mp3lame_encoder::{Builder as LameBuilder, DualPcm, FlushGap, FlushNoGap, MonoPcm};
 
 use crate::Error;
 
@@ -29,6 +29,11 @@ impl<M> StreamEncoder<M> {
 
     pub fn flush(&mut self, output: &mut Vec<u8>) -> Result<(), Error> {
         self.core.flush(output)
+    }
+
+    /// Finish an independent recording, including buffered tail samples and codec padding.
+    pub fn finish(mut self, output: &mut Vec<u8>) -> Result<(), Error> {
+        self.core.finish(output)
     }
 }
 
@@ -147,6 +152,14 @@ impl EncoderCore {
     }
 
     fn flush(&mut self, output: &mut Vec<u8>) -> Result<(), Error> {
+        output.reserve(mp3lame_encoder::max_required_buffer_size(0));
+        self.encoder
+            .flush_to_vec::<FlushNoGap>(output)
+            .map_err(|e| Error::LameFlush(format!("{:?}", e)))?;
+        Ok(())
+    }
+
+    fn finish(&mut self, output: &mut Vec<u8>) -> Result<(), Error> {
         output.reserve(mp3lame_encoder::max_required_buffer_size(0));
         self.encoder
             .flush_to_vec::<FlushGap>(output)

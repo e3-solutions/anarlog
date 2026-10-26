@@ -2,6 +2,10 @@ inputs:
   platform:
     required: false
     default: ""
+  cache-on-failure:
+    description: Retain compiled dependencies when validation fails
+    required: false
+    default: "false"
 runs:
   using: "composite"
   steps:
@@ -78,4 +82,5 @@ runs:
     - uses: Swatinem/rust-cache@v2
       with:
         cache-targets: "true"
+        cache-on-failure: ${{ inputs.cache-on-failure }}
         prefix-key: v0-rust${{ steps.cache-key.outputs.suffix }}
