@@ -22,6 +22,10 @@ const required = (name) => {
 const endpoint = required("E3_UPDATER_ENDPOINT");
 const publicKey = required("E3_UPDATER_PUBLIC_KEY");
 const identifier = required("E3_APP_IDENTIFIER");
+const version = required("E3_APP_VERSION");
+if (!/^\d+\.\d+\.\d+$/.test(version)) {
+  throw new Error("E3_APP_VERSION must be a semantic version");
+}
 required("TAURI_SIGNING_PRIVATE_KEY");
 
 const url = new URL(endpoint);
@@ -60,7 +64,23 @@ const config = {
   productName: "E3 Scribe",
   mainBinaryName: "e3-scribe",
   identifier,
+  version,
+  bundle: {
+    createUpdaterArtifacts: true,
+    externalBin: [
+      "binaries/char-chrome-native-host",
+      "binaries/check-permissions",
+      "resources/cli/anarlog-cli",
+    ],
+    macOS: {
+      signingIdentity: required("APPLE_SIGNING_IDENTITY"),
+      hardenedRuntime: true,
+    },
+  },
   plugins: {
+    "deep-link": {
+      desktop: { schemes: ["e3-shared-recordings-preview"] },
+    },
     updater: {
       active: true,
       endpoints: [endpoint],
