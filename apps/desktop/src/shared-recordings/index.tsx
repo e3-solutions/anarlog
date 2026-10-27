@@ -85,7 +85,7 @@ function OrganizationRecordings({
   settings: boolean;
 }) {
   const [organizationId, setOrganizationId] = useState(
-    account.workspaces[0]?.id ?? "",
+    account.policy?.workspaceId ?? account.workspaces[0]?.id ?? "",
   );
   const [selected, setSelected] = useState<string | null>(null);
   const organizationPickerId = useId();

@@ -46,6 +46,13 @@ const accountSchema = z.object({
       role: z.string(),
     }),
   ),
+  policy: z
+    .object({
+      workspaceId: z.string(),
+      autoRecordMeetings: z.boolean(),
+      autoShareRecordings: z.boolean(),
+    })
+    .optional(),
   connections: z.array(
     z.object({
       integrationId: z.string(),
@@ -64,11 +71,13 @@ async function request(
   path: string,
   accessToken: string,
   signal?: AbortSignal,
+  method: "GET" | "POST" = "GET",
 ) {
   signal?.throwIfAborted();
   const response = await fetch(
     `${env.VITE_API_URL.replace(/\/$/, "")}${path}`,
     {
+      method,
       headers: { Authorization: `Bearer ${accessToken}` },
       redirect: "error",
       signal,
@@ -76,6 +85,11 @@ async function request(
   );
   signal?.throwIfAborted();
   if (!response.ok) {
+    if (
+      path === "/v1/shared-recordings/enroll" &&
+      [403, 404].includes(response.status)
+    )
+      return response;
     if (response.status === 404 && path === "/v1/shared-recordings/me") {
       throw new Error("The meeting library is not configured on this server.");
     }
@@ -101,6 +115,17 @@ export async function readSharedRecordingAccount(
       await request("/v1/shared-recordings/me", accessToken, signal)
     ).json(),
   );
+}
+
+export async function enrollSharedRecordingAccount(accessToken: string) {
+  const response = await request(
+    "/v1/shared-recordings/enroll",
+    accessToken,
+    undefined,
+    "POST",
+  );
+  if (!response.ok) return readSharedRecordingAccount(accessToken);
+  return accountSchema.parse(await response.json());
 }
 
 export async function listSharedRecordings(

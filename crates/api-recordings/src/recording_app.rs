@@ -17,6 +17,7 @@ use crate::{
     recording_identity::{AdmissionRequest, RecordingIdentityResolver, ResolvedOccurrence},
     recording_members::{
         MemberError, OrganizationMembership, ProviderConnection, RecordingMemberships,
+        RecordingPolicy,
     },
     recording_transcription::RecordingProcessor,
     shared_recordings::{
@@ -32,8 +33,9 @@ pub struct RecordingAppState {
     pub processor: Option<Arc<RecordingProcessor>>,
 }
 
-const PATHS: [&str; 8] = [
+const PATHS: [&str; 9] = [
     "/v1/shared-recordings/me",
+    "/v1/shared-recordings/enroll",
     "/v1/orgs/{workspace}/shared-recordings",
     "/v1/orgs/{workspace}/shared-recordings/admit",
     "/v1/orgs/{workspace}/shared-recordings/{id}",
@@ -52,6 +54,7 @@ pub fn forwarding_router() -> Router {
 pub fn router(state: RecordingAppState, auth: AuthState) -> Router {
     let [
         account,
+        enrollment,
         library_path,
         admission,
         occurrence,
@@ -62,6 +65,7 @@ pub fn router(state: RecordingAppState, auth: AuthState) -> Router {
     ] = PATHS;
     Router::new()
         .route(account, get(me))
+        .route(enrollment, post(enroll))
         .route(library_path, get(library))
         .route(admission, post(admit))
         .route(occurrence, get(manifest).delete(delete_occurrence))
@@ -111,6 +115,8 @@ struct Account {
     user_id: String,
     workspaces: Vec<OrganizationMembership>,
     connections: Vec<ProviderConnection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy: Option<RecordingPolicy>,
 }
 async fn me(
     State(state): State<RecordingAppState>,
@@ -118,11 +124,21 @@ async fn me(
 ) -> Result<Json<Account>, MemberError> {
     let workspaces = state.members.memberships(&auth).await?;
     let connections = state.members.connections(&auth).await?;
+    let policy = state.members.policy(&auth, &workspaces).await?;
     Ok(Json(Account {
         user_id: auth.claims.sub,
         workspaces,
         connections,
+        policy,
     }))
+}
+
+async fn enroll(
+    State(state): State<RecordingAppState>,
+    Extension(auth): Extension<AuthContext>,
+) -> Result<Json<Account>, MemberError> {
+    state.members.enroll(&auth).await?;
+    me(State(state), Extension(auth)).await
 }
 
 #[derive(Serialize)]

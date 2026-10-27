@@ -5,6 +5,7 @@ import { commands as detectCommands } from "@anlg/plugin-detect";
 import { useMountEffect } from "@anlg/ui/hooks/use-mount-effect";
 
 import { useSharingConfiguration } from "./configuration";
+import { SharedRecordingEnrollment } from "./enrollment";
 import { flushSharedRecordings, observeSharedRecording } from "./native";
 
 import { useAuth } from "~/auth";
@@ -16,10 +17,16 @@ export function SharedRecordingLifecycle() {
   const { session } = useAuth();
   if (!session || session.user.is_anonymous === true) return null;
   return (
-    <ActiveSharedRecordingLifecycle
-      key={session.user.id}
-      userId={session.user.id}
-    />
+    <>
+      <SharedRecordingEnrollment
+        key={`enrollment:${session.user.id}`}
+        userId={session.user.id}
+      />
+      <ActiveSharedRecordingLifecycle
+        key={session.user.id}
+        userId={session.user.id}
+      />
+    </>
   );
 }
 
