@@ -16,6 +16,7 @@ import { useDismissedToasts } from "./useDismissedToasts";
 
 import { useAuth } from "~/auth";
 import { useNotifications } from "~/contexts/notifications";
+import { env } from "~/env";
 import { useDesktopUpdateControl } from "~/main/update-banner";
 import { useConfigValues } from "~/shared/config";
 import { useLatestRef } from "~/shared/hooks/useLatestRef";
@@ -74,6 +75,8 @@ export function ToastNotifications() {
 
   const isAuthenticated = !!auth?.session;
   const isAuthLoading = auth.session === undefined;
+  const isManagedRecordingApp =
+    env.VITE_E3_SCRIBE === "true" && isAuthenticated;
   const {
     current_llm_provider,
     current_llm_model,
@@ -156,6 +159,7 @@ export function ToastNotifications() {
       createToastRegistry({
         isAuthenticated,
         isAuthLoading,
+        isManagedRecordingApp,
         hasLLMConfigured,
         hasSttConfigured,
         hasProSttConfigured,
@@ -177,6 +181,7 @@ export function ToastNotifications() {
     [
       isAuthenticated,
       isAuthLoading,
+      isManagedRecordingApp,
       hasLLMConfigured,
       hasSttConfigured,
       hasProSttConfigured,

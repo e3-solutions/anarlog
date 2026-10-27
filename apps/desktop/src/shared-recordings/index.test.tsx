@@ -70,6 +70,11 @@ vi.mock("./client", async (importOriginal) => ({
         },
       ],
     },
+    {
+      occurrenceId: "someone-elses-meeting",
+      occurrence: { provider: "slack_huddle" },
+      captures: [{ deleted: false, metadata: { uploaderId: "another-user" } }],
+    },
   ],
   readSharedRecording: mocks.readRecording,
 }));
@@ -79,37 +84,41 @@ import { SharedRecordingsAccount } from "./index";
 beforeEach(() => {
   mocks.readRecording.mockImplementation(async (token: string) => ({
     occurrence: { provider: "slack_huddle" },
-    captures: ["source-one", "source-two"].map((captureId, index) => ({
-      captureId,
-      deleted: false,
-      frameCount: 16000,
-      transcriptStatus: "ready",
-      transcript: {
-        provider: "asr",
-        model: "model",
-        result: {
-          results: {
-            channels: [
-              {
-                alternatives: [
-                  { transcript: `Original source decision for ${token}.` },
-                ],
-              },
-            ],
+    captures: ["source-one", "source-two", "foreign-source"].map(
+      (captureId, index) => ({
+        captureId,
+        deleted: false,
+        frameCount: 16000,
+        transcriptStatus: "ready",
+        transcript: {
+          provider: "asr",
+          model: "model",
+          result: {
+            results: {
+              channels: [
+                {
+                  alternatives: [
+                    {
+                      transcript: `${index === 2 ? "Private teammate transcript" : `Original source decision for ${token}.`}`,
+                    },
+                  ],
+                },
+              ],
+            },
           },
         },
-      },
-      metadata: {
-        uploaderId: index ? "second-contributor" : "first-contributor",
-        deviceId: "same-device",
-        localCaptureId: "same-local-recording",
-        timingBasis: "device_clock_hint",
-        segmentSequence: 0,
-        sha256: captureId,
-        offsetFrames: index * 16000,
-        gaps: [],
-      },
-    })),
+        metadata: {
+          uploaderId: index === 2 ? "another-user" : token,
+          deviceId: "same-device",
+          localCaptureId: captureId,
+          timingBasis: "device_clock_hint",
+          segmentSequence: 0,
+          sha256: captureId,
+          offsetFrames: index * 16000,
+          gaps: [],
+        },
+      }),
+    ),
   }));
   vi.stubGlobal(
     "URL",
@@ -149,9 +158,7 @@ it("cancels the previous account's audio and removes its recordings when account
     return new Promise(() => {});
   });
   const view = renderAccount();
-  expect(
-    await screen.findByText("Meeting preview for account-one."),
-  ).toBeTruthy();
+  await screen.findByRole("button", { name: /Google Meet/ });
   fireEvent.click(
     (await screen.findAllByRole("button", { name: "Listen" }))[0],
   );
@@ -161,26 +168,32 @@ it("cancels the previous account's audio and removes its recordings when account
   expect(signal!.aborted).toBe(true);
   expect(view.container.querySelector("audio")).toBeNull();
   expect(screen.queryByText("Meeting preview for account-one.")).toBeNull();
-  expect(
-    await screen.findByText("Meeting preview for account-two."),
-  ).toBeTruthy();
-  fireEvent.click(await screen.findByRole("tab", { name: "Transcript" }));
-  expect(
-    await screen.findAllByText("Original source decision for account-two."),
-  ).toHaveLength(2);
+  await screen.findByRole("button", { name: /Google Meet/ });
+  expect(await screen.findAllByRole("button", { name: "Listen" })).toHaveLength(
+    2,
+  );
   view.client.clear();
 });
 
-it("shows original source transcripts and separate players, and retries failed source audio", async () => {
+it("shows only your audio and transcripts, and retries failed source audio", async () => {
   mocks.downloadAudio.mockResolvedValue(
     new Blob(["RIFF"], { type: "audio/wav" }),
   );
   const view = renderAccount();
-  fireEvent.click(await screen.findByRole("tab", { name: "Transcript" }));
+  expect(await screen.findAllByRole("button", { name: "Listen" })).toHaveLength(
+    2,
+  );
+  fireEvent.click(screen.getByRole("tab", { name: "Transcript" }));
   expect(
-    await screen.findAllByText("Original source decision for account-one."),
+    screen.getAllByText("Original source decision for account-one."),
   ).toHaveLength(2);
+  expect(screen.queryByText("Private teammate transcript")).toBeNull();
   fireEvent.click(screen.getByRole("tab", { name: "Recordings" }));
+  expect(
+    screen
+      .getAllByRole("navigation", { name: "Meetings" })[0]
+      .querySelectorAll("button"),
+  ).toHaveLength(1);
   fireEvent.click(
     (await screen.findAllByRole("button", { name: "Listen" }))[0],
   );
@@ -205,7 +218,7 @@ it("shows original source transcripts and separate players, and retries failed s
   view.client.clear();
 });
 
-it("groups upload parts by original recording without combining different contributors or their audio", async () => {
+it("groups your upload parts without exposing another contributor’s audio", async () => {
   const recording = await mocks.readRecording("account-one");
   const first = recording.captures[0];
   recording.captures.push({
@@ -245,10 +258,6 @@ it("groups upload parts by original recording without combining different contri
   await waitFor(() =>
     expect(view.container.querySelectorAll("audio")).toHaveLength(3),
   );
-  fireEvent.click(screen.getByRole("tab", { name: "Transcript" }));
-  expect(
-    screen.getAllByText("Original source decision for account-one."),
-  ).toHaveLength(3);
   view.unmount();
   view.client.clear();
 });

@@ -36,7 +36,7 @@ export function SharedRecordingsLauncher() {
               Meeting library
             </DialogTitle>
             <DialogDescription>
-              Meetings shared with your team.
+              Listen to your meeting recordings.
             </DialogDescription>
           </DialogHeader>
           {open ? (

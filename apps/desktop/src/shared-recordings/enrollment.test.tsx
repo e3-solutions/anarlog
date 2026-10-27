@@ -181,7 +181,7 @@ afterEach(() => {
 
 it("reviews reused connections before enabling defaults and preserves later opt-outs", async () => {
   const first = openEnrollment();
-  await screen.findByRole("button", { name: "Slack connected" });
+  await screen.findByRole("button", { name: "Google connected" });
   expect(mocks.config).toBeNull();
   expect(mocks.values.auto_start_detected_meetings).toBeUndefined();
   fireEvent.click(screen.getByRole("button", { name: "Finish setup" }));
@@ -257,7 +257,7 @@ it("abandons pending defaults when the active account changes before local confi
   expect(mocks.values).toEqual({});
 });
 
-it("requires both meeting connections and keeps Slack available after connecting Meet", async () => {
+it("finishes Google setup without a Slack connection", async () => {
   account.connections = [];
   openEnrollment();
   await screen.findByRole("dialog");
@@ -303,27 +303,12 @@ it("requires both meeting connections and keeps Slack available after connecting
   await screen.findByRole("button", { name: "Google connected" });
   expect(mocks.config).toBeNull();
   expect(mocks.values.auto_start_detected_meetings).toBeUndefined();
-  fireEvent.click(screen.getByRole("button", { name: "Connect Slack" }));
-  expect(mocks.openIntegration).toHaveBeenLastCalledWith({
-    nangoIntegrationId: "slack",
-    connectionId: undefined,
-    action: "connect",
-  });
-  account.connections = [
-    ...account.connections,
-    {
-      integrationId: "slack",
-      connectionId: "slack-consent",
-      status: "connected",
-    },
-  ];
-  await act(async () => {
-    clients[clients.length - 1].setQueryData(
-      ["shared-recordings", account.userId, "account"],
-      { ...account },
-    );
-  });
-  await screen.findByRole("button", { name: "Slack connected" });
+  expect(screen.queryByRole("button", { name: "Connect Slack" })).toBeNull();
+  expect(
+    screen
+      .getByRole("button", { name: "Finish setup" })
+      .hasAttribute("disabled"),
+  ).toBe(false);
   expect(mocks.config).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Finish setup" }));
   await waitFor(() =>

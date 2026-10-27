@@ -96,7 +96,6 @@ function ActiveEnrollment({ userId }: { userId: string }) {
   ).includes(defaultScope(userId, policy.workspaceId));
   const ready = [
     "google-meet",
-    "slack",
     ...(calendarConfigured ? [] : ["google-calendar"]),
   ].every((integrationId) =>
     account.data!.connections.some(
@@ -237,47 +236,30 @@ function ConnectionWelcome({
         <DialogHeader>
           <DialogTitle>Welcome to E3</DialogTitle>
           <DialogDescription>
-            Review your Google and Slack connections to finish E3 setup. Google
-            connects Calendar and Meet together. Supported meetings will
-            automatically record and share their original audio and transcripts
-            with E3.
+            Your Google sign-in connects Calendar and Meet. Supported meetings
+            will automatically record and save their original audio and
+            transcripts to E3’s database.
           </DialogDescription>
         </DialogHeader>
-        <div className="flex flex-wrap gap-2">
-          {(["google-meet", "slack"] as const).map((integrationId) => {
+        <Button
+          variant="outline"
+          disabled={openingAction !== null || ready}
+          onClick={() => {
             const connection = account.connections.find(
-              (item) => item.integrationId === integrationId,
+              (item) => item.integrationId === "google-meet",
             );
-            const connected =
-              connection?.status === "connected" &&
-              (integrationId !== "google-meet" ||
-                account.connections.some(
-                  (item) =>
-                    item.integrationId === "google-calendar" &&
-                    item.status === "connected",
-                ));
-            const name = integrationId === "google-meet" ? "Google" : "Slack";
-            return (
-              <Button
-                key={integrationId}
-                variant="outline"
-                disabled={openingAction !== null || connected}
-                onClick={() =>
-                  openIntegration({
-                    nangoIntegrationId: integrationId,
-                    connectionId: connection?.connectionId,
-                    action: connection ? "reconnect" : "connect",
-                  })
-                }
-              >
-                {connected ? `${name} connected` : `Connect ${name}`}
-              </Button>
-            );
-          })}
-        </div>
+            openIntegration({
+              nangoIntegrationId: "google-meet",
+              connectionId: connection?.connectionId,
+              action: connection ? "reconnect" : "connect",
+            });
+          }}
+        >
+          {ready ? "Google connected" : "Connect Google"}
+        </Button>
         <p className="text-muted-foreground text-sm">
-          Existing connections are reused when you sign in. Both Google and
-          Slack must be connected to finish setup.
+          Your Google connection is reused from sign-in. No additional account
+          connection is needed.
         </p>
         <Button
           disabled={!ready || openingAction !== null}

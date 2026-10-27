@@ -18,6 +18,7 @@ type ToastRegistryEntry = {
 type ToastRegistryParams = {
   isAuthenticated: boolean;
   isAuthLoading: boolean;
+  isManagedRecordingApp: boolean;
   hasLLMConfigured: boolean;
   hasSttConfigured: boolean;
   hasProSttConfigured: boolean;
@@ -47,6 +48,7 @@ type DevtoolsToastPreviewParams = {
 export function createToastRegistry({
   isAuthenticated,
   isAuthLoading,
+  isManagedRecordingApp,
   hasLLMConfigured,
   hasSttConfigured,
   hasProSttConfigured,
@@ -170,7 +172,10 @@ export function createToastRegistry({
         },
         lifecycle: { type: "condition-bound" },
       },
-      condition: () => !hasUsableSttConfigured && !isAiTranscriptionTabActive,
+      condition: () =>
+        !isManagedRecordingApp &&
+        !hasUsableSttConfigured &&
+        !isAiTranscriptionTabActive,
     },
     {
       toast: {

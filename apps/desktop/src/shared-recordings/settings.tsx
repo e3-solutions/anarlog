@@ -41,7 +41,7 @@ export function SharedRecordingPreferences({
         connection.status === "connected",
     );
   const ready = managed
-    ? ["google-meet", "google-calendar", "slack"].every(connected)
+    ? ["google-meet", "google-calendar"].every(connected)
     : ["google-meet", "slack"].some(connected);
   const update = useMutation({
     mutationFn: () =>
@@ -64,9 +64,8 @@ export function SharedRecordingPreferences({
           {enabled ? "Automatic sharing is on" : "Automatic sharing is off"}
         </p>
         <p className="text-muted-foreground">
-          Recordings and transcripts from verified Google Meet calls and Slack
-          huddles are shared with everyone in this organization. Uploads resume
-          when you reconnect.
+          Original meeting audio and transcripts are saved to the organization’s
+          database. Uploads resume when you reconnect.
         </p>
         <p className="text-muted-foreground">
           A local audio copy is kept for upload retries, even when audio
@@ -75,12 +74,15 @@ export function SharedRecordingPreferences({
         {!ready ? (
           <p className="text-muted-foreground">
             {managed
-              ? "Connect Google and Slack to finish E3 setup. Google also connects your calendar."
+              ? "Sign in with Google to connect Meet and your calendar."
               : "Connect Google Meet or Slack to turn on sharing."}
           </p>
         ) : null}
         <div className="flex flex-wrap gap-2">
-          {(["google-meet", "slack"] as const).map((integrationId) => {
+          {(managed
+            ? (["google-meet"] as const)
+            : (["google-meet", "slack"] as const)
+          ).map((integrationId) => {
             const connection = account.connections.find(
               (connection) => connection.integrationId === integrationId,
             );

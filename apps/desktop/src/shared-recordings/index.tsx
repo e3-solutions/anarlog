@@ -105,8 +105,19 @@ function OrganizationRecordings({
     refetchInterval: 10_000,
     retry: false,
   });
+  const personalRecordings = (recordings.data ?? [])
+    .map((item) => ({
+      ...item,
+      captures: item.captures.filter(
+        (capture) => capture.metadata.uploaderId === account.userId,
+      ),
+    }))
+    .filter((item) => item.captures.some((capture) => !capture.deleted));
   const selectedOccurrenceId =
-    selected ?? recordings.data?.[0]?.occurrenceId ?? null;
+    personalRecordings.find((item) => item.occurrenceId === selected)
+      ?.occurrenceId ??
+    personalRecordings[0]?.occurrenceId ??
+    null;
   if (!account.workspaces.length) {
     return (
       <p className="p-6 text-sm">
@@ -180,12 +191,12 @@ function OrganizationRecordings({
           {recordings.isPending ? (
             <p className="text-sm">Loading meetings…</p>
           ) : null}
-          {recordings.data?.length === 0 ? (
+          {!recordings.isPending && personalRecordings.length === 0 ? (
             <p className="text-muted-foreground text-sm">
-              No meetings yet. Shared meetings will appear here.
+              Your recordings will appear here.
             </p>
           ) : null}
-          {recordings.data?.map((item) => {
+          {personalRecordings.map((item) => {
             const sources = groupRecordings(item.captures);
             return (
               <button
@@ -236,10 +247,10 @@ function OrganizationRecordings({
           ) : (
             <div className="mx-auto flex h-full max-w-sm flex-col justify-center gap-2 pb-12">
               <h2 className="text-xl font-semibold tracking-tight">
-                Your team’s meetings
+                Your recordings
               </h2>
               <p className="text-muted-foreground text-sm leading-relaxed">
-                Choose a meeting to listen or read the transcript.
+                Choose a meeting to listen or read your transcript.
               </p>
             </div>
           )}
@@ -284,9 +295,11 @@ function RecordingDetail({
       <ErrorMessage error={detail.error} retry={() => void detail.refetch()} />
     );
   if (!detail.data) return <p className="text-sm">Loading meeting…</p>;
-  const sources = groupRecordings(detail.data.captures);
-  const people = new Set(sources.map((parts) => parts[0].metadata.uploaderId))
-    .size;
+  const sources = groupRecordings(
+    detail.data.captures.filter(
+      (capture) => capture.metadata.uploaderId === userId,
+    ),
+  );
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       <div className="space-y-1">
@@ -297,8 +310,7 @@ function RecordingDetail({
         </h2>
         {sources.length > 1 ? (
           <p className="text-muted-foreground text-sm">
-            {sources.length} recordings from {people}{" "}
-            {people === 1 ? "person" : "people"}
+            {sources.length} recordings
           </p>
         ) : null}
       </div>
@@ -355,17 +367,13 @@ function RecordingDetail({
         aria-labelledby={`${viewId}-${view}`}
         className="space-y-6"
       >
-        {sources.map((parts, index) => (
+        {sources.map((parts) => (
           <li
             key={parts[0].captureId}
             className="space-y-4 border-b pb-6 last:border-b-0"
           >
             <div className="flex items-baseline justify-between gap-3">
-              <h3 className="text-sm font-medium">
-                {parts[0].metadata.uploaderId === userId
-                  ? "Your recording"
-                  : `Team recording ${index + 1}`}
-              </h3>
+              <h3 className="text-sm font-medium">Your recording</h3>
               <p className="text-muted-foreground text-xs tabular-nums">
                 {formatTime(
                   parts.reduce((frames, part) => frames + part.frameCount, 0) /
