@@ -67,7 +67,7 @@ pub struct MeetingAccessibilityInspection {
     pub window_title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub call_identity: Option<String>,
-    /// Complete current Chrome Meet-tab or native Teams active-window inventory. None means unavailable,
+    /// Complete current Chrome Meet-tab inventory. None means unavailable,
     /// never an empty inventory or evidence of departure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open_call_identities: Option<Vec<String>>,
