@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 
 import { Button } from "@anlg/ui/components/ui/button";
 import {
@@ -40,6 +41,7 @@ function ActiveEnrollment({ userId }: { userId: string }) {
   const { getSessionForRequest } = useAuth();
   const queryClient = useQueryClient();
   const settings = useStoredSettingValuesQuery();
+  const [confirmed, setConfirmed] = useState(false);
   const idle = useListener(
     (state) => state.live.status === "inactive" && !state.live.loading,
   );
@@ -92,23 +94,24 @@ function ActiveEnrollment({ userId }: { userId: string }) {
   const calendarConfigured = savedScopes(
     settings.data.values.shared_recording_defaults_applied,
   ).includes(defaultScope(userId, policy.workspaceId));
-  if (
-    ![
-      "google-meet",
-      "slack",
-      ...(calendarConfigured ? [] : ["google-calendar"]),
-    ].every((integrationId) =>
-      account.data!.connections.some(
-        (connection) =>
-          connection.integrationId === integrationId &&
-          connection.status === "connected",
-      ),
-    )
-  )
+  const ready = [
+    "google-meet",
+    "slack",
+    ...(calendarConfigured ? [] : ["google-calendar"]),
+  ].every((integrationId) =>
+    account.data!.connections.some(
+      (connection) =>
+        connection.integrationId === integrationId &&
+        connection.status === "connected",
+    ),
+  );
+  if (!ready || (!calendarConfigured && !confirmed))
     return (
       <ConnectionWelcome
         key={JSON.stringify([userId, policy.workspaceId])}
         account={account.data}
+        ready={ready}
+        onContinue={() => setConfirmed(true)}
       />
     );
   return (
@@ -218,7 +221,15 @@ function ApplyDefaults({
   return null;
 }
 
-function ConnectionWelcome({ account }: { account: SharedRecordingAccount }) {
+function ConnectionWelcome({
+  account,
+  ready,
+  onContinue,
+}: {
+  account: SharedRecordingAccount;
+  ready: boolean;
+  onContinue: () => void;
+}) {
   const { openIntegration, openingAction } = useOpenIntegrationUrl();
   return (
     <Dialog open>
@@ -265,8 +276,15 @@ function ConnectionWelcome({ account }: { account: SharedRecordingAccount }) {
           })}
         </div>
         <p className="text-muted-foreground text-sm">
-          Both connections are required before automatic setup can finish.
+          Existing connections are reused when you sign in. Both Google and
+          Slack must be connected to finish setup.
         </p>
+        <Button
+          disabled={!ready || openingAction !== null}
+          onClick={onContinue}
+        >
+          Finish setup
+        </Button>
       </DialogContent>
     </Dialog>
   );

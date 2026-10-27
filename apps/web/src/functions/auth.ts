@@ -2,12 +2,14 @@ import type { Session, SupabaseClient } from "@supabase/supabase-js";
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 
+import { env } from "@/env";
 import { getRequestAppOrigin } from "@/functions/app-origin";
 import { rememberLastSignInMethod } from "@/functions/auth-last-used";
 import { mintDesktopSessionForAuthenticatedUser } from "@/functions/auth-session";
 import {
   desktopAuthStateSchema,
   desktopSchemeSchema,
+  isE3ScribeFlow,
 } from "@/functions/desktop-flow";
 import { ensureNewAccountTrial } from "@/functions/new-account-trial";
 import {
@@ -306,8 +308,8 @@ export const doAuth = createServerFn({ method: "POST" })
       provider: data.provider,
       options: {
         redirectTo: buildAuthCallbackUrl(params),
-        queryParams: oauthProviderQueryParams(data.provider),
-        scopes: oauthProviderScopes(data.provider),
+        queryParams: oauthProviderQueryParams(data.provider, data),
+        scopes: oauthProviderScopes(data.provider, data),
       },
     });
 
@@ -426,6 +428,7 @@ export const exchangeOAuthCode = createServerFn({ method: "POST" })
   .inputValidator(
     z.object({
       code: z.string(),
+      scheme: desktopSchemeSchema.optional(),
       flow: z.enum(["desktop", "web"]).default("web"),
       type: z
         .enum([
@@ -441,7 +444,10 @@ export const exchangeOAuthCode = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data }) => {
-    const supabase = getSupabaseServerClient();
+    const e3Google = isE3ScribeFlow(data) && data.method === "google";
+    const supabase = e3Google
+      ? getSupabaseDesktopFlowClient()
+      : getSupabaseServerClient();
     const { data: authData, error } =
       await supabase.auth.exchangeCodeForSession(data.code);
 
@@ -450,6 +456,53 @@ export const exchangeOAuthCode = createServerFn({ method: "POST" })
         success: false,
         error: mapSsoAuthError(error?.message || "Unknown error"),
       };
+    }
+
+    if (e3Google) {
+      if (
+        authData.session.user.email?.split("@")[1]?.toLowerCase() !==
+        "e3group.ai"
+      ) {
+        return {
+          success: false,
+          error:
+            "Sign in with your @e3group.ai Google account to set up E3 Scribe.",
+        };
+      }
+      try {
+        const { provider_refresh_token } = authData.session;
+        if (!provider_refresh_token) {
+          throw new Error("missing_google_grant");
+        }
+        const apiUrl = `${env.VITE_API_URL.replace(/\/$/, "")}/`;
+        const enrollment = await fetch(
+          new URL("v1/shared-recordings/enroll", apiUrl),
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${authData.session.access_token}`,
+            },
+            signal: AbortSignal.timeout(10_000),
+          },
+        );
+        if (!enrollment.ok) throw new Error("e3_enrollment_failed");
+        const response = await fetch(new URL("nango/google-signin", apiUrl), {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${authData.session.access_token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ provider_refresh_token }),
+          signal: AbortSignal.timeout(20_000),
+        });
+        if (!response.ok) throw new Error("google_connection_failed");
+      } catch {
+        return {
+          success: false,
+          error:
+            "Google could not connect your E3 account, Meet and Calendar. Try again and allow the requested Google permissions.",
+        };
+      }
     }
 
     await identifyServerUserFromRequest(authData.session.user.id, {

@@ -21,6 +21,13 @@ test("email and SSO choices also bypass the previous browser account", () => {
 
 test("generic sign-in links can still reuse an authenticated browser session", () => {
   assert.equal(shouldReuseBrowserSession({}), true);
+  assert.equal(
+    shouldReuseBrowserSession({
+      flow: "desktop",
+      scheme: "e3-shared-recordings-preview",
+    }),
+    false,
+  );
 });
 
 test("restores desktop recovery context from the encoded Supabase redirect", () => {

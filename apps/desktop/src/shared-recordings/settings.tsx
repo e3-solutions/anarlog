@@ -84,18 +84,18 @@ export function SharedRecordingPreferences({
             const connection = account.connections.find(
               (connection) => connection.integrationId === integrationId,
             );
-            if (
+            const isConnected =
               connection?.status === "connected" &&
               (!managed ||
                 integrationId !== "google-meet" ||
-                connected("google-calendar"))
-            )
-              return null;
+                connected("google-calendar"));
             return (
               <Button
                 key={integrationId}
                 variant="outline"
-                disabled={openingAction !== null || (enabled && !managed)}
+                disabled={
+                  isConnected || openingAction !== null || (enabled && !managed)
+                }
                 onClick={() =>
                   openIntegration({
                     nangoIntegrationId: integrationId,
@@ -104,11 +104,13 @@ export function SharedRecordingPreferences({
                   })
                 }
               >
-                {integrationId === "google-meet"
-                  ? managed
-                    ? "Connect Google"
-                    : "Connect Google Meet"
-                  : "Connect Slack"}
+                {isConnected
+                  ? `${integrationId === "google-meet" ? "Google" : "Slack"} connected`
+                  : integrationId === "google-meet"
+                    ? managed
+                      ? "Connect Google"
+                      : "Connect Google Meet"
+                    : "Connect Slack"}
               </Button>
             );
           })}

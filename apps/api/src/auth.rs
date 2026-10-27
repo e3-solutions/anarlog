@@ -76,6 +76,7 @@ pub async fn require_integration_access(
         allowed
     } else {
         path.starts_with("/calendar/google/")
+            || (path == "/nango/google-signin" && request.method() == Method::POST)
     };
     if allowed && let Some(members) = members {
         let memberships = match members.memberships(&auth).await {
@@ -106,6 +107,22 @@ mod integration_access_tests {
     async fn e3_integrations_require_live_domain_membership_and_preserve_unrelated_paid_gates() {
         const WORKSPACE: &str = "0af47883-c9ff-4a84-9b00-66bd7c5b03c6";
         for (email, member, route, integration, paid, expected) in [
+            (
+                "user@e3group.ai",
+                true,
+                "/nango/google-signin",
+                "",
+                false,
+                200,
+            ),
+            (
+                "user@outside.test",
+                true,
+                "/nango/google-signin",
+                "",
+                false,
+                403,
+            ),
             (
                 "user@e3group.ai",
                 true,

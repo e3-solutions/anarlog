@@ -17,6 +17,8 @@ import type { Tab } from "~/store/zustand/tabs";
 
 const mocks = vi.hoisted(() => ({
   canStart: true,
+  e3: false,
+  enrollmentScopes: "",
   liveStatus: "inactive",
   liveSessionId: null as string | null,
   getIgnoredEventSets: vi.fn(),
@@ -41,7 +43,19 @@ vi.mock("@anlg/plugin-detect", () => ({
 }));
 
 vi.mock("~/auth", () => ({
-  useAuth: () => ({ getHeaders: () => ({ Authorization: "Bearer test" }) }),
+  useAuth: () => ({
+    getHeaders: () => ({ Authorization: "Bearer test" }),
+    session: { user: { id: "e3-user", email: "user@e3group.ai" } },
+  }),
+}));
+
+vi.mock("~/env", () => ({
+  env: {
+    get VITE_E3_SCRIBE() {
+      return mocks.e3 ? "true" : "false";
+    },
+    VITE_API_URL: "https://recordings.example.com",
+  },
 }));
 
 vi.mock("~/stt/scheduled-meet-presence", async (importOriginal) => ({
@@ -66,6 +80,7 @@ vi.mock("~/shared/config", () => ({
   useConfigValues: () => ({
     auto_start_scheduled_meetings: true,
     auto_join_scheduled_meetings: true,
+    shared_recording_defaults_applied: mocks.enrollmentScopes,
   }),
 }));
 
@@ -300,6 +315,8 @@ describe("hasPendingAutoStart", () => {
 
 describe("startScheduledMeeting", () => {
   beforeEach(() => {
+    mocks.e3 = false;
+    mocks.enrollmentScopes = "";
     mocks.canStart = true;
     mocks.liveStatus = "inactive";
     mocks.liveSessionId = null;
@@ -689,6 +706,28 @@ describe("startScheduledMeeting", () => {
     await vi.advanceTimersByTimeAsync(50 * 60_000);
 
     expect(mocks.getOrCreateSessionForEventId).not.toHaveBeenCalled();
+  });
+
+  test("waits for E3 Finish setup before arming scheduled recording", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    mocks.e3 = true;
+    const view = render(createElement(ScheduledMeetingAutoStart));
+    mocks.subscribeMeetings.mock.calls[0][2].onData([meeting("a", 0)]);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(mocks.openNew).not.toHaveBeenCalled();
+
+    mocks.enrollmentScopes = JSON.stringify([
+      JSON.stringify([
+        "e3-user",
+        "e3-workspace",
+        "https://recordings.example.com",
+        "google-calendar",
+      ]),
+    ]);
+    view.rerender(createElement(ScheduledMeetingAutoStart));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.openNew).toHaveBeenCalledTimes(1);
   });
 
   test("starts when a due unanswered meeting becomes accepted", async () => {

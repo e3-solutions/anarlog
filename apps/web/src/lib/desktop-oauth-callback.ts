@@ -34,6 +34,7 @@ export async function completeOAuthCallback({
     data: {
       code: search.code,
       flow: search.flow,
+      scheme: search.scheme,
       type: search.type,
       method: search.method,
     },

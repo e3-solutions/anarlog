@@ -179,8 +179,12 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-it("enables approved team capture defaults once after consent and preserves later opt-outs", async () => {
+it("reviews reused connections before enabling defaults and preserves later opt-outs", async () => {
   const first = openEnrollment();
+  await screen.findByRole("button", { name: "Slack connected" });
+  expect(mocks.config).toBeNull();
+  expect(mocks.values.auto_start_detected_meetings).toBeUndefined();
+  fireEvent.click(screen.getByRole("button", { name: "Finish setup" }));
   await waitFor(() =>
     expect(mocks.values.auto_start_detected_meetings).toBe(true),
   );
@@ -219,6 +223,7 @@ it("retains explicit recording and sharing opt-outs on first enrollment", async 
     connections: account.connections,
   };
   openEnrollment();
+  fireEvent.click(await screen.findByRole("button", { name: "Finish setup" }));
   await waitFor(() =>
     expect(typeof mocks.values.shared_recording_defaults_applied).toBe(
       "string",
@@ -242,6 +247,7 @@ it("abandons pending defaults when the active account changes before local confi
       }),
   );
   openEnrollment();
+  fireEvent.click(await screen.findByRole("button", { name: "Finish setup" }));
   await waitFor(() => expect(resume).toBeDefined());
   await act(async () => {
     mocks.userId = "account-two";
@@ -317,6 +323,9 @@ it("requires both meeting connections and keeps Slack available after connecting
       { ...account },
     );
   });
+  await screen.findByRole("button", { name: "Slack connected" });
+  expect(mocks.config).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Finish setup" }));
   await waitFor(() =>
     expect(mocks.values.auto_start_detected_meetings).toBe(true),
   );
