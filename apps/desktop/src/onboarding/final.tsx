@@ -72,8 +72,10 @@ export function FinalDescription() {
 
 export function FinalSection({
   onContinue,
+  skipDemo = false,
 }: {
   onContinue: (sessionId: string) => void;
+  skipDemo?: boolean;
 }) {
   const { i18n } = useLingui();
   const translate = i18n._.bind(i18n);
@@ -85,7 +87,11 @@ export function FinalSection({
     if (finishPromiseRef.current) return;
 
     setStatus("loading");
-    const finishPromise = finishOnboarding(onContinue, welcomeSessionRef);
+    const finishPromise = finishOnboarding(
+      onContinue,
+      welcomeSessionRef,
+      skipDemo,
+    );
     finishPromiseRef.current = finishPromise;
     try {
       await finishPromise;
@@ -107,8 +113,10 @@ export function FinalSection({
         {status === "loading" ? (
           <span className="flex items-center gap-2">
             <CircleNotch className="size-4 animate-spin" />
-            <Trans>Open Anarlog</Trans>
+            {skipDemo ? "Open E3 Scribe" : <Trans>Open Anarlog</Trans>}
           </span>
+        ) : skipDemo ? (
+          "Open E3 Scribe"
         ) : (
           <Trans>Open Anarlog</Trans>
         )}
@@ -128,14 +136,17 @@ export function FinalSection({
 export async function finishOnboarding(
   onContinue?: (sessionId: string) => void,
   welcomeSessionRef?: { current: string | null },
+  skipDemo = false,
 ) {
   await sfxCommands.stop("BGM").catch(console.error);
   const welcomeSessionId =
     welcomeSessionRef?.current ??
-    (await getOrCreateWelcomeSession().catch((error) => {
-      console.error("Failed to create welcome note", error);
-      return createSession();
-    }));
+    (await (skipDemo
+      ? createSession()
+      : getOrCreateWelcomeSession().catch((error) => {
+          console.error("Failed to create welcome note", error);
+          return createSession();
+        })));
   if (welcomeSessionRef) {
     welcomeSessionRef.current = welcomeSessionId;
   }

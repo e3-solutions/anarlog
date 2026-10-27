@@ -16,6 +16,7 @@ import {
   getNextStep,
   getPrevStep,
   getStepStatus,
+  isE3Account,
 } from "./config";
 import { FinalDescription, FinalSection, finishOnboarding } from "./final";
 import { ImportSection } from "./imports";
@@ -24,6 +25,7 @@ import { OnboardingSection } from "./shared";
 
 import { trackAnalyticsEvent } from "~/analytics";
 import { useAuth } from "~/auth";
+import { env } from "~/env";
 import { StandaloneWindowShell } from "~/shared/window-shell";
 import { type Tab, useTabs } from "~/store/zustand/tabs";
 
@@ -85,6 +87,7 @@ function OnboardingScreenContent({
 }) {
   const queryClient = useQueryClient();
   const auth = useAuth();
+  const e3Account = isE3Account(auth.session?.user.email);
   const [isMuted, setIsMuted] = useState(false);
   const [currentStep, setCurrentStep] = useState(getInitialStep);
   const [didSkipLogin, setDidSkipLogin] = useState(false);
@@ -96,23 +99,23 @@ function OnboardingScreenContent({
       step: currentStep,
       platform: currentPlatform,
     });
-    const next = getNextStep(currentStep);
+    const next = getNextStep(currentStep, e3Account);
     if (next) setCurrentStep(next);
-  }, [currentPlatform, currentStep]);
+  }, [currentPlatform, currentStep, e3Account]);
 
   const skipCurrentStep = useCallback(() => {
     trackAnalyticsEvent("onboarding_step_skipped", {
       step: currentStep,
       platform: currentPlatform,
     });
-    const next = getNextStep(currentStep);
+    const next = getNextStep(currentStep, e3Account);
     if (next) setCurrentStep(next);
-  }, [currentPlatform, currentStep]);
+  }, [currentPlatform, currentStep, e3Account]);
 
   const goBack = useCallback(() => {
-    const prev = getPrevStep(currentStep);
+    const prev = getPrevStep(currentStep, e3Account);
     if (prev) setCurrentStep(prev);
-  }, [currentStep]);
+  }, [currentStep, e3Account]);
 
   const handleCalendarSignIn = useCallback(() => {
     setCurrentStep("login");
@@ -215,70 +218,96 @@ function OnboardingScreenContent({
         ])}
       >
         <h1 className="font-hand text-foreground text-4xl leading-none font-semibold tracking-normal">
-          <Trans>Welcome to Anarlog</Trans>
+          {env.VITE_E3_SCRIBE === "true" || e3Account ? (
+            "Welcome to E3 Scribe"
+          ) : (
+            <Trans>Welcome to Anarlog</Trans>
+          )}
         </h1>
       </div>
 
       <div className="scroll-fade-y relative z-10 flex-1 overflow-y-auto">
         <div className="flex flex-col gap-4 px-12 pb-16">
-          <OnboardingSection
-            title={<Trans>Start with permissions</Trans>}
-            completedTitle={<Trans>Permissions granted</Trans>}
-            description={
-              currentPlatform === "macos" ? (
-                <Trans>
-                  Anarlog needs microphone and system audio to transcribe your
-                  meetings, plus Accessibility to read meeting controls, visible
-                  chat.
-                </Trans>
-              ) : (
-                <Trans>
-                  Anarlog needs access to your microphone and system audio to
-                  record and transcribe your meetings
-                </Trans>
-              )
-            }
-            status={getStepStatus("permissions", currentStep)}
-            skippable={false}
-            onBack={goBack}
-            onNext={goNext}
-          >
-            <PermissionsSection onContinue={goNext} />
-          </OnboardingSection>
-
-          <OnboardingSection
-            title={<Trans>Create account</Trans>}
-            description={
-              <Trans>
-                Sign in to unlock powerful AI models, sync across devices, and
-                personalization.
-              </Trans>
-            }
-            completedTitle={
-              auth.session ? (
-                <Trans>Signed in</Trans>
-              ) : didSkipLogin ? (
-                <Trans>Skipped</Trans>
-              ) : (
-                <Trans>Account</Trans>
-              )
-            }
-            status={getStepStatus("login", currentStep)}
-            onBack={goBack}
-            onNext={goNext}
-            onSkip={() => {
-              setDidSkipLogin(true);
-              trackAnalyticsEvent("onboarding_login_skipped");
-              trackAnalyticsEvent("onboarding_step_skipped", {
-                step: "login",
-                platform: currentPlatform,
-              });
-              const next = getNextStep("login");
-              if (next) setCurrentStep(next);
-            }}
-          >
-            <LoginSection onContinue={goNext} />
-          </OnboardingSection>
+          {(env.VITE_E3_SCRIBE === "true"
+            ? ["login", "permissions"]
+            : ["permissions", "login"]
+          ).map((step) =>
+            step === "permissions" ? (
+              <OnboardingSection
+                key="permissions"
+                title={<Trans>Start with permissions</Trans>}
+                completedTitle={<Trans>Permissions granted</Trans>}
+                description={
+                  env.VITE_E3_SCRIBE === "true" ? (
+                    "Allow microphone, system audio, and Accessibility access so E3 Scribe can detect and record meetings."
+                  ) : currentPlatform === "macos" ? (
+                    <Trans>
+                      Anarlog needs microphone and system audio to transcribe
+                      your meetings, plus Accessibility to read meeting
+                      controls, visible chat.
+                    </Trans>
+                  ) : (
+                    <Trans>
+                      Anarlog needs access to your microphone and system audio
+                      to record and transcribe your meetings
+                    </Trans>
+                  )
+                }
+                status={getStepStatus("permissions", currentStep, e3Account)}
+                skippable={false}
+                onBack={goBack}
+                onNext={goNext}
+              >
+                <PermissionsSection onContinue={goNext} />
+              </OnboardingSection>
+            ) : (
+              <OnboardingSection
+                key="login"
+                title={
+                  env.VITE_E3_SCRIBE === "true" ? (
+                    "Sign in with Google"
+                  ) : (
+                    <Trans>Create account</Trans>
+                  )
+                }
+                description={
+                  env.VITE_E3_SCRIBE === "true" ? (
+                    "Use your e3group.ai account to join E3."
+                  ) : (
+                    <Trans>
+                      Sign in to unlock powerful AI models, sync across devices,
+                      and personalization.
+                    </Trans>
+                  )
+                }
+                completedTitle={
+                  auth.session ? (
+                    <Trans>Signed in</Trans>
+                  ) : didSkipLogin ? (
+                    <Trans>Skipped</Trans>
+                  ) : (
+                    <Trans>Account</Trans>
+                  )
+                }
+                status={getStepStatus("login", currentStep, e3Account)}
+                skippable={env.VITE_E3_SCRIBE !== "true"}
+                onBack={goBack}
+                onNext={goNext}
+                onSkip={() => {
+                  setDidSkipLogin(true);
+                  trackAnalyticsEvent("onboarding_login_skipped");
+                  trackAnalyticsEvent("onboarding_step_skipped", {
+                    step: "login",
+                    platform: currentPlatform,
+                  });
+                  const next = getNextStep("login", e3Account);
+                  if (next) setCurrentStep(next);
+                }}
+              >
+                <LoginSection onContinue={goNext} />
+              </OnboardingSection>
+            ),
+          )}
 
           <OnboardingSection
             title={<Trans>Connect calendar</Trans>}
@@ -288,7 +317,7 @@ function OnboardingScreenContent({
               </Trans>
             }
             completedTitle={<Trans>Calendar connected</Trans>}
-            status={getStepStatus("calendar", currentStep)}
+            status={getStepStatus("calendar", currentStep, e3Account)}
             onBack={goBack}
             onNext={goNext}
             onSkip={skipCurrentStep}
@@ -308,7 +337,7 @@ function OnboardingScreenContent({
               </Trans>
             }
             completedTitle={<Trans>Meeting history imported</Trans>}
-            status={getStepStatus("imports", currentStep)}
+            status={getStepStatus("imports", currentStep, e3Account)}
             onBack={goBack}
             onNext={goNext}
             onSkip={skipCurrentStep}
@@ -318,13 +347,21 @@ function OnboardingScreenContent({
 
           <OnboardingSection
             title={<Trans>Ready to go</Trans>}
-            description={<FinalDescription />}
-            status={getStepStatus("final", currentStep)}
+            description={
+              e3Account ? (
+                "Connect Google and Slack next to finish setup."
+              ) : (
+                <FinalDescription />
+              )
+            }
+            status={getStepStatus("final", currentStep, e3Account)}
             skippable={false}
             onBack={goBack}
-            onNext={() => void finishOnboarding(handleFinish)}
+            onNext={() =>
+              void finishOnboarding(handleFinish, undefined, e3Account)
+            }
           >
-            <FinalSection onContinue={handleFinish} />
+            <FinalSection onContinue={handleFinish} skipDemo={e3Account} />
           </OnboardingSection>
         </div>
       </div>

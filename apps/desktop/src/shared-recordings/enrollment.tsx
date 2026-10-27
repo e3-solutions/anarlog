@@ -89,8 +89,15 @@ function ActiveEnrollment({ userId }: { userId: string }) {
     )
   )
     return null;
+  const calendarConfigured = savedScopes(
+    settings.data.values.shared_recording_defaults_applied,
+  ).includes(defaultScope(userId, policy.workspaceId));
   if (
-    !["google-meet", "slack"].every((integrationId) =>
+    ![
+      "google-meet",
+      "slack",
+      ...(calendarConfigured ? [] : ["google-calendar"]),
+    ].every((integrationId) =>
       account.data!.connections.some(
         (connection) =>
           connection.integrationId === integrationId &&
@@ -151,7 +158,7 @@ function ApplyDefaults({
           config.apiBaseUrl !== env.VITE_API_URL)
       )
         return;
-      const scope = JSON.stringify([userId, organizationId, env.VITE_API_URL]);
+      const scope = defaultScope(userId, organizationId);
       const applied = savedScopes(
         stored.values.shared_recording_defaults_applied,
       );
@@ -219,9 +226,10 @@ function ConnectionWelcome({ account }: { account: SharedRecordingAccount }) {
         <DialogHeader>
           <DialogTitle>Welcome to E3</DialogTitle>
           <DialogDescription>
-            Connect both Google Meet and Slack to finish E3 setup. Each app
-            needs its own approval. Supported meetings will automatically record
-            and share their original audio and transcripts with E3.
+            Connect Google and Slack to finish E3 setup. Google connects both
+            your Calendar and Meet with one approval. Supported meetings will
+            automatically record and share their original audio and transcripts
+            with E3.
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-wrap gap-2">
@@ -229,9 +237,15 @@ function ConnectionWelcome({ account }: { account: SharedRecordingAccount }) {
             const connection = account.connections.find(
               (item) => item.integrationId === integrationId,
             );
-            const connected = connection?.status === "connected";
-            const name =
-              integrationId === "google-meet" ? "Google Meet" : "Slack";
+            const connected =
+              connection?.status === "connected" &&
+              (integrationId !== "google-meet" ||
+                account.connections.some(
+                  (item) =>
+                    item.integrationId === "google-calendar" &&
+                    item.status === "connected",
+                ));
+            const name = integrationId === "google-meet" ? "Google" : "Slack";
             return (
               <Button
                 key={integrationId}
@@ -256,6 +270,15 @@ function ConnectionWelcome({ account }: { account: SharedRecordingAccount }) {
       </DialogContent>
     </Dialog>
   );
+}
+
+function defaultScope(userId: string, organizationId: string) {
+  return JSON.stringify([
+    userId,
+    organizationId,
+    env.VITE_API_URL,
+    "google-calendar",
+  ]);
 }
 
 function savedScopes(value: string | undefined): string[] {

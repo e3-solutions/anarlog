@@ -39,6 +39,11 @@ const account = vi.hoisted(() => ({
       status: "connected",
     },
     {
+      integrationId: "google-calendar",
+      connectionId: "meet-consent",
+      status: "connected",
+    },
+    {
       integrationId: "slack",
       connectionId: "slack-consent",
       status: "connected",
@@ -143,6 +148,11 @@ beforeEach(() => {
       status: "connected",
     },
     {
+      integrationId: "google-calendar",
+      connectionId: "meet-consent",
+      status: "connected",
+    },
+    {
       integrationId: "slack",
       connectionId: "slack-consent",
       status: "connected",
@@ -182,6 +192,9 @@ it("enables approved team capture defaults once after consent and preserves late
   mocks.values.auto_start_detected_meetings = false;
   mocks.values.autostart = false;
   mocks.config!.enabled = false;
+  account.connections = account.connections.filter(
+    (connection) => connection.integrationId !== "google-calendar",
+  );
   await act(async () => {
     openEnrollment();
   });
@@ -189,6 +202,7 @@ it("enables approved team capture defaults once after consent and preserves late
   expect(mocks.config?.enabled).toBe(false);
   expect(mocks.values.autostart).toBe(false);
   expect(mocks.values.shared_recording_defaults_applied).toBe(marker);
+  expect(screen.queryByRole("dialog")).toBeNull();
 });
 
 it("retains explicit recording and sharing opt-outs on first enrollment", async () => {
@@ -241,7 +255,7 @@ it("requires both meeting connections and keeps Slack available after connecting
   account.connections = [];
   openEnrollment();
   await screen.findByRole("dialog");
-  fireEvent.click(screen.getByRole("button", { name: "Connect Google Meet" }));
+  fireEvent.click(screen.getByRole("button", { name: "Connect Google" }));
   expect(mocks.openIntegration).toHaveBeenCalledWith({
     nangoIntegrationId: "google-meet",
     connectionId: undefined,
@@ -260,7 +274,27 @@ it("requires both meeting connections and keeps Slack available after connecting
       { ...account },
     );
   });
-  await screen.findByRole("button", { name: "Google Meet connected" });
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Connect Google" }),
+  );
+  expect(mocks.openIntegration).toHaveBeenLastCalledWith({
+    nangoIntegrationId: "google-meet",
+    connectionId: "meet-consent",
+    action: "reconnect",
+  });
+  expect(mocks.config).toBeNull();
+  account.connections.push({
+    integrationId: "google-calendar",
+    connectionId: "meet-consent",
+    status: "connected",
+  });
+  await act(async () => {
+    clients[clients.length - 1].setQueryData(
+      ["shared-recordings", account.userId, "account"],
+      structuredClone(account),
+    );
+  });
+  await screen.findByRole("button", { name: "Google connected" });
   expect(mocks.config).toBeNull();
   expect(mocks.values.auto_start_detected_meetings).toBeUndefined();
   fireEvent.click(screen.getByRole("button", { name: "Connect Slack" }));

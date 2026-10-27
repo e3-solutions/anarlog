@@ -41,7 +41,7 @@ export function SharedRecordingPreferences({
         connection.status === "connected",
     );
   const ready = managed
-    ? ["google-meet", "slack"].every(connected)
+    ? ["google-meet", "google-calendar", "slack"].every(connected)
     : ["google-meet", "slack"].some(connected);
   const update = useMutation({
     mutationFn: () =>
@@ -75,7 +75,7 @@ export function SharedRecordingPreferences({
         {!ready ? (
           <p className="text-muted-foreground">
             {managed
-              ? "Connect both Google Meet and Slack to finish E3 setup."
+              ? "Connect Google and Slack to finish E3 setup. Google also connects your calendar."
               : "Connect Google Meet or Slack to turn on sharing."}
           </p>
         ) : null}
@@ -84,7 +84,13 @@ export function SharedRecordingPreferences({
             const connection = account.connections.find(
               (connection) => connection.integrationId === integrationId,
             );
-            if (connection?.status === "connected") return null;
+            if (
+              connection?.status === "connected" &&
+              (!managed ||
+                integrationId !== "google-meet" ||
+                connected("google-calendar"))
+            )
+              return null;
             return (
               <Button
                 key={integrationId}
@@ -99,7 +105,9 @@ export function SharedRecordingPreferences({
                 }
               >
                 {integrationId === "google-meet"
-                  ? "Connect Google Meet"
+                  ? managed
+                    ? "Connect Google"
+                    : "Connect Google Meet"
                   : "Connect Slack"}
               </Button>
             );

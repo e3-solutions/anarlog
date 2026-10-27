@@ -166,6 +166,38 @@ pub async fn list_connections(
         }
     }
 
+    let mut calendar_aliases = Vec::new();
+    for connection in &connections {
+        if connection.integration_id != "google-meet"
+            || connection.status.as_deref() == Some("reconnect_required")
+            || connections.iter().any(|item| {
+                item.integration_id == "google-calendar"
+                    && item.connection_id == connection.connection_id
+            })
+        {
+            continue;
+        }
+        if crate::google_meet_calendar_access(
+            &state.nango,
+            &auth.claims.sub,
+            &connection.connection_id,
+        )
+        .await
+        {
+            calendar_aliases.push(ConnectionItem {
+                integration_id: "google-calendar".into(),
+                connection_id: connection.connection_id.clone(),
+                status: connection.status.clone(),
+                account_identity: connection.account_identity.clone(),
+                last_error_type: None,
+                last_error_description: None,
+                last_error_at: None,
+                updated_at: connection.updated_at.clone(),
+            });
+        }
+    }
+    connections.extend(calendar_aliases);
+
     Ok(Json(ListConnectionsResponse { connections }))
 }
 
@@ -177,6 +209,44 @@ mod tests {
         Mock, MockServer, ResponseTemplate,
         matchers::{method, path, query_param},
     };
+
+    #[tokio::test]
+    async fn calendar_access_requires_matching_owner_and_successful_provider_permission() {
+        for (owner, status, expected) in [
+            ("user-one", 200, true),
+            ("user-one", 403, false),
+            ("other-user", 200, false),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/connections/meet"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": 1, "connection_id": "meet", "provider_config_key": "google-meet",
+                    "provider": "google-meet", "errors": [], "end_user": {"id":owner},
+                    "metadata": {}, "connection_config": {}, "credentials": {},
+                    "created_at": "", "updated_at": "", "last_fetched_at": ""
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/proxy/calendar/v3/users/me/calendarList"))
+                .and(query_param("maxResults", "1"))
+                .respond_with(
+                    ResponseTemplate::new(status).set_body_json(serde_json::json!({"items":[]})),
+                )
+                .mount(&server)
+                .await;
+            let nango = anlg_nango::NangoClient::builder()
+                .api_key("fixture-key")
+                .api_base(server.uri())
+                .build()
+                .unwrap();
+            assert_eq!(
+                crate::google_meet_calendar_access(&nango, "user-one", "meet").await,
+                expected
+            );
+        }
+    }
 
     #[tokio::test]
     async fn missed_webhook_recovers_only_connections_with_matching_server_end_user() {

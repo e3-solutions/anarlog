@@ -34,6 +34,12 @@ impl RecordingIdentityResolver {
         Self { connections }
     }
 
+    pub async fn google_calendar_access(&self, auth: &AuthContext, connection_id: &str) -> bool {
+        self.connections
+            .google_meet_calendar_access(&auth.token, &auth.claims.sub, connection_id)
+            .await
+    }
+
     pub async fn resolve(
         &self,
         auth: &AuthContext,

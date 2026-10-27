@@ -211,7 +211,7 @@ function connectionKey(
 function calendarProviderForIntegration(
   integrationId: string,
 ): CalendarProviderType | null {
-  return integrationId === "google-calendar"
+  return integrationId === "google-calendar" || integrationId === "google-meet"
     ? "google"
     : integrationId === "outlook"
       ? "outlook"

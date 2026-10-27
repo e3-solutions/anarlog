@@ -1,5 +1,4 @@
 use super::subscription_aliases;
-use crate::PAID_ENTITLEMENTS;
 use crate::{
     auth::{self, AuthState},
     env::RuntimeConfig,
@@ -12,12 +11,6 @@ pub(crate) async fn router(
     analytics: Arc<anlg_analytics::AnalyticsClient>,
 ) -> Router {
     let auth_state = AuthState::new(&env.supabase.supabase_url);
-    let auth_state_paid = auth_state.clone().with_required_entitlements(
-        PAID_ENTITLEMENTS
-            .iter()
-            .map(|value| (*value).to_string())
-            .collect(),
-    );
     let auth_state_basic = auth_state.clone();
     let nango_config = env.nango.as_ref().map(|nango| {
         anlg_api_nango::NangoConfig::new(
@@ -134,7 +127,21 @@ pub(crate) async fn router(
                 .layer(axum::Extension(nango_connection_state))
                 .route_layer(middleware::from_fn(auth::sentry_and_analytics))
                 .route_layer(middleware::from_fn_with_state(
-                    auth_state_paid,
+                    if env.anarlog_shared_recordings_enabled {
+                        Some(
+                            anlg_api_recordings::recording_members::RecordingMemberships::new(
+                                &env.supabase.supabase_url,
+                                &env.supabase.supabase_anon_key,
+                            )
+                            .expect("recording membership configuration validated"),
+                        )
+                    } else {
+                        None
+                    },
+                    auth::require_integration_access,
+                ))
+                .route_layer(middleware::from_fn_with_state(
+                    auth_state_basic.clone(),
                     auth::require_auth,
                 ))
         }

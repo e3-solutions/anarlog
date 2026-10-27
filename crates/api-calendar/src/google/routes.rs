@@ -1,5 +1,5 @@
 use anlg_api_auth::AuthContext;
-use anlg_api_nango::{GoogleCalendar, NangoConnectionState, NangoIntegrationId};
+use anlg_api_nango::NangoConnectionState;
 use anlg_google_calendar::{
     EventOrderBy, EventType, GoogleCalendarClient, ListCalendarsResponse, ListEventsResponse,
 };
@@ -50,28 +50,19 @@ pub async fn list_calendars(
     Extension(nango_state): Extension<NangoConnectionState>,
     Json(req): Json<GoogleListCalendarsRequest>,
 ) -> Result<Json<ListCalendarsResponse>> {
-    let http = nango_state
-        .build_http_client(
-            &auth.token,
-            &auth.claims.sub,
-            GoogleCalendar::ID,
-            &req.connection_id,
-        )
-        .await?
-        .with_retries(0);
+    let (integration_id, http) = nango_state
+        .build_google_calendar_http_client(&auth.token, &auth.claims.sub, &req.connection_id)
+        .await?;
+    let http = http.with_retries(0);
 
     let client = GoogleCalendarClient::new(http);
 
     let response = match client.list_calendars().await {
         Ok(response) => response,
         Err(e) => {
-            return Err(map_provider_error(
-                &nango_state,
-                GoogleCalendar::ID,
-                &req.connection_id,
-                e,
-            )
-            .await);
+            return Err(
+                map_provider_error(&nango_state, integration_id, &req.connection_id, e).await,
+            );
         }
     };
 
@@ -96,15 +87,10 @@ pub async fn list_events(
     Extension(nango_state): Extension<NangoConnectionState>,
     Json(req): Json<GoogleListEventsRequest>,
 ) -> Result<Json<ListEventsResponse>> {
-    let http = nango_state
-        .build_http_client(
-            &auth.token,
-            &auth.claims.sub,
-            GoogleCalendar::ID,
-            &req.connection_id,
-        )
-        .await?
-        .with_retries(0);
+    let (integration_id, http) = nango_state
+        .build_google_calendar_http_client(&auth.token, &auth.claims.sub, &req.connection_id)
+        .await?;
+    let http = http.with_retries(0);
 
     let client = GoogleCalendarClient::new(http);
 
@@ -155,13 +141,9 @@ pub async fn list_events(
     let response = match client.list_events(google_req).await {
         Ok(response) => response,
         Err(e) => {
-            return Err(map_provider_error(
-                &nango_state,
-                GoogleCalendar::ID,
-                &req.connection_id,
-                e,
-            )
-            .await);
+            return Err(
+                map_provider_error(&nango_state, integration_id, &req.connection_id, e).await,
+            );
         }
     };
 

@@ -9,7 +9,8 @@ mod supabase;
 
 pub use config::NangoConfig;
 pub use extractor::{
-    NangoConnection, NangoConnectionError, NangoConnectionState, is_provider_auth_failure,
+    NangoConnection, NangoConnectionError, NangoConnectionState, google_meet_calendar_access,
+    is_provider_auth_failure,
 };
 pub use integrations::{
     Attio, Close, Discord, Fathom, GitHub, GoogleCalendar, GoogleDrive, GoogleMail, GoogleMeet,

@@ -123,7 +123,29 @@ async fn me(
     Extension(auth): Extension<AuthContext>,
 ) -> Result<Json<Account>, MemberError> {
     let workspaces = state.members.memberships(&auth).await?;
-    let connections = state.members.connections(&auth).await?;
+    let mut connections = state.members.connections(&auth).await?;
+    if let Some(identities) = &state.identities {
+        let mut calendars = Vec::new();
+        for connection in &connections {
+            if connection.integration_id == "google-meet"
+                && connection.status != "reconnect_required"
+                && !connections.iter().any(|item| {
+                    item.integration_id == "google-calendar"
+                        && item.connection_id == connection.connection_id
+                })
+                && identities
+                    .google_calendar_access(&auth, &connection.connection_id)
+                    .await
+            {
+                calendars.push(ProviderConnection {
+                    integration_id: "google-calendar".into(),
+                    connection_id: connection.connection_id.clone(),
+                    status: connection.status.clone(),
+                });
+            }
+        }
+        connections.extend(calendars);
+    }
     let policy = state.members.policy(&auth, &workspaces).await?;
     Ok(Json(Account {
         user_id: auth.claims.sub,

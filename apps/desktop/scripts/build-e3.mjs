@@ -106,7 +106,11 @@ try {
   const child = spawn("pnpm", args, {
     cwd: desktopDir,
     stdio: "inherit",
-    env: { ...process.env, ...notarizationEnvironment() },
+    env: {
+      ...process.env,
+      ...notarizationEnvironment(),
+      VITE_E3_SCRIBE: "true",
+    },
   });
   const exitCode = await new Promise((resolve, reject) => {
     child.on("error", reject);

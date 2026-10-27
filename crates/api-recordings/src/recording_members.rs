@@ -340,7 +340,7 @@ impl RecordingMemberships {
             .query(&[
                 ("select", "integration_id,connection_id,status"),
                 ("user_id", filter.as_str()),
-                ("integration_id", "in.(google-meet,slack)"),
+                ("integration_id", "in.(google-meet,google-calendar,slack)"),
                 ("limit", "129"),
             ]);
         let rows: Vec<ProviderConnection> = json_response(request).await?;

@@ -146,6 +146,54 @@ impl NangoConnectionState {
         Ok(OwnedNangoHttpClient::new(proxy))
     }
 
+    pub async fn google_meet_calendar_access(
+        &self,
+        auth_token: &str,
+        user_id: &str,
+        connection_id: &str,
+    ) -> bool {
+        if self
+            .build_http_client(auth_token, user_id, "google-meet", connection_id)
+            .await
+            .is_err()
+        {
+            return false;
+        }
+        google_meet_calendar_access(&self.nango, user_id, connection_id).await
+    }
+
+    pub async fn build_google_calendar_http_client(
+        &self,
+        auth_token: &str,
+        user_id: &str,
+        connection_id: &str,
+    ) -> Result<(&'static str, OwnedNangoHttpClient), NangoConnectionError> {
+        match self
+            .build_http_client(auth_token, user_id, "google-calendar", connection_id)
+            .await
+        {
+            Ok(http) => Ok(("google-calendar", http)),
+            Err(NangoConnectionError::NotConnected(_)) => {
+                if !self
+                    .google_meet_calendar_access(auth_token, user_id, connection_id)
+                    .await
+                {
+                    return Err(NangoConnectionError::ReconnectRequired(
+                        "google-meet".to_string(),
+                    ));
+                }
+                let http = self
+                    .build_http_client(auth_token, user_id, "google-meet", connection_id)
+                    .await?;
+                Ok((
+                    "google-meet",
+                    http.with_base_url_override("https://www.googleapis.com"),
+                ))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     async fn get_connection_id(
         &self,
         auth_token: &str,
@@ -212,6 +260,33 @@ impl<I: NangoIntegrationId> NangoConnection<I> {
     pub fn into_http(self) -> OwnedNangoHttpClient {
         self.http
     }
+}
+
+pub async fn google_meet_calendar_access(
+    nango: &NangoClient,
+    user_id: &str,
+    connection_id: &str,
+) -> bool {
+    let Ok(Ok(connection)) = tokio::time::timeout(
+        std::time::Duration::from_secs(4),
+        nango.get_connection(connection_id, "google-meet"),
+    )
+    .await
+    else {
+        return false;
+    };
+    if connection.end_user.as_ref().map(|user| user.id.as_str()) != Some(user_id)
+        || !connection.errors.is_empty()
+    {
+        return false;
+    }
+    let proxy = OwnedNangoProxy::new(nango, "google-meet".to_string(), connection_id.to_string())
+        .base_url_override("https://www.googleapis.com")
+        .retries(0);
+    let Ok(request) = proxy.get("/calendar/v3/users/me/calendarList?maxResults=1") else {
+        return false;
+    };
+    matches!(tokio::time::timeout(std::time::Duration::from_secs(4), request.send()).await, Ok(Ok(response)) if response.status().is_success())
 }
 
 #[derive(Debug)]
