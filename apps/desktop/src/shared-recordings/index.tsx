@@ -447,9 +447,7 @@ function RecordingAudio({
   ) : audio.isFetching ? (
     <p className="text-muted-foreground text-sm">Loading source audio…</p>
   ) : (
-    <Button variant="outline" onClick={() => void audio.refetch()}>
-      Load audio
-    </Button>
+    <Button onClick={() => void audio.refetch()}>Load audio</Button>
   );
 }
 

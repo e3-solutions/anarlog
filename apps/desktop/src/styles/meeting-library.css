@@ -12,9 +12,18 @@
   animation: meeting-library-exit 120ms ease-in;
 }
 
-.meeting-library-header,
+.meeting-library-header {
+  background: hsl(var(--card));
+}
+
 .meeting-list {
-  background: hsl(var(--muted) / 0.55);
+  background: hsl(var(--muted));
+}
+
+.meeting-library-header :is(h1, h2) {
+  font-size: 1.5rem;
+  font-weight: 650;
+  letter-spacing: -0.03em;
 }
 
 .meeting-library-header p {
@@ -59,11 +68,16 @@
 }
 
 .meeting-row[aria-current="page"] {
-  border-color: hsl(var(--ring) / 0.35);
-  background: hsl(var(--accent));
+  border-color: hsl(var(--primary));
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
 }
 
-.meeting-row:active {
+.meeting-row[aria-current="page"] .text-muted-foreground {
+  color: hsl(var(--primary-foreground) / 0.82);
+}
+
+.meeting-row:active:not([aria-current="page"]) {
   background: hsl(var(--accent));
 }
 
@@ -104,7 +118,20 @@
 }
 
 .meeting-source {
-  box-shadow: 0 1px 3px hsl(276 35% 12% / 0.03);
+  border-color: hsl(var(--input));
+  box-shadow: 0 3px 12px hsl(276 35% 12% / 0.05);
+}
+
+.meeting-detail h2 {
+  font-size: 1.875rem;
+  line-height: 1.2;
+  font-weight: 650;
+}
+
+.meeting-detail h3,
+.meeting-source > div > p:first-child {
+  font-size: 1rem;
+  font-weight: 600;
 }
 
 .meeting-disclosure > summary {
@@ -121,13 +148,15 @@
 
 .meeting-transcript {
   overflow: hidden;
-  background: hsl(var(--muted) / 0.7);
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--card));
 }
 
 .meeting-transcript > summary {
   width: 100%;
   padding: 0.875rem 1rem;
   border-radius: 0.5rem;
+  background: hsl(var(--accent));
 }
 
 .meeting-transcript > summary:hover {
