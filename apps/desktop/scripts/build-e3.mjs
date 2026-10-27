@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { notarizationEnvironment } from "../../../scripts/notarize-dmg.mjs";
+
 const desktopDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const buildArgs = process.argv.slice(2);
 if (
@@ -101,7 +103,11 @@ try {
     args.push("--config", "src-tauri/tauri.conf.stable-macos.json");
   }
   args.push(...buildArgs, "--config", configPath);
-  const child = spawn("pnpm", args, { cwd: desktopDir, stdio: "inherit" });
+  const child = spawn("pnpm", args, {
+    cwd: desktopDir,
+    stdio: "inherit",
+    env: { ...process.env, ...notarizationEnvironment() },
+  });
   const exitCode = await new Promise((resolve, reject) => {
     child.on("error", reject);
     child.on("close", resolve);

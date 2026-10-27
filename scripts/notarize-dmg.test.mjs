@@ -89,6 +89,25 @@ test("notarization preflight rejects unavailable credentials without uploads or 
   }
 });
 
+test("notarization accepts credentials pasted with surrounding whitespace", () => {
+  preflightNotarization({
+    env: {
+      APPLE_ID: " test@example.com\n",
+      APPLE_PASSWORD: "\n abcd-efgh-ijkl-mnop\r\n",
+      APPLE_TEAM_ID: " TEAM\n",
+    },
+    run: (args) => ({
+      status:
+        args[args.indexOf("--apple-id") + 1] === "test@example.com" &&
+        args[args.indexOf("--password") + 1] === "abcd-efgh-ijkl-mnop" &&
+        args[args.indexOf("--team-id") + 1] === "TEAM"
+          ? 0
+          : 1,
+      stdout: '{"history":[]}',
+    }),
+  });
+});
+
 test("submits once and recovers interrupted waits using the same ID", async () => {
   const f = fixture([reply("Uploaded"), offline, reply("Accepted")]);
   assert.equal(await notarizeDmg(f.options), id);

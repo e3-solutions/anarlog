@@ -25,7 +25,17 @@ function readResponse(result) {
   }
 }
 
-function notarizationAuth(env) {
+export function notarizationEnvironment(env = process.env) {
+  return Object.fromEntries(
+    ["APPLE_ID", "APPLE_PASSWORD", "APPLE_TEAM_ID"].map((name) => [
+      name,
+      env[name]?.trim(),
+    ]),
+  );
+}
+
+function notarizationAuth(input) {
+  const env = notarizationEnvironment(input);
   if (!env.APPLE_ID || !env.APPLE_PASSWORD || !env.APPLE_TEAM_ID) {
     throw new Error("Apple notarization credentials are required");
   }
