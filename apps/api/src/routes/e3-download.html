@@ -34,27 +34,34 @@
       .command button { flex: none; border: 1px solid var(--line); border-radius: 6px; padding: 7px 12px; background: var(--page); color: var(--plum); font: inherit; font-size: 13px; font-weight: 600; }
       .command button:hover { background: #eee8f2; }
       .terminal .command-note { margin-top: 9px; font-size: 12px; }
-      .setup { margin-top: 54px; display: grid; grid-template-columns: 1fr 1fr; gap: 48px; padding-top: 34px; border-top: 1px solid var(--line); }
-      h2 { margin: 0 0 22px; font-size: 21px; letter-spacing: -.5px; line-height: 1.3; }
+      .setup { margin-top: 54px; padding-top: 34px; border-top: 1px solid var(--line); }
+      h2 { margin: 0 0 24px; font-size: 24px; font-weight: 650; letter-spacing: -.7px; line-height: 1.3; }
       ol { list-style: none; counter-reset: steps; padding: 0; margin: 0; }
-      li { position: relative; counter-increment: steps; padding-left: 40px; margin-bottom: 24px; }
-      li::before { content: counter(steps); position: absolute; left: 0; top: 1px; display: grid; place-items: center; height: 25px; width: 25px; border: 1px solid var(--line); border-radius: 50%; color: var(--plum); font-size: 12px; font-weight: 600; background: var(--surface); }
-      h3 { margin: 0 0 3px; font-size: 15px; font-weight: 600; }
-      li p, aside p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.65; }
-      aside { align-self: start; padding: 24px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
-      aside h2 { font-size: 18px; margin-bottom: 12px; }
-      aside p + p { margin-top: 16px; }
-      figure { margin: 18px 0 0; }
-      .screen { display: block; width: 100%; height: auto; border: 1px solid var(--line); border-radius: 9px; }
+      .step { counter-increment: steps; display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); gap: 42px; align-items: center; padding: 32px 0; border-top: 1px solid var(--line); }
+      .step:first-child { border-top: 0; padding-top: 8px; }
+      .step-copy { padding-left: 40px; position: relative; }
+      .step-copy::before { content: counter(steps); position: absolute; left: 0; top: 0; display: grid; place-items: center; height: 27px; width: 27px; border-radius: 50%; color: var(--plum); font-size: 13px; font-weight: 650; background: #eae2ef; }
+      h3 { margin: 0 0 10px; font-size: 20px; letter-spacing: -.4px; font-weight: 650; line-height: 1.3; }
+      .step p, .ready p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.65; }
+      .step p + p { margin-top: 10px; }
+      .permission-list { margin-top: 14px; display: grid; gap: 9px; font-size: 14px; line-height: 1.5; }
+      .permission-list div { color: var(--muted); }
+      .permission-list strong { display: block; color: var(--ink); font-weight: 600; }
+      figure { margin: 0; min-width: 0; }
+      .screen { display: block; width: 100%; height: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+      figure a { display: block; border-radius: 10px; }
+      figure a:hover .screen { border-color: #b9a6c6; }
       figcaption { color: var(--muted); font-size: 12px; line-height: 1.6; margin-top: 9px; }
-      .library-guide { margin-top: 36px; padding-top: 30px; border-top: 1px solid var(--line); }
-      .library-guide h2 { margin-bottom: 10px; }
-      .library-guide > p { color: var(--muted); font-size: 14px; margin: 0; }
-      details { border-top: 1px solid var(--line); margin-top: 24px; padding-top: 18px; }
+      .ready { margin-top: 12px; padding-top: 34px; border-top: 1px solid var(--line); }
+      .ready h2 { margin-bottom: 12px; }
+      .ready > p { max-width: 630px; }
+      .ready figure { margin-top: 22px; }
+      .help { margin-top: 28px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; }
+      details { border-top: 1px solid var(--line); padding-top: 16px; }
       summary { cursor: pointer; font-size: 14px; font-weight: 600; }
       details p { padding-top: 10px; }
       footer { padding: 24px 0 32px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
-      @media (max-width: 640px) { .wrap { padding: 0 22px; } header { padding: 22px 0; } main { padding-top: 42px; } .setup { grid-template-columns: 1fr; gap: 22px; margin-top: 38px; } .download { width: 100%; } h1 { letter-spacing: -1.4px; } }
+      @media (max-width: 720px) { .wrap { padding: 0 22px; } header { padding: 22px 0; } main { padding-top: 42px; } .setup { margin-top: 38px; } .step { grid-template-columns: 1fr; gap: 22px; padding: 28px 0; } .step figure { margin-left: 40px; } .help { grid-template-columns: 1fr; gap: 18px; } .download { width: 100%; } h1 { letter-spacing: -1.4px; } }
       @media (prefers-reduced-motion: reduce) { .download { transition: none; } }
     </style>
   </head>
@@ -67,58 +74,60 @@
         <section class="intro" aria-labelledby="title">
           <h1 id="title">Download E3 Scribe.</h1>
           <p class="lead">Your team’s meeting recordings and transcripts, together in one place.</p>
-          <a id="download" class="download" href="https://rwefimqhinohocgmtwjj.supabase.co/storage/v1/object/public/e3-scribe-releases/releases/0.1.15/E3-Scribe-arm64.dmg">
+          <a id="download" class="download" href="https://rwefimqhinohocgmtwjj.supabase.co/storage/v1/object/public/e3-scribe-releases/releases/0.1.19/E3-Scribe-arm64.dmg">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 16v4h14v-4" /></svg>
             Download for Mac
           </a>
-          <p class="requirements"><span id="version">Version 0.1.15</span> · Apple Silicon (M1 or newer) · macOS 15+</p>
+          <p class="requirements"><span id="version">Version 0.1.19</span> · Apple Silicon (M1 or newer) · macOS 15+</p>
+          <p class="requirements">Open the .dmg, drag Scribe into Applications, then open it.</p>
           <div class="terminal">
             <p>Prefer Terminal? Install and open setup with one command.</p>
             <div class="command">
               <code id="install-command">curl -fsSL https://e3-scribe-setup.up.railway.app/install.sh | bash</code>
               <button id="copy-command" type="button" aria-label="Copy install command">Copy</button>
             </div>
-            <p class="command-note" id="copy-status" role="status">No developer tools needed. <a href="/install.sh">View the script</a>. Sign-in and Mac permissions still need your approval.</p>
+            <p class="command-note" id="copy-status" role="status">No developer tools needed. <a href="/install.sh">View the script</a>. Then follow the steps below.</p>
           </div>
         </section>
-        <section class="setup" aria-label="Setup guide">
-          <div>
-            <h2>Set up once.</h2>
-            <ol>
-              <li><h3>Install the app</h3><p>Run the command above in Terminal. It installs Scribe and opens the app and this guide. Or open the downloaded .dmg, drag E3 Scribe into Applications, then open it.</p></li>
-              <li><h3>Sign in with E3</h3><p>Use your @e3group.ai Google account and approve Calendar and Meet access together. You’ll automatically join E3; your main E3 calendar is selected for you.</p></li>
-              <li><h3>Allow Mac permissions</h3><p>Follow the prompts for microphone, system audio and Accessibility access. Reopen Scribe if macOS asks.</p></li>
-              <li>
-                <h3>Connect your meetings</h3>
-                <p>Review Google and Slack in the welcome screen, then choose Finish setup. Google is already connected from sign-in. Connect Slack if needed; an existing account connection is reused. No history import is needed.</p>
-                <figure>
-                  <a href="https://rwefimqhinohocgmtwjj.supabase.co/storage/v1/object/public/e3-scribe-releases/guide/unified-google-v2/connection-review.png" target="_blank" rel="noopener">
-                    <img class="screen" src="https://rwefimqhinohocgmtwjj.supabase.co/storage/v1/object/public/e3-scribe-releases/guide/unified-google-v2/connection-review.png" width="1280" height="720" alt="E3 connection review shows Google connected and Slack connected before choosing Finish setup." loading="lazy" />
-                  </a>
-                  <figcaption>Approve both connections. Each app shows its connected status; setup finishes once both are ready. Select the image to enlarge.</figcaption>
-                </figure>
-              </li>
-            </ol>
-          </div>
-          <aside aria-labelledby="next">
-            <h2 id="next">Then you’re set.</h2>
-            <p>Scribe runs in the background and is configured to launch at login. Supported detected meetings start recording automatically and stop when the meeting ends.</p>
-            <p>Original audio and transcripts are shared with E3 and linked to the person and meeting. Find them in <strong>Meeting library</strong>.</p>
-            <p>Future updates arrive through the app. Your recording and sharing preferences remain under your control.</p>
-            <details><summary>Do I need an API key?</summary><p>No. E3’s shared meeting transcription is already managed centrally. Your audio uploads and is transcribed automatically; you don’t need a personal API key or a model download.</p><p>Optional live transcription inside individual notes has separate settings. It is not required for transcripts in Meeting library.</p></details>
-            <details><summary>Check your first meeting</summary><p>Join a short Meet or Slack huddle, confirm Scribe starts recording, then leave. Check Meeting library after the upload and transcription finish.</p></details>
-            <details><summary>Does my Mac support this?</summary><p>Open Apple menu → About This Mac. You need an Apple M-series chip and macOS 15 or newer. This installer does not support Intel Macs.</p></details>
-          </aside>
+        <section class="setup" aria-labelledby="setup-title">
+          <h2 id="setup-title">Your first setup.</h2>
+          <ol>
+            <li class="step">
+              <div class="step-copy"><h3>Install and open Scribe</h3><p>Run the command above in Terminal. It installs the app and opens setup.</p><p>Or open the downloaded .dmg, drag <strong>E3 Scribe</strong> into <strong>Applications</strong>, then open it. Choose <strong>Get started</strong>.</p></div>
+              <figure><a href="https://rwefimqhinohocgmtwjj.supabase.co/storage/v1/object/public/e3-scribe-releases/guide/onboarding-v3/install.png" target="_blank" rel="noopener"><img class="screen" src="https://rwefimqhinohocgmtwjj.supabase.co/storage/v1/object/public/e3-scribe-releases/guide/onboarding-v3/install.png" alt="E3 Scribe welcome screen with the Get started button." loading="lazy" /></a><figcaption>The command opens the same signed app as the Mac download.</figcaption></figure>
+            </li>
+            <li class="step">
+              <div class="step-copy"><h3>Sign in with Google</h3><p>Choose <strong>Sign in with Google</strong> and use your <strong>@e3group.ai</strong> account.</p><p>Approve read-only <strong>Google Meet</strong> and <strong>Calendar</strong> access when Google asks. One sign-in connects both and selects your main E3 calendar.</p></div>
+              <figure><a href="https://rwefimqhinohocgmtwjj.supabase.co/storage/v1/object/public/e3-scribe-releases/guide/onboarding-v3/google-sign-in.png" target="_blank" rel="noopener"><img class="screen" src="https://rwefimqhinohocgmtwjj.supabase.co/storage/v1/object/public/e3-scribe-releases/guide/onboarding-v3/google-sign-in.png" alt="E3 Scribe Google sign-in screen." loading="lazy" /></a><figcaption>Google may show “Anarlog Shared Recordings Preview,” the name of E3’s existing connection. No history import needed.</figcaption></figure>
+            </li>
+            <li class="step">
+              <div class="step-copy"><h3>Allow Mac permissions</h3><p>Follow each prompt in Scribe, then approve the matching macOS request.</p><div class="permission-list"><div><strong>Microphone</strong>Allow access to capture your voice.</div><div><strong>System audio</strong>Allow access to capture other speakers.</div><div><strong>Accessibility</strong>Turn on E3 Scribe in System Settings so it can detect meeting activity.</div></div><p>Reopen Scribe if macOS asks.</p></div>
+              <figure><a href="https://rwefimqhinohocgmtwjj.supabase.co/storage/v1/object/public/e3-scribe-releases/guide/onboarding-v3/mac-permissions-detail.png" target="_blank" rel="noopener"><img class="screen" src="https://rwefimqhinohocgmtwjj.supabase.co/storage/v1/object/public/e3-scribe-releases/guide/onboarding-v3/mac-permissions-detail.png" alt="E3 Scribe setup showing microphone, system audio, and Accessibility permissions." loading="lazy" /></a><figcaption>Illustrative app screen. Enable all three; macOS opens its own approval prompts.</figcaption></figure>
+            </li>
+            <li class="step">
+              <div class="step-copy"><h3>Connect Slack</h3><p>Choose <strong>Connect Slack</strong>, select the <strong>E3group</strong> workspace, then choose <strong>Allow</strong>.</p><p>The existing <strong>E3 Goal Reminders</strong> app asks to view basic profile information and profile details, including huddle activity. It does not ask to read or post messages.</p><p>If Slack already shows <strong>Connected</strong>, your existing approval has been reused.</p></div>
+              <figure><a href="https://rwefimqhinohocgmtwjj.supabase.co/storage/v1/object/public/e3-scribe-releases/guide/onboarding-v3/slack-permissions.png" target="_blank" rel="noopener"><img class="screen" src="https://rwefimqhinohocgmtwjj.supabase.co/storage/v1/object/public/e3-scribe-releases/guide/onboarding-v3/slack-permissions.png" alt="Slack approval screen for E3 Goal Reminders showing profile permissions and the Allow button." loading="lazy" /></a><figcaption>Check the workspace and approve the profile permissions.</figcaption></figure>
+            </li>
+            <li class="step">
+              <div class="step-copy"><h3>Finish setup</h3><p>Check that <strong>Google</strong> and <strong>Slack</strong> both show <strong>Connected</strong>, then choose <strong>Finish setup</strong>.</p><p>Google is already connected from your first sign-in.</p></div>
+              <figure><a href="https://rwefimqhinohocgmtwjj.supabase.co/storage/v1/object/public/e3-scribe-releases/guide/onboarding-v3/connection-review.png" target="_blank" rel="noopener"><img class="screen" src="https://rwefimqhinohocgmtwjj.supabase.co/storage/v1/object/public/e3-scribe-releases/guide/onboarding-v3/connection-review.png" alt="E3 Scribe connection review showing Google and Slack connected and Finish setup." loading="lazy" /></a><figcaption>Illustrative app screen. Both services should show Connected before you finish.</figcaption></figure>
+            </li>
+          </ol>
         </section>
-        <section class="library-guide" aria-labelledby="library-title">
-          <h2 id="library-title">Find your meeting.</h2>
-          <p>Open <strong>Meeting library</strong> and choose a meeting on the left. Use <strong>Recordings → Listen</strong> for audio, or the <strong>Transcript</strong> tab to read what was said.</p>
+        <section class="ready" aria-labelledby="ready-title">
+          <h2 id="ready-title">You’re ready for your next meeting.</h2>
+          <p>Keep Scribe running. It launches at login and records supported detected meetings automatically. Audio and transcripts appear in <strong>Meeting library</strong>, linked to the meeting and the person who recorded it.</p>
           <figure>
             <a href="https://rwefimqhinohocgmtwjj.supabase.co/storage/v1/object/public/e3-scribe-releases/guide/0.1.14/meeting-library.png" target="_blank" rel="noopener">
-              <img class="screen" src="https://rwefimqhinohocgmtwjj.supabase.co/storage/v1/object/public/e3-scribe-releases/guide/0.1.14/meeting-library.png" width="1280" height="480" alt="E3 Scribe Meeting library showing meetings on the left, Recordings and Transcript tabs, and separate recordings from two people." loading="lazy" />
+              <img class="screen" src="https://rwefimqhinohocgmtwjj.supabase.co/storage/v1/object/public/e3-scribe-releases/guide/0.1.14/meeting-library.png" width="1280" height="480" alt="E3 Scribe Meeting library with meetings on the left and Recordings and Transcript tabs." loading="lazy" />
             </a>
-            <figcaption>App screens shown with example meeting data. Each person’s original audio stays separate. Select an image to enlarge.</figcaption>
+            <figcaption>Choose a meeting, then open <strong>Recordings → Listen</strong> or <strong>Transcript</strong>. Example meeting data shown. Select any image to enlarge.</figcaption>
           </figure>
+          <div class="help">
+            <details><summary>Check your first meeting</summary><p>Join a short Meet or Slack huddle, confirm Scribe starts recording, then leave. Open Meeting library once the upload and transcription finish.</p></details>
+            <details><summary>Do I need an API key?</summary><p>No. E3 manages shared meeting transcription. You don’t need a personal API key or a model download.</p></details>
+            <details><summary>What about updates?</summary><p>Future updates arrive through the app. Your recording and sharing preferences stay under your control.</p></details>
+          </div>
         </section>
       </main>
       <footer>For E3 teammates · Signed and notarized for macOS · Keep Scribe running to capture meetings.</footer>
