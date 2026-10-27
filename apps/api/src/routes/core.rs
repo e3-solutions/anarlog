@@ -80,6 +80,18 @@ pub(crate) async fn router(
             "/download",
             axum::routing::get(|| async { axum::response::Html(include_str!("e3-download.html")) }),
         )
+        .route(
+            "/install.sh",
+            axum::routing::get(|| async {
+                (
+                    [(
+                        axum::http::header::CONTENT_TYPE,
+                        "text/plain; charset=utf-8",
+                    )],
+                    include_str!("e3-install.sh"),
+                )
+            }),
+        )
     } else if env.upstreams.anarlog_core_origin.is_some() {
         anlg_api_recordings::recording_app::forwarding_router()
     } else {
