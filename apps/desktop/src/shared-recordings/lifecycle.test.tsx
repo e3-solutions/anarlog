@@ -37,6 +37,9 @@ vi.mock("~/auth", () => ({
     },
   }),
 }));
+vi.mock("./enrollment", () => ({
+  SharedRecordingEnrollment: () => null,
+}));
 vi.mock("~/store/zustand/listener/instance", () => ({
   listenerStore: {
     getState: () => ({ live: mocks.live }),

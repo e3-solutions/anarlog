@@ -391,7 +391,7 @@ mod enrollment_tests {
     use serde_json::json;
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
-        matchers::{header as has_header, method, path, query_param},
+        matchers::{header as has_header, headers, method, path, query_param},
     };
 
     const WORKSPACE: &str = "ffd5094d-4ae2-4d81-a96d-613287177e82";
@@ -488,9 +488,9 @@ mod enrollment_tests {
             Mock::given(method("POST"))
                 .and(path("/rest/v1/workspace_memberships"))
                 .and(has_header("authorization", "Bearer service"))
-                .and(has_header(
+                .and(headers(
                     "prefer",
-                    "resolution=ignore-duplicates,return=minimal",
+                    vec!["resolution=ignore-duplicates", "return=minimal"],
                 ))
                 .and(query_param("on_conflict", "workspace_id,user_id"))
                 .respond_with(ResponseTemplate::new(201))
