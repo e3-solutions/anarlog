@@ -34,6 +34,7 @@ select set_config('request.jwt.claims',jsonb_set(current_setting('request.jwt.cl
 select is((select count(*) from public.application_health_devices),1::bigint,'Owner RLS reads only the single deduplicated observation');
 select ok(not has_table_privilege('authenticated','public.application_health_devices','INSERT'),'Clients cannot bypass authenticated ingestion with direct table writes');
 select tests.clear_authentication();
+reset role;
 delete from auth.sessions where id = '00000000-0000-4000-8000-00000000f003';
 select tests.authenticate_as('health_member');
 select set_config('request.jwt.claims',jsonb_set(current_setting('request.jwt.claims')::jsonb,'{session_id}','"00000000-0000-4000-8000-00000000f003"')::text,true);
