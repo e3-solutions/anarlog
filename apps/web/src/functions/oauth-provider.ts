@@ -5,7 +5,7 @@ export type OAuthProvider = "apple" | "azure" | "google" | "github";
 export function oauthProviderQueryParams(
   provider: OAuthProvider,
   context: { flow?: string; scheme?: string } = {},
-) {
+): Record<string, string> | undefined {
   if (provider === "google" && isE3ScribeFlow(context)) {
     return {
       access_type: "offline",

@@ -237,8 +237,8 @@ function ConnectionWelcome({
         <DialogHeader>
           <DialogTitle>Welcome to E3</DialogTitle>
           <DialogDescription>
-            Connect Google and Slack to finish E3 setup. Google connects both
-            your Calendar and Meet with one approval. Supported meetings will
+            Review your Google and Slack connections to finish E3 setup. Google
+            connects Calendar and Meet together. Supported meetings will
             automatically record and share their original audio and transcripts
             with E3.
           </DialogDescription>

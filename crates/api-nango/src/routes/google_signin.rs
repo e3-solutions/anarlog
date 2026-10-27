@@ -201,25 +201,23 @@ async fn import_connection(
         .as_ref()
         .map(|row| row.connection_id.clone())
         .unwrap_or_else(|| format!("e3-google-{}", auth.claims.sub));
-    if let Some(existing) = existing {
-        match state
-            .nango
-            .get_connection(&existing.connection_id, "google-meet")
-            .await
-        {
-            Ok(connection)
-                if connection
-                    .end_user
-                    .as_ref()
-                    .is_some_and(|owner| owner.id == auth.claims.sub) => {}
-            Err(anlg_nango::Error::Api(404, _)) => {}
-            Ok(_) => {
-                return Err(NangoError::Forbidden(
-                    "Google connection belongs to another account".to_string(),
-                ));
-            }
-            Err(error) => return Err(error.into()),
+    match state
+        .nango
+        .get_connection(&connection_id, "google-meet")
+        .await
+    {
+        Ok(connection)
+            if connection
+                .end_user
+                .as_ref()
+                .is_some_and(|owner| owner.id == auth.claims.sub) => {}
+        Err(anlg_nango::Error::Api(404, _)) => {}
+        Ok(_) => {
+            return Err(NangoError::Forbidden(
+                "Google connection belongs to another account".to_string(),
+            ));
         }
+        Err(error) => return Err(error.into()),
     }
     let refresh_token = refreshed
         .get("refresh_token")
@@ -276,10 +274,11 @@ mod tests {
 
     #[tokio::test]
     async fn signin_imports_only_matching_google_credentials_with_calendar_and_meet_access() {
-        for (google_sub, scopes, expected) in [
-            ("google-user", SCOPES.join(" "), 200),
-            ("another-google-user", SCOPES.join(" "), 403),
-            ("google-user", SCOPES[0].to_string(), 400),
+        for (google_sub, scopes, existing_owner, expected) in [
+            ("google-user", SCOPES.join(" "), None, 200),
+            ("google-user", SCOPES.join(" "), Some("another-owner"), 403),
+            ("another-google-user", SCOPES.join(" "), None, 403),
+            ("google-user", SCOPES[0].to_string(), None, 400),
         ] {
             let server = MockServer::start().await;
             Mock::given(method("GET")).and(path("/auth/v1/user"))
@@ -308,6 +307,14 @@ mod tests {
                 .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
                 .mount(&server)
                 .await;
+            Mock::given(method("GET")).and(path("/connections/e3-google-user"))
+                .respond_with(if let Some(owner) = existing_owner {
+                    ResponseTemplate::new(200).set_body_json(json!({
+                        "id":1, "connection_id":"e3-google-user", "provider_config_key":"google-meet", "provider":"google-meet",
+                        "errors":[], "end_user":{"id":owner}, "metadata":{}, "connection_config":{},
+                        "created_at":"now", "updated_at":"now", "last_fetched_at":"now", "credentials":{}
+                    }))
+                } else { ResponseTemplate::new(404) }).mount(&server).await;
             Mock::given(method("POST")).and(path("/connections"))
                 .and(body_partial_json(json!({
                     "provider_config_key":"google-meet", "connection_id":"e3-google-user",

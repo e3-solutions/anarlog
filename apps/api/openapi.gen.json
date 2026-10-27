@@ -1069,6 +1069,47 @@
         ]
       }
     },
+    "/nango/google-signin": {
+      "post": {
+        "tags": [
+          "nango"
+        ],
+        "operationId": "connect",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoogleSigninRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoogleSigninResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Google permission or identity verification failed"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/nango/session": {
       "post": {
         "tags": [
@@ -8796,6 +8837,32 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "GoogleSigninRequest": {
+        "type": "object",
+        "required": [
+          "provider_refresh_token"
+        ],
+        "properties": {
+          "provider_refresh_token": {
+            "type": "string"
+          }
+        }
+      },
+      "GoogleSigninResponse": {
+        "type": "object",
+        "required": [
+          "connected",
+          "connection_id"
+        ],
+        "properties": {
+          "connected": {
+            "type": "boolean"
+          },
+          "connection_id": {
+            "type": "string"
           }
         }
       },

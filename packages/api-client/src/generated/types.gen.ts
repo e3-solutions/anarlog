@@ -825,6 +825,15 @@ export type GoogleListThreadsRequest = {
     q?: string | null;
 };
 
+export type GoogleSigninRequest = {
+    provider_refresh_token: string;
+};
+
+export type GoogleSigninResponse = {
+    connected: boolean;
+    connection_id: string;
+};
+
 export type GrantAttachmentBackupUploadRequest = {
     ciphertextSha256: string;
     objectKey: string;
@@ -3016,6 +3025,30 @@ export type GoogleMeetPresenceResponses = {
 };
 
 export type GoogleMeetPresenceResponse = GoogleMeetPresenceResponses[keyof GoogleMeetPresenceResponses];
+
+export type ConnectData = {
+    body: GoogleSigninRequest;
+    path?: never;
+    query?: never;
+    url: '/nango/google-signin';
+};
+
+export type ConnectErrors = {
+    /**
+     * Google permission or identity verification failed
+     */
+    400: unknown;
+    /**
+     * Unauthorized
+     */
+    401: unknown;
+};
+
+export type ConnectResponses = {
+    200: GoogleSigninResponse;
+};
+
+export type ConnectResponse = ConnectResponses[keyof ConnectResponses];
 
 export type CreateSessionData = {
     body: CreateSessionRequest;

@@ -19,6 +19,11 @@ const config = defineConfig(async ({ command }): Promise<UserConfig> => {
   );
 
   return {
+    define: {
+      "process.env.ANARLOG_SHARED_RECORDINGS_PREVIEW": JSON.stringify(
+        isE3 ? "1" : "",
+      ),
+    },
     build: {
       sourcemap: generateSourceMaps ? ("hidden" as const) : false,
       rolldownOptions: { external: ["sharp"] },

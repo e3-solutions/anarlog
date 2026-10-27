@@ -9,7 +9,7 @@ IDENTIFIER="ai.e3group.meeting-capture-shared-preview"
 fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 finish() {
   printf 'Ready: %s\nSetup guide: %s\n' "$1" "$GUIDE"
-  printf 'Sign in with E3, allow Mac permissions, then connect both Google Meet and Slack.\n'
+  printf 'Sign in with E3 and approve Google Calendar and Meet, allow Mac permissions, then review Slack and finish setup.\n'
   if [ "${E3_SCRIBE_NO_OPEN:-0}" != 1 ]; then
     /usr/bin/open "$GUIDE"
     /usr/bin/open "$1"
