@@ -3,12 +3,16 @@ name: E3 Scribe Mac Release
 on:
   workflow_dispatch:
     inputs:
+      verify_credentials_only:
+        description: Verify existing Apple credentials without building or publishing
+        type: boolean
+        default: false
       defer_notarization:
         description: Build a signed diagnostic checkpoint for local notarization; never publish
         type: boolean
         default: false
   push:
-    branches: [chore/shared-meeting-recordings]
+    branches: [main, chore/shared-meeting-recordings]
     paths:
       - apps/desktop/**
       - crates/**
@@ -33,8 +37,23 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  verify-apple-credentials:
+    if: inputs.verify_credentials_only == true && github.repository == 'e3-solutions/anarlog' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/chore/shared-meeting-recordings')
+    runs-on: macos-26
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/notarize-dmg.mjs
+          sparse-checkout-cone-mode: false
+      - env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: node scripts/notarize-dmg.mjs --preflight
   build:
-    if: github.repository == 'e3-solutions/anarlog' && github.ref == 'refs/heads/chore/shared-meeting-recordings'
+    if: inputs.verify_credentials_only != true && github.repository == 'e3-solutions/anarlog' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/chore/shared-meeting-recordings')
     runs-on: macos-26
     timeout-minutes: 120
     env:
