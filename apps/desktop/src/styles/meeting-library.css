@@ -1,0 +1,185 @@
+.meeting-library {
+  isolation: isolate;
+  color: hsl(var(--foreground));
+  box-shadow: 0 20px 70px hsl(276 35% 12% / 0.18);
+}
+
+.meeting-library[data-state="open"] {
+  animation: meeting-library-enter 180ms ease-out;
+}
+
+.meeting-library[data-state="closed"] {
+  animation: meeting-library-exit 120ms ease-in;
+}
+
+.meeting-library-header,
+.meeting-list {
+  background: hsl(var(--muted) / 0.55);
+}
+
+.meeting-library-header p {
+  max-width: 65ch;
+  line-height: 1.6;
+}
+
+.meeting-toolbar {
+  background: hsl(var(--card));
+}
+
+.meeting-library-content,
+.meeting-detail {
+  background: hsl(var(--background));
+}
+
+.meeting-queue:has(> *) {
+  padding-top: 1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.meeting-queue-status > span {
+  flex: 1 1 22rem;
+  max-width: 80ch;
+}
+
+.meeting-queue-status > span > span {
+  margin-top: 0.25rem;
+}
+
+.meeting-row {
+  color: hsl(var(--foreground));
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.meeting-row:hover {
+  background: hsl(var(--accent) / 0.6);
+}
+
+.meeting-row[aria-current="page"] {
+  border-color: hsl(var(--ring) / 0.35);
+  background: hsl(var(--accent));
+  box-shadow: inset 3px 0 hsl(var(--primary));
+}
+
+.meeting-row:active {
+  background: hsl(var(--accent));
+}
+
+.meeting-library :where(button, select, summary):focus-visible,
+.meeting-sharing-popover :where(button, a, select):focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 3px;
+}
+
+.meeting-library :where(button, select, summary),
+.meeting-sharing-popover button {
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.meeting-organization:hover,
+.meeting-sharing-trigger:hover {
+  border-color: hsl(var(--ring) / 0.55);
+}
+
+.meeting-sharing-trigger::after {
+  content: "";
+  width: 0.375rem;
+  height: 0.375rem;
+  margin-left: 0.375rem;
+  margin-bottom: 0.1875rem;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+}
+
+.meeting-sharing-popover {
+  max-height: min(36rem, calc(100dvh - 8rem));
+  overflow-y: auto;
+}
+
+.meeting-source {
+  box-shadow: 0 1px 3px hsl(276 35% 12% / 0.03);
+}
+
+.meeting-disclosure > summary {
+  width: fit-content;
+  max-width: 100%;
+  padding: 0.375rem 0;
+  border-radius: 0.375rem;
+  transition: color 140ms ease;
+}
+
+.meeting-disclosure > summary:hover {
+  color: hsl(var(--primary));
+}
+
+.meeting-transcript {
+  overflow: hidden;
+  background: hsl(var(--muted) / 0.7);
+}
+
+.meeting-transcript > summary {
+  width: 100%;
+  padding: 0.875rem 1rem;
+  border-radius: 0.5rem;
+}
+
+.meeting-transcript > summary:hover {
+  background: hsl(var(--accent) / 0.65);
+}
+
+.meeting-transcript > summary:focus-visible {
+  outline-offset: -3px;
+}
+
+.meeting-library p,
+.meeting-library code {
+  user-select: text;
+}
+
+.meeting-library ::selection {
+  background: var(--selection-overlay);
+}
+
+.meeting-library audio {
+  width: 100%;
+  max-width: 100%;
+  height: 2.75rem;
+  border-radius: 0.5rem;
+  accent-color: hsl(var(--primary));
+}
+
+@keyframes meeting-library-enter {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes meeting-library-exit {
+  to {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .meeting-library,
+  .meeting-library *,
+  .meeting-sharing-popover,
+  .meeting-sharing-popover * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

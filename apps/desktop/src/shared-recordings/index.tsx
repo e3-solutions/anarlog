@@ -2,8 +2,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useId, useRef, useState } from "react";
 
 import { Button } from "@anlg/ui/components/ui/button";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@anlg/ui/components/ui/popover";
 import { useMountEffect } from "@anlg/ui/hooks/use-mount-effect";
-import { cn } from "@anlg/utils";
 
 import {
   listSharedRecordings,
@@ -96,13 +100,13 @@ function OrganizationRecordings({
     );
   }
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b px-6 py-3">
-        <label className="flex items-center gap-3 text-sm">
+    <div className="meeting-library-content flex min-h-0 flex-1 flex-col">
+      <div className="meeting-toolbar flex shrink-0 flex-wrap items-start justify-between gap-3 border-b px-6 py-4">
+        <label className="flex min-w-0 items-center gap-3 text-sm font-medium">
           Organization
           <select
             aria-label="Organization"
-            className="bg-background max-w-64 rounded-md border px-3 py-1.5 focus-visible:outline-violet-600"
+            className="meeting-organization bg-card text-foreground h-9 max-w-64 min-w-0 rounded-lg border px-3 text-sm font-normal"
             value={organizationId}
             onChange={(event) => {
               setOrganizationId(event.target.value);
@@ -116,23 +120,34 @@ function OrganizationRecordings({
             ))}
           </select>
         </label>
-        <details className="max-w-xl text-sm">
-          <summary className="cursor-pointer rounded-md px-3 py-1.5 text-violet-700 hover:bg-violet-50 focus-visible:outline-violet-600 dark:text-violet-300 dark:hover:bg-violet-950">
-            Sharing settings
-          </summary>
-          <SharedRecordingPreferences
-            account={account}
-            organizationId={organizationId}
-          />
-        </details>
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button
+              variant="outline"
+              className="meeting-sharing-trigger text-primary gap-2"
+            >
+              Sharing settings
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent
+            align="end"
+            sideOffset={10}
+            className="meeting-sharing-popover w-[min(28rem,calc(100vw-3rem))] rounded-xl p-5"
+          >
+            <SharedRecordingPreferences
+              account={account}
+              organizationId={organizationId}
+            />
+          </PopoverContent>
+        </Popover>
       </div>
-      <div className="px-6">
+      <div className="meeting-queue px-6">
         <SharedRecordingQueue userId={account.userId} />
       </div>
-      <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
+      <div className="meeting-library-body flex min-h-0 flex-1 flex-col sm:flex-row">
         <nav
           aria-label="Meetings"
-          className="max-h-48 shrink-0 overflow-y-auto border-b bg-violet-50/40 p-3 sm:max-h-none sm:w-60 sm:border-r sm:border-b-0 dark:bg-violet-950/10"
+          className="meeting-list max-h-48 shrink-0 overflow-y-auto border-b p-3 sm:max-h-none sm:w-64 sm:border-r sm:border-b-0 lg:w-72"
         >
           {recordings.error ? (
             <ErrorMessage
@@ -155,22 +170,18 @@ function OrganizationRecordings({
               key={item.occurrenceId}
               aria-current={selected === item.occurrenceId ? "page" : undefined}
               onClick={() => setSelected(item.occurrenceId)}
-              className={cn([
-                "mb-1 w-full rounded-lg p-3 text-left text-sm transition-colors focus-visible:outline-violet-600",
-                selected === item.occurrenceId
-                  ? "bg-violet-100 text-violet-950 dark:bg-violet-900/60 dark:text-violet-100"
-                  : "hover:bg-violet-100/60 dark:hover:bg-violet-900/30",
-              ])}
+              title={item.occurrence.providerOccurrenceId}
+              className="meeting-row mb-1.5 w-full rounded-lg border border-transparent p-3 text-left text-sm"
             >
               <span className="block font-medium">
                 {item.occurrence.provider === "google_meet"
                   ? "Google Meet"
                   : "Slack huddle"}
               </span>
-              <span className="text-muted-foreground block truncate text-xs">
+              <span className="text-muted-foreground mt-1 block truncate font-mono text-[11px]">
                 {item.occurrence.providerOccurrenceId}
               </span>
-              <span className="text-muted-foreground block text-xs">
+              <span className="text-muted-foreground mt-1.5 block text-xs tabular-nums">
                 {item.captures.filter((capture) => !capture.deleted).length}{" "}
                 sources ·{" "}
                 {
@@ -184,7 +195,7 @@ function OrganizationRecordings({
             </button>
           ))}
         </nav>
-        <div className="min-w-0 flex-1 overflow-y-auto p-6">
+        <div className="meeting-detail min-w-0 flex-1 overflow-y-auto p-5 sm:p-7">
           {selected ? (
             <RecordingDetail
               key={`${account.userId}:${organizationId}:${selected}`}
@@ -193,7 +204,7 @@ function OrganizationRecordings({
               occurrenceId={selected}
             />
           ) : (
-            <div className="mx-auto flex h-full max-w-sm flex-col justify-center gap-2 pb-12">
+            <div className="meeting-empty mx-auto flex h-full max-w-sm flex-col justify-center gap-3 pb-12">
               <h2 className="text-xl font-semibold tracking-tight">
                 Every perspective, saved.
               </h2>
@@ -245,13 +256,13 @@ function RecordingDetail({
   if (!detail.data) return <p className="text-sm">Loading recording…</p>;
   const { captures } = detail.data;
   return (
-    <div className="mx-auto max-w-3xl space-y-5">
-      <h2 className="text-2xl font-semibold tracking-tight text-violet-950 dark:text-violet-100">
+    <div className="mx-auto max-w-3xl space-y-6">
+      <h2 className="text-foreground text-2xl font-semibold tracking-tight">
         {detail.data.occurrence.provider === "google_meet"
           ? "Google Meet"
           : "Slack huddle"}
       </h2>
-      <details className="text-muted-foreground text-xs">
+      <details className="meeting-disclosure text-muted-foreground text-xs">
         <summary className="cursor-pointer">Verified meeting identity</summary>
         <p className="pt-2 font-mono break-all select-text">
           {detail.data.occurrence.providerOccurrenceId}
@@ -269,7 +280,7 @@ function RecordingDetail({
           .map((capture, index) => (
             <li
               key={`${capture.captureId}:${capture.metadata.sha256}`}
-              className="space-y-3 border-t py-4"
+              className="meeting-source bg-card space-y-4 rounded-xl border p-5"
             >
               <div className="flex flex-wrap items-baseline justify-between gap-2">
                 <p className="text-sm font-medium">
@@ -281,7 +292,7 @@ function RecordingDetail({
                   {formatTime(capture.metadata.offsetFrames / 16000)}
                 </p>
               </div>
-              <details className="text-muted-foreground text-xs">
+              <details className="meeting-disclosure text-muted-foreground text-xs">
                 <summary className="cursor-pointer">Recording details</summary>
                 <p className="pt-2 break-all select-text">
                   Contributor: {capture.metadata.uploaderId}
@@ -301,11 +312,11 @@ function RecordingDetail({
                     .join(", ")}
                 </p>
               ) : null}
-              <details className="rounded-lg bg-violet-50/70 p-3 text-sm dark:bg-violet-950/30">
-                <summary className="cursor-pointer font-medium text-violet-900 dark:text-violet-200">
+              <details className="meeting-transcript meeting-disclosure rounded-lg text-sm">
+                <summary className="text-primary cursor-pointer font-medium">
                   Source transcript · {capture.transcriptStatus}
                 </summary>
-                <p className="pt-3 leading-relaxed whitespace-pre-wrap select-text">
+                <p className="text-foreground border-t px-4 py-4 leading-7 whitespace-pre-wrap select-text">
                   {transcriptText(capture) ||
                     (capture.transcriptStatus === "ready"
                       ? "No speech was returned for this source."

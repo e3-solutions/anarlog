@@ -48,7 +48,7 @@ export function SharedRecordingPreferences({
       }),
   });
   return (
-    <div className="mt-3 flex items-start justify-between gap-4 border-t pt-3">
+    <div className="flex flex-col gap-4">
       <div className="space-y-1 text-sm">
         <p className="font-medium">
           {enabled ? "Sharing is on" : "Automatic sharing is off"}
@@ -114,7 +114,7 @@ export function SharedRecordingPreferences({
         ) : null}
       </div>
       <Button
-        className="shrink-0 border-violet-200 bg-violet-100 text-violet-900 hover:bg-violet-200 dark:border-violet-800 dark:bg-violet-900 dark:text-violet-100 dark:hover:bg-violet-800"
+        className="bg-accent text-accent-foreground hover:bg-accent/80 self-start"
         variant="outline"
         disabled={
           config.isPending ||
@@ -178,7 +178,7 @@ export function SharedRecordingQueue({ userId }: { userId: string }) {
     ) : null;
   return (
     <div
-      className="flex items-center justify-between gap-3 text-sm"
+      className="meeting-queue-status text-muted-foreground bg-card flex flex-wrap items-start justify-between gap-3 rounded-lg border px-4 py-3 text-xs leading-relaxed"
       role="status"
     >
       <span>

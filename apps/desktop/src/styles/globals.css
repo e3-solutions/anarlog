@@ -4,6 +4,7 @@
 
 @import "tailwindcss";
 @import "./dark-theme.css";
+@import "./meeting-library.css";
 @import "../../../../packages/ui/src/styles/corners.css";
 @import "../../../../packages/ui/src/styles/scroll-fade.css";
 
@@ -172,24 +173,66 @@ html[data-rounded-window] #root {
   color utility to any element that depends on these defaults.
 */
 @layer base {
+  * {
+    margin: 0;
+  }
+
   :root {
-    --primary: 258 87% 50%;
+    --background: 270 35% 98%;
+    --foreground: 276 35% 17%;
+    --card: 0 0% 100%;
+    --card-foreground: 276 35% 17%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 276 35% 17%;
+    --muted: 270 28% 95%;
+    --muted-foreground: 275 12% 43%;
+    --border: 270 20% 87%;
+    --input: 270 20% 82%;
+    --primary: 276 38% 29%;
     --primary-foreground: 0 0% 100%;
-    --ring: 258 87% 50%;
-    --accent: 258 65% 95%;
-    --accent-foreground: 258 55% 26%;
-    --sidebar-accent: 258 65% 93%;
-    --selection-overlay: hsl(258 87% 50% / 0.2);
+    --secondary: 270 28% 95%;
+    --secondary-foreground: 276 35% 17%;
+    --ring: 276 38% 42%;
+    --accent: 270 38% 94%;
+    --accent-foreground: 276 38% 25%;
+    --sidebar-background: 270 30% 96%;
+    --sidebar-foreground: 276 25% 23%;
+    --sidebar-accent: 270 30% 91%;
+    --sidebar-accent-foreground: 276 38% 25%;
+    --sidebar-border: 270 20% 87%;
+    --app-floating-chrome: 270 28% 95%;
+    --app-floating-panel: 270 35% 98%;
+    --app-floating-border: 270 20% 87%;
+    --selection-overlay: hsl(276 38% 42% / 0.18);
   }
 
   :root.dark {
-    --primary: 258 88% 74%;
-    --primary-foreground: 258 50% 15%;
-    --ring: 258 88% 74%;
-    --accent: 258 30% 24%;
-    --accent-foreground: 258 80% 92%;
-    --sidebar-accent: 258 30% 24%;
-    --selection-overlay: hsl(258 88% 74% / 0.25);
+    --background: 275 12% 10%;
+    --foreground: 270 18% 94%;
+    --card: 275 12% 13%;
+    --card-foreground: 270 18% 94%;
+    --popover: 275 12% 14%;
+    --popover-foreground: 270 18% 94%;
+    --muted: 275 12% 17%;
+    --muted-foreground: 270 13% 69%;
+    --border: 275 13% 25%;
+    --input: 275 13% 32%;
+    --primary: 272 40% 78%;
+    --primary-foreground: 275 30% 13%;
+    --secondary: 275 12% 17%;
+    --secondary-foreground: 270 18% 94%;
+    --ring: 272 40% 68%;
+    --accent: 275 23% 22%;
+    --accent-foreground: 270 32% 92%;
+    --sidebar-background: 275 13% 9%;
+    --sidebar-foreground: 270 18% 88%;
+    --sidebar-accent: 275 23% 22%;
+    --sidebar-accent-foreground: 270 32% 92%;
+    --sidebar-border: 275 13% 23%;
+    --app-floating-chrome: 275 12% 17%;
+    --app-floating-panel: 275 12% 13%;
+    --app-floating-border: 275 13% 25%;
+    --selection-overlay: hsl(272 40% 68% / 0.24);
   }
 
   *,
@@ -216,10 +259,6 @@ html[data-rounded-window] #root {
   *::before,
   *::after {
     box-sizing: border-box;
-  }
-
-  * {
-    margin: 0;
   }
 
   body {

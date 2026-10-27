@@ -20,7 +20,7 @@ export function SharedRecordingsLauncher() {
     <>
       <Button
         variant="ghost"
-        className="mx-2 mb-2 justify-start gap-2 text-violet-700 hover:bg-violet-100 hover:text-violet-900 dark:text-violet-300 dark:hover:bg-violet-950"
+        className="text-primary hover:bg-accent hover:text-accent-foreground mx-2 mb-2 justify-start gap-2 transition-colors duration-150"
         onClick={() => setOpen(true)}
       >
         <Users className="size-4" />
@@ -28,11 +28,11 @@ export function SharedRecordingsLauncher() {
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent
-          overlayClassName="bg-slate-950/25"
-          className="top-3 right-3 bottom-3 left-auto flex h-auto w-[calc(100vw-1.5rem)] max-w-6xl translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden border-violet-200 p-0 data-[state=closed]:animate-none data-[state=open]:animate-none dark:border-violet-900"
+          overlayClassName="bg-black/30 backdrop-blur-[2px] motion-reduce:animate-none"
+          className="meeting-library top-3 right-3 bottom-3 left-auto flex h-auto w-[calc(100vw-1.5rem)] max-w-6xl translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-xl p-0"
         >
-          <DialogHeader className="border-b border-violet-100 bg-violet-50 px-6 py-5 text-left dark:border-violet-950 dark:bg-violet-950/40">
-            <DialogTitle className="text-xl tracking-tight text-violet-950 dark:text-violet-100">
+          <DialogHeader className="meeting-library-header border-b px-6 py-5 pr-14 text-left">
+            <DialogTitle className="text-foreground text-xl font-semibold tracking-tight">
               Meeting library
             </DialogTitle>
             <DialogDescription>
