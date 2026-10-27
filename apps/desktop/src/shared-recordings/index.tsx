@@ -2,6 +2,13 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useId, useRef, useState } from "react";
 
 import { Button } from "@anlg/ui/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@anlg/ui/components/ui/select";
 import { useMountEffect } from "@anlg/ui/hooks/use-mount-effect";
 import { cn } from "@anlg/utils";
 
@@ -81,6 +88,7 @@ function OrganizationRecordings({
     account.workspaces[0]?.id ?? "",
   );
   const [selected, setSelected] = useState<string | null>(null);
+  const organizationPickerId = useId();
   const auth = useAuth();
   const { getSessionForRequest } = auth;
   // Refresh credentials at request time; user IDs define cache ownership.
@@ -109,24 +117,38 @@ function OrganizationRecordings({
   }
   const organizationPicker =
     account.workspaces.length > 1 ? (
-      <label className="flex items-center gap-3 text-sm">
-        Organization
-        <select
-          aria-label="Organization"
-          className="bg-background h-9 max-w-64 min-w-0 cursor-pointer rounded-lg border px-3 text-sm"
+      <div className="flex min-w-0 items-center gap-3 text-sm">
+        <label htmlFor={organizationPickerId}>Organization</label>
+        <Select
           value={organizationId}
-          onChange={(event) => {
-            setOrganizationId(event.target.value);
+          onValueChange={(value) => {
+            setOrganizationId(value);
             setSelected(null);
           }}
         >
-          {account.workspaces.map((workspace) => (
-            <option key={workspace.id} value={workspace.id}>
-              {workspace.name}
-            </option>
-          ))}
-        </select>
-      </label>
+          <SelectTrigger
+            id={organizationPickerId}
+            className="hover:bg-accent/50 data-[state=open]:bg-accent/50 w-64 max-w-full cursor-pointer transition-colors motion-reduce:transition-none"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent
+            align="start"
+            sideOffset={6}
+            className="motion-reduce:animate-none"
+          >
+            {account.workspaces.map((workspace) => (
+              <SelectItem
+                key={workspace.id}
+                value={workspace.id}
+                className="cursor-pointer"
+              >
+                {workspace.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
     ) : null;
   if (settings)
     return (
@@ -163,43 +185,45 @@ function OrganizationRecordings({
               No meetings yet. Shared meetings will appear here.
             </p>
           ) : null}
-          {recordings.data?.map((item) => (
-            <button
-              type="button"
-              key={item.occurrenceId}
-              aria-current={
-                selectedOccurrenceId === item.occurrenceId ? "page" : undefined
-              }
-              onClick={() => setSelected(item.occurrenceId)}
-              className={cn([
-                "focus-visible:outline-ring mb-1 flex w-full min-w-0 cursor-pointer flex-col gap-1 rounded-lg px-3 py-2 text-left text-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2",
-                selectedOccurrenceId === item.occurrenceId
-                  ? "bg-accent text-accent-foreground"
-                  : "hover:bg-accent/50",
-              ])}
-            >
-              <span className="block font-medium">
-                {item.occurrence.provider === "google_meet"
-                  ? "Google Meet"
-                  : "Slack huddle"}
-              </span>
-              <span className="text-muted-foreground block w-full truncate text-xs">
-                {item.captures
-                  .filter((capture) => !capture.deleted)
-                  .map(transcriptText)
-                  .find(Boolean)
-                  ?.replace(/\s+/g, " ")
-                  .slice(0, 120) || "Transcribing…"}
-              </span>
-              <span className="text-muted-foreground text-xs">
-                {item.captures.filter((capture) => !capture.deleted).length}{" "}
-                {item.captures.filter((capture) => !capture.deleted).length ===
-                1
-                  ? "recording"
-                  : "recordings"}
-              </span>
-            </button>
-          ))}
+          {recordings.data?.map((item) => {
+            const sources = groupRecordings(item.captures);
+            return (
+              <button
+                type="button"
+                key={item.occurrenceId}
+                aria-current={
+                  selectedOccurrenceId === item.occurrenceId
+                    ? "page"
+                    : undefined
+                }
+                onClick={() => setSelected(item.occurrenceId)}
+                className={cn([
+                  "focus-visible:outline-ring mb-1 flex w-full min-w-0 cursor-pointer flex-col gap-1 rounded-lg px-3 py-2 text-left text-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2",
+                  selectedOccurrenceId === item.occurrenceId
+                    ? "bg-accent text-accent-foreground"
+                    : "hover:bg-accent/50",
+                ])}
+              >
+                <span className="block font-medium">
+                  {item.occurrence.provider === "google_meet"
+                    ? "Google Meet"
+                    : "Slack huddle"}
+                </span>
+                <span className="text-muted-foreground block w-full truncate text-xs">
+                  {sources
+                    .flat()
+                    .map(transcriptText)
+                    .find(Boolean)
+                    ?.replace(/\s+/g, " ")
+                    .slice(0, 120) || "No transcript yet"}
+                </span>
+                <span className="text-muted-foreground text-xs">
+                  {sources.length}{" "}
+                  {sources.length === 1 ? "recording" : "recordings"}
+                </span>
+              </button>
+            );
+          })}
         </nav>
         <div className="bg-card min-w-0 flex-1 overflow-y-auto px-6 py-6">
           {selectedOccurrenceId ? (
@@ -260,14 +284,24 @@ function RecordingDetail({
       <ErrorMessage error={detail.error} retry={() => void detail.refetch()} />
     );
   if (!detail.data) return <p className="text-sm">Loading meeting…</p>;
-  const { captures } = detail.data;
+  const sources = groupRecordings(detail.data.captures);
+  const people = new Set(sources.map((parts) => parts[0].metadata.uploaderId))
+    .size;
   return (
     <div className="mx-auto max-w-3xl space-y-6">
-      <h2 className="text-xl font-semibold">
-        {detail.data.occurrence.provider === "google_meet"
-          ? "Google Meet"
-          : "Slack huddle"}
-      </h2>
+      <div className="space-y-1">
+        <h2 className="text-xl font-semibold">
+          {detail.data.occurrence.provider === "google_meet"
+            ? "Google Meet"
+            : "Slack huddle"}
+        </h2>
+        {sources.length > 1 ? (
+          <p className="text-muted-foreground text-sm">
+            {sources.length} recordings from {people}{" "}
+            {people === 1 ? "person" : "people"}
+          </p>
+        ) : null}
+      </div>
       <div
         role="tablist"
         aria-label="Meeting view"
@@ -321,44 +355,65 @@ function RecordingDetail({
         aria-labelledby={`${viewId}-${view}`}
         className="space-y-6"
       >
-        {captures
-          .filter((capture) => !capture.deleted)
-          .map((capture, index) => (
-            <li
-              key={`${capture.captureId}:${capture.metadata.sha256}`}
-              className="space-y-4 border-b pb-6 last:border-b-0"
-            >
-              <div className="flex items-baseline justify-between gap-3">
-                <h3 className="text-sm font-medium">Recording {index + 1}</h3>
-                <p className="text-muted-foreground text-xs tabular-nums">
-                  {formatTime(capture.frameCount / 16000)}
-                </p>
+        {sources.map((parts, index) => (
+          <li
+            key={parts[0].captureId}
+            className="space-y-4 border-b pb-6 last:border-b-0"
+          >
+            <div className="flex items-baseline justify-between gap-3">
+              <h3 className="text-sm font-medium">
+                {parts[0].metadata.uploaderId === userId
+                  ? "Your recording"
+                  : `Team recording ${index + 1}`}
+              </h3>
+              <p className="text-muted-foreground text-xs tabular-nums">
+                {formatTime(
+                  parts.reduce((frames, part) => frames + part.frameCount, 0) /
+                    16000,
+                )}
+              </p>
+            </div>
+            {parts.map((capture, partIndex) => (
+              <div
+                key={`${capture.captureId}:${capture.metadata.sha256}`}
+                className="space-y-2"
+              >
+                {parts.length > 1 ? (
+                  <p className="text-muted-foreground text-xs">
+                    Part {partIndex + 1}
+                  </p>
+                ) : null}
+                {view === "recordings" ? (
+                  <RecordingAudio
+                    userId={userId}
+                    organizationId={organizationId}
+                    occurrenceId={occurrenceId}
+                    source={capture}
+                  />
+                ) : (
+                  <p className="text-sm leading-7 whitespace-pre-wrap select-text">
+                    {transcriptText(capture) ||
+                      (capture.transcriptStatus === "ready"
+                        ? "No speech detected."
+                        : capture.transcriptStatus === "error"
+                          ? "Transcription failed. You can still listen to the recording."
+                          : "Transcribing…")}
+                  </p>
+                )}
+                {capture.metadata.gaps.length ? (
+                  <p className="text-muted-foreground text-sm">
+                    Some audio is missing from this recording.
+                  </p>
+                ) : null}
               </div>
-              {view === "recordings" ? (
-                <RecordingAudio
-                  userId={userId}
-                  organizationId={organizationId}
-                  occurrenceId={occurrenceId}
-                  source={capture}
-                />
-              ) : null}
-              {capture.metadata.gaps.length ? (
-                <p className="text-muted-foreground text-sm">
-                  Some audio is missing from this recording.
-                </p>
-              ) : null}
-              {view === "transcript" ? (
-                <p className="text-sm leading-7 whitespace-pre-wrap select-text">
-                  {transcriptText(capture) ||
-                    (capture.transcriptStatus === "ready"
-                      ? "No speech detected."
-                      : capture.transcriptStatus === "error"
-                        ? "Transcription failed. You can still listen to the recording."
-                        : "Transcribing…")}
-                </p>
-              ) : null}
-            </li>
-          ))}
+            ))}
+          </li>
+        ))}
+        {sources.length === 0 ? (
+          <li className="text-muted-foreground text-sm">
+            No recordings available.
+          </li>
+        ) : null}
       </ul>
     </div>
   );
@@ -489,4 +544,22 @@ function formatTime(seconds: number) {
   return `${sign}${Math.floor(seconds / 60)}:${Math.floor(seconds % 60)
     .toString()
     .padStart(2, "0")}`;
+}
+
+function groupRecordings(captures: SharedRecordingSource[]) {
+  // Upload parts share this identity; other devices and recording sessions stay separate.
+  const groups = new Map<string, SharedRecordingSource[]>();
+  for (const capture of captures) {
+    if (capture.deleted) continue;
+    const { uploaderId, deviceId, localCaptureId } = capture.metadata;
+    const key = JSON.stringify([uploaderId, deviceId, localCaptureId]);
+    const parts = groups.get(key) ?? [];
+    parts.push(capture);
+    groups.set(key, parts);
+  }
+  return [...groups.values()].map((parts) =>
+    parts.sort(
+      (left, right) => left.metadata.offsetFrames - right.metadata.offsetFrames,
+    ),
+  );
 }

@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -50,6 +51,17 @@ vi.mock("./client", async (importOriginal) => ({
         {
           captureId: `preview-${token}`,
           deleted: false,
+          frameCount: 16000,
+          transcriptStatus: "ready",
+          metadata: {
+            uploaderId: token,
+            deviceId: "preview-device",
+            localCaptureId: "preview-recording",
+            sha256: `preview-${token}`,
+            offsetFrames: 0,
+            timingBasis: "device_clock_hint",
+            gaps: [],
+          },
           transcript: {
             provider: "asr",
             model: "model",
@@ -89,6 +101,9 @@ beforeEach(() => {
       },
       metadata: {
         uploaderId: index ? "second-contributor" : "first-contributor",
+        deviceId: "same-device",
+        localCaptureId: "same-local-recording",
+        timingBasis: "device_clock_hint",
         segmentSequence: 0,
         sha256: captureId,
         offsetFrames: index * 16000,
@@ -186,6 +201,54 @@ it("shows original source transcripts and separate players, and retries failed s
   await waitFor(() =>
     expect(view.container.querySelectorAll("audio")).toHaveLength(2),
   );
+  view.unmount();
+  view.client.clear();
+});
+
+it("groups upload parts by original recording without combining different contributors or their audio", async () => {
+  const recording = await mocks.readRecording("account-one");
+  const first = recording.captures[0];
+  recording.captures.push({
+    ...first,
+    captureId: "earlier-part",
+    metadata: {
+      ...first.metadata,
+      sha256: "earlier-part",
+      offsetFrames: -16000,
+    },
+  });
+  mocks.readRecording.mockResolvedValue(recording);
+  mocks.downloadAudio.mockResolvedValue(
+    new Blob(["RIFF"], { type: "audio/wav" }),
+  );
+  const view = renderAccount();
+  await screen.findAllByRole("button", { name: "Listen" });
+  const panel = screen.getByRole("tabpanel");
+  const recordings = within(panel).getAllByRole("listitem");
+  expect(recordings).toHaveLength(2);
+  const firstRecording = within(recordings[0]);
+  expect(
+    firstRecording.getAllByRole("button", { name: "Listen" }),
+  ).toHaveLength(2);
+  expect(
+    within(recordings[1]).getAllByRole("button", { name: "Listen" }),
+  ).toHaveLength(1);
+  fireEvent.click(firstRecording.getAllByRole("button", { name: "Listen" })[0]);
+  await waitFor(() =>
+    expect(recordings[0].querySelectorAll("audio")).toHaveLength(1),
+  );
+  expect(mocks.downloadAudio.mock.calls[0][0].captureId).toBe("earlier-part");
+  fireEvent.click(firstRecording.getByRole("button", { name: "Listen" }));
+  fireEvent.click(
+    within(recordings[1]).getByRole("button", { name: "Listen" }),
+  );
+  await waitFor(() =>
+    expect(view.container.querySelectorAll("audio")).toHaveLength(3),
+  );
+  fireEvent.click(screen.getByRole("tab", { name: "Transcript" }));
+  expect(
+    screen.getAllByText("Original source decision for account-one."),
+  ).toHaveLength(3);
   view.unmount();
   view.client.clear();
 });
