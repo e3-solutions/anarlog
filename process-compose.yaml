@@ -49,8 +49,15 @@ processes:
     command: pnpm -F @anlg/desktop tauri:dev:native
     log_location: ${PC_LOG_DIR:-.process-compose/logs}/desktop.log
     depends_on:
+      desktop-doctor:
+        condition: process_completed_successfully
       desktop-frontend:
         condition: process_healthy
+
+  desktop-doctor:
+    description: Check native tools before spending time compiling
+    command: node scripts/desktop-doctor.mjs
+    log_location: ${PC_LOG_DIR:-.process-compose/logs}/desktop-doctor.log
 
   web:
     description: Run the website on http://localhost:3000
