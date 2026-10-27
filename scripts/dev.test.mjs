@@ -31,6 +31,7 @@ function fixture(
 for (const [target, port] of Object.entries({
   stack: "18080",
   desktop: "18081",
+  "desktop-frontend": "18081",
   web: "18082",
   api: "18083",
 })) {

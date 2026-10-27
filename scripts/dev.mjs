@@ -3,11 +3,17 @@ import { mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const [target, ...args] = process.argv.slice(2);
-const ports = { stack: "18080", desktop: "18081", web: "18082", api: "18083" };
+const ports = {
+  stack: "18080",
+  desktop: "18081",
+  "desktop-frontend": "18081",
+  web: "18082",
+  api: "18083",
+};
 
 if (!Object.hasOwn(ports, target)) {
   console.error(
-    "Usage: node scripts/dev.mjs <stack|desktop|web|api> [process-compose flags]",
+    "Usage: node scripts/dev.mjs <stack|desktop|desktop-frontend|web|api> [process-compose flags]",
   );
   process.exit(1);
 }

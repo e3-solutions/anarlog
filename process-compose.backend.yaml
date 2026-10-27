@@ -40,10 +40,15 @@ processes:
       api:
         condition: process_healthy
 
-  desktop:
+  desktop-frontend:
     environment:
       - VITE_APP_URL=http://localhost:3000
       - VITE_API_URL=http://localhost:3001
     depends_on:
       web:
         condition: process_healthy
+
+  desktop:
+    environment:
+      - VITE_APP_URL=http://localhost:3000
+      - VITE_API_URL=http://localhost:3001

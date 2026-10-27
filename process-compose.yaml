@@ -23,13 +23,34 @@ processes:
     availability:
       restart: exit_on_failure
 
-  desktop:
-    description: Run the Tauri desktop app and its Vite dev server
-    command: pnpm -F @anlg/desktop tauri:dev
-    log_location: ${PC_LOG_DIR:-.process-compose/logs}/desktop.log
+  desktop-frontend:
+    description: Run the desktop Vite server without invoking Cargo
+    command: pnpm -F @anlg/desktop dev:frontend
+    environment:
+      - RELAY_PORT=${RELAY_PORT:-1424}
+    log_location: ${PC_LOG_DIR:-.process-compose/logs}/desktop-frontend.log
     depends_on:
       ui-build:
         condition: process_completed_successfully
+    readiness_probe:
+      http_get:
+        host: localhost
+        port: 1422
+        path: /@vite/client
+      initial_delay_seconds: 1
+      period_seconds: 1
+      timeout_seconds: 5
+      failure_threshold: 60
+    availability:
+      restart: exit_on_failure
+
+  desktop:
+    description: Build and run the native desktop shell; restart after Rust changes
+    command: pnpm -F @anlg/desktop tauri:dev:native
+    log_location: ${PC_LOG_DIR:-.process-compose/logs}/desktop.log
+    depends_on:
+      desktop-frontend:
+        condition: process_healthy
 
   web:
     description: Run the website on http://localhost:3000

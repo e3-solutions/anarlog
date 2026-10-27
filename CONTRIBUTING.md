@@ -80,6 +80,63 @@ process-compose -p 18082 process restart web
 process-compose -p 18082 down
 ```
 
+### Iterate on desktop without rebuilding the native app
+
+Keep `pnpm dev:desktop` running while editing React, TypeScript, or CSS. Vite
+updates the frontend in the running app; these edits do not invoke Cargo or
+restart the native shell. Process Compose runs `desktop-frontend` (Vite) and
+`desktop` (the native shell) separately.
+
+After changing Rust, Swift, native permissions, or Tauri configuration, restart
+only the native process:
+
+```bash
+process-compose -p 18081 process restart desktop
+```
+
+This keeps Vite running and lets Cargo reuse unchanged dependencies and
+incremental compilation results. For `pnpm dev`, use control port `18080`.
+Native watching stays disabled so generated files and frontend edits cannot
+trigger unexpected native rebuilds. The standalone
+`pnpm -F @anlg/desktop tauri:dev` command still starts both parts together.
+
+For frontend work against an already running native app, start only Vite:
+
+```bash
+pnpm dev:desktop:frontend
+# Open http://localhost:1424 to use an already running Dev shell's relay.
+
+# Or reuse an installed, running Staging app (no local Rust build required):
+RELAY_PORT=1423 pnpm dev:desktop:frontend
+# Open http://localhost:1423.
+```
+
+Use one desktop Vite server at a time: the frontend-only command shares port
+1422 and control port 18081 with `pnpm dev:desktop`. It does not launch a native
+app. Browser relay work uses the running app's backend and data; native window
+behavior still needs verification inside the Mac app. Restarting
+`desktop-frontend` in an existing full session also leaves its native shell
+running.
+
+For native builds, keep the same checkout, feature set, and `CARGO_TARGET_DIR`
+between runs; cleaning or switching these inputs can discard useful cached
+work. The desktop builds only its Rust library and executable, avoiding an
+unused static archive of all dependencies. For less debug output during local
+iteration, you can opt in to line tables (file and line information in Rust
+backtraces, without debugger variable inspection):
+
+```bash
+CARGO_PROFILE_DEV_DEBUG=line-tables-only pnpm dev:desktop
+```
+
+Changing this setting rebuilds affected crates once. Omit it for full native
+debugging. To compare native build times, keep the setting fixed, forward
+`--timings` with `pnpm -F @anlg/desktop tauri:dev -- --timings`, and compare an
+unchanged restart with a restart after one Rust edit. The Cargo timing report
+is written under the target directory's `cargo-timings/`; measure cold builds
+separately. During a React edit, check that `desktop-frontend` serves the update
+and the `desktop` log contains no new Cargo invocation.
+
 ### Develop the Google Drive automation
 
 Run the desktop, web (`:3000`), and API (`:3001`) development commands above in
