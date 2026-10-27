@@ -458,3 +458,50 @@ fn browser_inspection_accepts_two_account_views_only_for_the_same_known_meet() {
         assert!(rows.iter().all(|row| row.active_call == expected));
     }
 }
+
+#[test]
+fn teams_inspection_does_not_treat_unreadable_or_competing_calls_as_departure() {
+    let app = || MeetingApp {
+        id: "com.microsoft.teams2".to_string(),
+        name: "Microsoft Teams".to_string(),
+    };
+    let call = |hash| {
+        let mut window = fixture_node(0, "AXWindow", "Customer call", &[]);
+        window.element_hash = Some(hash);
+        NativeMeetingRoot {
+            window_title: window.title.clone(),
+            nodes: vec![window, fixture_node(1, "AXButton", "Hang up", &[0])],
+        }
+    };
+    let joined = teams_inspection_from_windows(app(), 123, true, vec![call(0x1000)], true);
+    assert!(joined.active_call);
+    assert_eq!(
+        joined.call_identity.as_deref(),
+        Some("teams-window:123:1000")
+    );
+    assert_eq!(
+        joined.open_call_identities,
+        Some(vec!["teams-window:123:1000".to_string()])
+    );
+    let mut unreadable = call(0x1000);
+    unreadable.nodes.truncate(1);
+    for (windows, complete, trusted) in [
+        (vec![unreadable], true, true),
+        (vec![call(0x1000)], false, true),
+        (vec![], false, true),
+        (vec![call(0x1000), call(0x2000)], true, true),
+        (vec![call(0x1000)], true, false),
+    ] {
+        let uncertain = teams_inspection_from_windows(app(), 123, trusted, windows, complete);
+        assert!(!uncertain.active_call);
+        assert!(uncertain.call_identity.is_none());
+        assert!(uncertain.open_call_identities.is_none());
+        assert!(!uncertain.warnings.is_empty());
+    }
+    let mut ended = call(0x1000);
+    ended.nodes[1] = fixture_node(1, "AXButton", "Activity", &[0]);
+    let departed = teams_inspection_from_windows(app(), 123, true, vec![ended], true);
+    assert!(!departed.active_call);
+    assert_eq!(departed.open_call_identities, Some(vec![]));
+    assert!(departed.warnings.is_empty());
+}

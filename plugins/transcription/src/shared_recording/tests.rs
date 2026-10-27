@@ -133,8 +133,119 @@ fn read_request(stream: &mut std::net::TcpStream) -> String {
                 .then(|| value.trim().parse::<usize>().unwrap())
         })
         .unwrap_or(0);
-    stream.read_exact(&mut vec![0; length]).unwrap();
-    headers
+    let mut body = vec![0; length];
+    stream.read_exact(&mut body).unwrap();
+    format!("{headers}{}", String::from_utf8(body).unwrap())
+}
+
+#[tokio::test]
+async fn teams_without_a_connected_account_recovers_admission_and_upload_retries() {
+    use std::io::Write;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let fixture = Fixture::new(
+        "user",
+        format!("http://{}", listener.local_addr().unwrap()),
+        false,
+    )
+    .await;
+    let session_id = fixture.session.clone();
+    let identity = format!("teams-local:{session_id}");
+    let expected_identity = identity.clone();
+    let server = std::thread::spawn(move || {
+        for (status, expected) in [
+            (200, "/admit"),
+            (503, "/admit"),
+            (200, "/admit"),
+            (503, "/captures/"),
+            (200, "/captures/"),
+            (200, "/process"),
+        ] {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(std::time::Instant::now() < deadline, "missing request");
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+                    Err(error) => panic!("{error}"),
+                }
+            };
+            stream.set_nonblocking(false).unwrap();
+            let request = read_request(&mut stream);
+            assert!(request.lines().next().unwrap().contains(expected));
+            if expected == "/admit" {
+                let payload: Value =
+                    serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+                assert_eq!(payload["provider"], "microsoft_teams");
+                assert_eq!(payload["roomIdentity"], expected_identity);
+                assert_eq!(payload["connectionId"], "");
+            }
+            let body = r#"{"occurrenceId":"teams-capture"}"#;
+            write!(stream, "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+        }
+    });
+    let handle = fixture.app.handle().clone();
+    assert!(start_raw(&handle, &session_id, Some("user")));
+    observe_raw(&handle, &session_id, 16000, true);
+    let observe = || {
+        shared_recording_observe(
+            handle.clone(),
+            session_id.clone(),
+            "microsoftTeams".into(),
+            Some(identity.clone()),
+            chrono::Utc::now().timestamp_millis(),
+            "token".into(),
+            "user".into(),
+            None,
+            None,
+        )
+    };
+    assert_eq!(observe().await.unwrap().as_deref(), Some("teams-capture"));
+    assert!(observe().await.is_err());
+    assert_eq!(
+        fixture.enqueue("transcript").await.unwrap().unwrap().state,
+        "awaiting_identity"
+    );
+    shared_recording_flush(handle.clone(), "token".into(), "user".into())
+        .await
+        .unwrap();
+    let jobs = shared_recording_queue(handle.clone(), "user".into())
+        .await
+        .unwrap();
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].state, "error");
+    assert!(jobs[0].error.as_deref().unwrap().contains("503"));
+    shared_recording_flush(handle.clone(), "token".into(), "user".into())
+        .await
+        .unwrap();
+    let jobs = shared_recording_queue(handle.clone(), "user".into())
+        .await
+        .unwrap();
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].state, "uploaded");
+    let dir = directory(&handle).unwrap();
+    let path = dir.join(format!("binding-{}.json", key(&session_id)));
+    let mut binding: Binding = read(&path).unwrap().unwrap();
+    assert!(binding.connection_id.is_none());
+    binding.platform = "unknown".into();
+    save(&path, &binding).unwrap();
+    let mut retry = jobs[0].clone();
+    retry.state = "pending".into();
+    save(&job_path(&dir, &retry.id), &retry).unwrap();
+    shared_recording_flush(handle.clone(), "token".into(), "user".into())
+        .await
+        .unwrap();
+    let jobs = shared_recording_queue(handle.clone(), "user".into())
+        .await
+        .unwrap();
+    assert_eq!(jobs[0].state, "error");
+    assert_eq!(
+        jobs[0].error.as_deref(),
+        Some("Unsupported meeting provider")
+    );
+    server.join().unwrap();
 }
 
 #[tokio::test]

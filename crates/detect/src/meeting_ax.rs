@@ -2144,6 +2144,131 @@ fn inspection_label(node: &AxNode) -> Option<String> {
         .or_else(|| node.description.clone())
 }
 
+#[cfg(any(test, target_os = "macos"))]
+fn teams_inspection_from_windows(
+    app: MeetingApp,
+    pid: i32,
+    accessibility_trusted: bool,
+    windows: Vec<NativeMeetingRoot>,
+    complete: bool,
+) -> MeetingAccessibilityInspection {
+    let active = windows
+        .iter()
+        .filter(|root| {
+            native_meeting_window_is_validated(&MeetingPlatform::MicrosoftTeams, &root.nodes)
+        })
+        .collect::<Vec<_>>();
+    let identity = |root: &NativeMeetingRoot| {
+        root.nodes
+            .iter()
+            .find(|node| node.tree_path.is_empty() && node.role.as_deref() == Some("AXWindow"))
+            .and_then(|node| node.element_hash)
+            .map(|hash| format!("teams-window:{pid}:{hash:x}"))
+    };
+    let readable = windows.iter().all(|root| {
+        native_meeting_window_is_validated(&MeetingPlatform::MicrosoftTeams, &root.nodes)
+            || root.nodes.iter().any(|node| {
+                node_has_positive_bounds(node)
+                    && matches!(
+                        node.role.as_deref(),
+                        Some("AXButton") | Some("AXTab") | Some("AXRadioButton")
+                    )
+                    && node_labels(node).any(|label| {
+                        matches!(
+                            label.trim().to_ascii_lowercase().as_str(),
+                            "activity" | "chat" | "calendar" | "calls" | "join now" | "rejoin"
+                        )
+                    })
+            })
+    });
+    let trustworthy = accessibility_trusted && complete && readable && active.len() <= 1;
+    let root = trustworthy.then(|| active.first().copied()).flatten();
+    let call_identity = root.and_then(identity);
+    let active_call = root.is_some() && call_identity.is_some();
+    let inventory = trustworthy
+        .then(|| {
+            active
+                .iter()
+                .filter_map(|root| identity(root))
+                .collect::<Vec<_>>()
+        })
+        .filter(|inventory| inventory.len() == active.len());
+    let mut warnings = Vec::new();
+    if !trustworthy || inventory.is_none() {
+        warnings.push("Teams window inspection was ambiguous or incomplete".to_string());
+    }
+    MeetingAccessibilityInspection {
+        active_call,
+        app,
+        pid,
+        platform: MeetingPlatform::MicrosoftTeams,
+        surface: MeetingSurface::Native,
+        accessibility_trusted,
+        window_title: root.and_then(|root| root.window_title.clone()),
+        call_identity,
+        open_call_identities: inventory,
+        remote_screen_share: active_call
+            && root.is_some_and(|root| nodes_show_remote_screen_share(&root.nodes)),
+        warnings,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn collect_teams_nodes(
+    element: &ax::UiElement,
+    path: &mut Vec<usize>,
+    nodes: &mut Vec<AxNode>,
+) -> bool {
+    if path.len() > MAX_TREE_DEPTH || nodes.len() >= MAX_NODES {
+        return false;
+    }
+    let mut node = snapshot_node(element, nodes.len());
+    node.tree_path.clone_from(path);
+    let Some(role) = node.role.clone() else {
+        return false;
+    };
+    nodes.push(node);
+    // A visible-child subset cannot prove that the call's controls disappeared.
+    let Some(children) = ax_element_array(element, ax::attr::children()) else {
+        return !ax_role_may_have_children(&role);
+    };
+    let mut complete = true;
+    for (index, child) in children.iter().enumerate() {
+        path.push(index);
+        complete &= collect_teams_nodes(child, path, nodes);
+        path.pop();
+    }
+    complete
+}
+
+#[cfg(target_os = "macos")]
+fn inspect_teams_app(
+    app: MeetingApp,
+    pid: i32,
+    accessibility_trusted: bool,
+) -> MeetingAccessibilityInspection {
+    let mut windows = Vec::new();
+    let mut roots = Vec::new();
+    let ax_app = ax::UiElement::with_app_pid(pid);
+    let _ = ax_app.set_messaging_timeout_secs(0.6);
+    let hidden = cf::String::from_str("AXHidden");
+    let mut complete = accessibility_trusted
+        && ax_bool_attr(&ax_app, ax::Attr::with_string(&hidden)) != Some(true)
+        && collect_window_elements(&ax_app, 0, &mut 0, &mut windows);
+    for window in windows {
+        let mut nodes = Vec::new();
+        // Hidden or minimized windows may expose only a shell; that is uncertainty.
+        let minimized = cf::String::from_str("AXMinimized");
+        complete &= ax_bool_attr(&window, ax::Attr::with_string(&minimized)) == Some(false);
+        complete &= collect_teams_nodes(&window, &mut Vec::new(), &mut nodes);
+        roots.push(NativeMeetingRoot {
+            window_title: string_attr(&window, ax::attr::title()),
+            nodes,
+        });
+    }
+    teams_inspection_from_windows(app, pid, accessibility_trusted, roots, complete)
+}
+
 #[cfg(target_os = "macos")]
 fn inspect_app(
     app: MeetingApp,
@@ -2152,6 +2277,9 @@ fn inspect_app(
 ) -> MeetingAccessibilityInspection {
     let mut warnings = Vec::new();
     let bundle_platform = classify_bundle(&app.id);
+    if bundle_platform == MeetingPlatform::MicrosoftTeams {
+        return inspect_teams_app(app, pid, accessibility_trusted);
+    }
     let mut window_title = None;
     let mut nodes = Vec::new();
     let mut scoped_platform = None;

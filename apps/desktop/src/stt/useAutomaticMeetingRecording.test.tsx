@@ -597,3 +597,49 @@ describe("automatic local meeting recording", () => {
     expect(mocks.open).not.toHaveBeenCalled();
   });
 });
+
+it("records native Teams while muted, preserves manual Stop, and waits for confirmed departure", async () => {
+  const identity = "teams-window:123:abc";
+  const teams: MeetingAccessibilityInspection = {
+    ...meet,
+    platform: "microsoftTeams",
+    surface: "native",
+    app: { id: "com.microsoft.teams2", name: "Microsoft Teams" },
+    callIdentity: identity,
+    openCallIdentities: [identity],
+  };
+  snapshot([teams]);
+  const { active, stop } = setup();
+  await tick(0);
+  expect(mocks.create).toHaveBeenCalledWith("Microsoft Teams");
+  active();
+  snapshot([
+    {
+      ...teams,
+      activeCall: false,
+      callIdentity: null,
+      openCallIdentities: null,
+      warnings: ["window minimized"],
+    },
+  ]);
+  await tick(90_000);
+  expect(stop).not.toHaveBeenCalled();
+  snapshot([teams]);
+  await tick();
+  stop();
+  await tick(20_000);
+  expect(mocks.open).toHaveBeenCalledOnce();
+  snapshot([
+    { ...teams, activeCall: false, callIdentity: null, openCallIdentities: [] },
+  ]);
+  await tick();
+  snapshot([teams]);
+  await tick();
+  expect(mocks.open).toHaveBeenCalledTimes(2);
+  active();
+  snapshot([
+    { ...teams, activeCall: false, callIdentity: null, openCallIdentities: [] },
+  ]);
+  await tick(18_000);
+  expect(stop).toHaveBeenCalledTimes(2);
+});

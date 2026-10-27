@@ -35,7 +35,7 @@ export function flushSharedRecordings(accessToken: string, userId: string) {
 
 export function observeSharedRecording(input: {
   sessionId: string;
-  platform: "googleMeet" | "slack" | "unverified";
+  platform: "googleMeet" | "slack" | "microsoftTeams" | "unverified";
   callIdentity: string | null;
   observedAtMs: number;
   accessToken: string;

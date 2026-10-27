@@ -93,6 +93,7 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
           {
             googleMeet: policy.current.enabled,
             slack: policy.current.enabled,
+            microsoftTeams: policy.current.enabled,
           },
         );
         const now = Date.now();
@@ -126,12 +127,13 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
               capture.meeting,
               inspection.data,
             );
-            const macMeet =
-              capture.meeting.platform === "googleMeet" &&
+            const macPersistentCall =
+              (capture.meeting.platform === "googleMeet" ||
+                capture.meeting.platform === "microsoftTeams") &&
               platform() === "macos";
             if (
               observation === "unknown" &&
-              macMeet &&
+              macPersistentCall &&
               !inspection.data.some(
                 (entry) =>
                   entry.app.id === capture!.meeting.app.id &&
@@ -151,15 +153,12 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
               capture.networkHoldUntil ??= now + AUTO_STOP_NETWORK_HOLD_MS;
             if (
               observation === "active" ||
-              (observation === "unknown" && (macMeet || micActive))
+              (observation === "unknown" && (macPersistentCall || micActive))
             ) {
-              // A hidden browser tab can lose AX evidence and microphone
-              // ownership while its muted call continues. Only confirmed
-              // departure can end an established Meet capture.
-              // An unreadable Meet poll cannot stop capture. Preserve a prior
-              // confirmed departure so another fresh inactive poll can finish
-              // its grace; positive attendance resets that evidence.
-              if (observation === "active" || !macMeet) {
+              // Hidden or muted calls can lose AX evidence and microphone ownership.
+              // Preserve departure evidence until a fresh readable poll confirms it;
+              // positive attendance resets the grace.
+              if (observation === "active" || !macPersistentCall) {
                 capture.missingSince = null;
                 capture.missingObservation = null;
               }
@@ -261,6 +260,7 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
               {
                 googleMeet: policy.current.enabled,
                 slack: policy.current.enabled,
+                microsoftTeams: policy.current.enabled,
               },
             )?.key !== selected.key ||
             !store.getState().canStartLiveSession(sessionId)
