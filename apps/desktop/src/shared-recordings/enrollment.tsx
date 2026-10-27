@@ -25,7 +25,6 @@ import { env } from "~/env";
 import {
   getStoredSettingValues,
   setSettingValues,
-  updateSettingValue,
   useStoredSettingValuesQuery,
 } from "~/settings/queries";
 import type { SettingValues } from "~/settings/schema";
@@ -91,10 +90,12 @@ function ActiveEnrollment({ userId }: { userId: string }) {
   )
     return null;
   if (
-    !account.data.connections.some(
-      (connection) =>
-        ["google-meet", "slack"].includes(connection.integrationId) &&
-        connection.status === "connected",
+    !["google-meet", "slack"].every((integrationId) =>
+      account.data!.connections.some(
+        (connection) =>
+          connection.integrationId === integrationId &&
+          connection.status === "connected",
+      ),
     )
   )
     return (
@@ -211,52 +212,16 @@ function ApplyDefaults({
 }
 
 function ConnectionWelcome({ account }: { account: SharedRecordingAccount }) {
-  const settings = useStoredSettingValuesQuery();
   const { openIntegration, openingAction } = useOpenIntegrationUrl();
-  const config = useQuery({
-    queryKey: ["shared-recording-welcome-configuration", account.userId],
-    queryFn: sharedRecordingConfiguration,
-    refetchInterval: 5_000,
-    retry: false,
-  });
-  const scope = JSON.stringify([
-    account.userId,
-    account.policy!.workspaceId,
-    env.VITE_API_URL,
-  ]);
-  const dismiss = useMutation({
-    mutationFn: () =>
-      updateSettingValue("shared_recording_connection_dismissed", (value) =>
-        JSON.stringify([...new Set([...savedScopes(value), scope])]),
-      ),
-  });
-  if (
-    config.isPending ||
-    config.error ||
-    config.data !== null ||
-    savedScopes(
-      settings.data?.values.shared_recording_defaults_applied,
-    ).includes(scope) ||
-    savedScopes(
-      settings.data?.values.shared_recording_connection_dismissed,
-    ).includes(scope) ||
-    dismiss.isSuccess
-  )
-    return null;
   return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open && !dismiss.isPending) dismiss.mutate();
-      }}
-    >
-      <DialogContent>
+    <Dialog open>
+      <DialogContent showCloseButton={false}>
         <DialogHeader>
           <DialogTitle>Welcome to E3</DialogTitle>
           <DialogDescription>
-            After you connect Google Meet or Slack, supported meetings
-            automatically record and share their original audio and transcripts
-            with E3.
+            Connect both Google Meet and Slack to finish E3 setup. Each app
+            needs its own approval. Supported meetings will automatically record
+            and share their original audio and transcripts with E3.
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-wrap gap-2">
@@ -264,11 +229,14 @@ function ConnectionWelcome({ account }: { account: SharedRecordingAccount }) {
             const connection = account.connections.find(
               (item) => item.integrationId === integrationId,
             );
+            const connected = connection?.status === "connected";
+            const name =
+              integrationId === "google-meet" ? "Google Meet" : "Slack";
             return (
               <Button
                 key={integrationId}
                 variant="outline"
-                disabled={openingAction !== null || dismiss.isPending}
+                disabled={openingAction !== null || connected}
                 onClick={() =>
                   openIntegration({
                     nangoIntegrationId: integrationId,
@@ -277,30 +245,14 @@ function ConnectionWelcome({ account }: { account: SharedRecordingAccount }) {
                   })
                 }
               >
-                {integrationId === "google-meet"
-                  ? "Connect Google Meet"
-                  : "Connect Slack"}
+                {connected ? `${name} connected` : `Connect ${name}`}
               </Button>
             );
           })}
         </div>
         <p className="text-muted-foreground text-sm">
-          You can connect later in Settings → Meetings.
+          Both connections are required before automatic setup can finish.
         </p>
-        {dismiss.error ? (
-          <p role="alert" className="text-sm">
-            Your preference could not be saved. Try again.
-          </p>
-        ) : null}
-        <div className="flex justify-end">
-          <Button
-            variant="ghost"
-            disabled={dismiss.isPending}
-            onClick={() => dismiss.mutate()}
-          >
-            Later
-          </Button>
-        </div>
       </DialogContent>
     </Dialog>
   );

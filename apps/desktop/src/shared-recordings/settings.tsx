@@ -33,6 +33,16 @@ export function SharedRecordingPreferences({
     config.data?.enabled === true &&
     config.data.organizationId === organizationId &&
     config.data.apiBaseUrl === env.VITE_API_URL;
+  const managed = account.policy?.workspaceId === organizationId;
+  const connected = (integrationId: string) =>
+    account.connections.some(
+      (connection) =>
+        connection.integrationId === integrationId &&
+        connection.status === "connected",
+    );
+  const ready = managed
+    ? ["google-meet", "slack"].every(connected)
+    : ["google-meet", "slack"].some(connected);
   const update = useMutation({
     mutationFn: () =>
       configureSharedRecordings({
@@ -62,11 +72,11 @@ export function SharedRecordingPreferences({
           A local audio copy is kept for upload retries, even when audio
           retention is off.
         </p>
-        {!account.connections.some(
-          (connection) => connection.status === "connected",
-        ) ? (
+        {!ready ? (
           <p className="text-muted-foreground">
-            Connect Google Meet or Slack to turn on sharing.
+            {managed
+              ? "Connect both Google Meet and Slack to finish E3 setup."
+              : "Connect Google Meet or Slack to turn on sharing."}
           </p>
         ) : null}
         <div className="flex flex-wrap gap-2">
@@ -79,7 +89,7 @@ export function SharedRecordingPreferences({
               <Button
                 key={integrationId}
                 variant="outline"
-                disabled={openingAction !== null || enabled}
+                disabled={openingAction !== null || (enabled && !managed)}
                 onClick={() =>
                   openIntegration({
                     nangoIntegrationId: integrationId,
@@ -96,6 +106,7 @@ export function SharedRecordingPreferences({
           })}
         </div>
         {enabled &&
+        !managed &&
         ["google-meet", "slack"].some(
           (integrationId) =>
             !account.connections.some(
@@ -117,14 +128,7 @@ export function SharedRecordingPreferences({
       <Button
         className="bg-accent text-accent-foreground hover:bg-accent/80 self-start"
         variant="outline"
-        disabled={
-          config.isPending ||
-          update.isPending ||
-          (!enabled &&
-            !account.connections.some(
-              (connection) => connection.status === "connected",
-            ))
-        }
+        disabled={config.isPending || update.isPending || (!enabled && !ready)}
         onClick={() => update.mutate()}
       >
         {enabled ? "Turn off" : "Enable sharing"}

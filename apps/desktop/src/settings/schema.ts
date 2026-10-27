@@ -39,11 +39,6 @@ export const SETTING_DEFINITIONS = {
     path: ["general", "automatic_updates"],
     default: true as boolean,
   },
-  shared_recording_connection_dismissed: {
-    type: "string",
-    path: ["general", "shared_recording_connection_dismissed"],
-    default: "[]" as string,
-  },
   shared_recording_defaults_applied: {
     type: "string",
     path: ["general", "shared_recording_defaults_applied"],

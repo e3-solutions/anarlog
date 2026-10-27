@@ -38,6 +38,11 @@ const account = vi.hoisted(() => ({
       connectionId: "meet-consent",
       status: "connected",
     },
+    {
+      integrationId: "slack",
+      connectionId: "slack-consent",
+      status: "connected",
+    },
   ],
   policy: {
     workspaceId: "organization",
@@ -57,8 +62,8 @@ vi.mock("~/env", () => ({
   env: { VITE_API_URL: "https://recordings.example.com" },
 }));
 vi.mock("./client", () => ({
-  enrollSharedRecordingAccount: async () => account,
-  readSharedRecordingAccount: async () => account,
+  enrollSharedRecordingAccount: async () => structuredClone(account),
+  readSharedRecordingAccount: async () => structuredClone(account),
 }));
 vi.mock("./native", () => ({
   configureSharedRecordings: mocks.configure,
@@ -98,14 +103,6 @@ vi.mock("~/shared/integration", () => ({
 vi.mock("~/settings/queries", () => ({
   getStoredSettingValues: mocks.getSettings,
   setSettingValues: mocks.writeSettings,
-  updateSettingValue: async (
-    key: string,
-    update: (value: string | undefined) => string,
-  ) => {
-    const value = update(mocks.values[key] as string | undefined);
-    mocks.values[key] = value;
-    return value;
-  },
   useStoredSettingValuesQuery: () => ({
     data: {
       values: mocks.values,
@@ -143,6 +140,11 @@ beforeEach(() => {
     {
       integrationId: "google-meet",
       connectionId: "meet-consent",
+      status: "connected",
+    },
+    {
+      integrationId: "slack",
+      connectionId: "slack-consent",
       status: "connected",
     },
   ];
@@ -235,7 +237,7 @@ it("abandons pending defaults when the active account changes before local confi
   expect(mocks.values).toEqual({});
 });
 
-it("remembers Later without enabling capture before provider consent", async () => {
+it("requires both meeting connections and keeps Slack available after connecting Meet", async () => {
   account.connections = [];
   openEnrollment();
   await screen.findByRole("dialog");
@@ -245,18 +247,45 @@ it("remembers Later without enabling capture before provider consent", async () 
     connectionId: undefined,
     action: "connect",
   });
-  fireEvent.click(screen.getByRole("button", { name: "Later" }));
-  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-  expect(
-    JSON.parse(mocks.values.shared_recording_connection_dismissed as string),
-  ).toContain(
-    JSON.stringify([
-      account.userId,
-      "organization",
-      "https://recordings.example.com",
-    ]),
-  );
+  account.connections = [
+    {
+      integrationId: "google-meet",
+      connectionId: "meet-consent",
+      status: "connected",
+    },
+  ];
+  await act(async () => {
+    clients[clients.length - 1].setQueryData(
+      ["shared-recordings", account.userId, "account"],
+      { ...account },
+    );
+  });
+  await screen.findByRole("button", { name: "Google Meet connected" });
   expect(mocks.config).toBeNull();
   expect(mocks.values.auto_start_detected_meetings).toBeUndefined();
-  expect(mocks.values.shared_recording_defaults_applied).toBeUndefined();
+  fireEvent.click(screen.getByRole("button", { name: "Connect Slack" }));
+  expect(mocks.openIntegration).toHaveBeenLastCalledWith({
+    nangoIntegrationId: "slack",
+    connectionId: undefined,
+    action: "connect",
+  });
+  account.connections = [
+    ...account.connections,
+    {
+      integrationId: "slack",
+      connectionId: "slack-consent",
+      status: "connected",
+    },
+  ];
+  await act(async () => {
+    clients[clients.length - 1].setQueryData(
+      ["shared-recordings", account.userId, "account"],
+      { ...account },
+    );
+  });
+  await waitFor(() =>
+    expect(mocks.values.auto_start_detected_meetings).toBe(true),
+  );
+  expect(mocks.config?.enabled).toBe(true);
+  expect(screen.queryByRole("dialog")).toBeNull();
 });
