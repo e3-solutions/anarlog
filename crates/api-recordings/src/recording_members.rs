@@ -327,6 +327,25 @@ impl RecordingMemberships {
             .collect()
     }
 
+    pub(crate) async fn observe_health(
+        &self,
+        auth: &AuthContext,
+        snapshot: serde_json::Value,
+    ) -> Result<(), MemberError> {
+        let _: serde_json::Value = json_response(
+            self.client
+                .post(format!(
+                    "{}/rest/v1/rpc/application_health_observe",
+                    self.url
+                ))
+                .header("apikey", self.anon_key.as_ref())
+                .bearer_auth(&auth.token)
+                .json(&serde_json::json!({"p_snapshot": snapshot})),
+        )
+        .await?;
+        Ok(())
+    }
+
     pub async fn connections(
         &self,
         auth: &AuthContext,
@@ -365,6 +384,12 @@ async fn json_response<T: serde::de::DeserializeOwned>(
     let mut response = request.send().await.map_err(|_| MemberError::Upstream)?;
     if response.status() == StatusCode::UNAUTHORIZED {
         return Err(MemberError::Unauthorized);
+    }
+    if response.status() == StatusCode::FORBIDDEN {
+        return Err(MemberError::Forbidden);
+    }
+    if response.status() == StatusCode::BAD_REQUEST {
+        return Err(MemberError::Invalid("invalid request".into()));
     }
     if !response.status().is_success() {
         return Err(MemberError::Upstream);

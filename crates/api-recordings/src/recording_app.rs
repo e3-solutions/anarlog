@@ -33,7 +33,8 @@ pub struct RecordingAppState {
     pub processor: Option<Arc<RecordingProcessor>>,
 }
 
-const PATHS: [&str; 9] = [
+const PATHS: [&str; 10] = [
+    "/v1/application-health",
     "/v1/shared-recordings/me",
     "/v1/shared-recordings/enroll",
     "/v1/orgs/{workspace}/shared-recordings",
@@ -53,6 +54,7 @@ pub fn forwarding_router() -> Router {
 
 pub fn router(state: RecordingAppState, auth: AuthState) -> Router {
     let [
+        health,
         account,
         enrollment,
         library_path,
@@ -64,6 +66,10 @@ pub fn router(state: RecordingAppState, auth: AuthState) -> Router {
         sealing,
     ] = PATHS;
     Router::new()
+        .route(
+            health,
+            post(crate::application_health::observe).layer(DefaultBodyLimit::max(4096)),
+        )
         .route(account, get(me))
         .route(enrollment, post(enroll))
         .route(library_path, get(library))
@@ -74,13 +80,13 @@ pub fn router(state: RecordingAppState, auth: AuthState) -> Router {
         .route(processing, post(process))
         .route(sealing, post(seal))
         .layer(DefaultBodyLimit::max(140 * 1024 * 1024))
-        .with_state(state)
         .route_layer(middleware::from_fn_with_state(
             auth,
             anlg_api_auth::require_auth,
         ))
         .layer(RequestBodyLimitLayer::new(140 * 1024 * 1024))
         .layer(middleware::from_fn(response_headers))
+        .with_state(state)
 }
 
 fn wav_response(wav: Vec<u8>, audio_sha256: &str) -> Response {
