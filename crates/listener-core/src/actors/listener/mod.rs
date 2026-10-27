@@ -240,6 +240,10 @@ impl Actor for ListenerActor {
 
         match message {
             ListenerMsg::AudioSingle(audio, reply) => {
+                if !state.args.runtime.capture_allowed(&state.args.session_id) {
+                    let _ = reply.send(ListenerAudioResult::Closed);
+                    return Ok(());
+                }
                 let active_samples = stream::active_audio_samples(&audio);
                 let result = match &state.tx {
                     ChannelSender::Single(tx) => match tx.try_send(MixedMessage::Audio(audio)) {
@@ -271,6 +275,10 @@ impl Actor for ListenerActor {
             }
 
             ListenerMsg::AudioDual(mic, spk, reply) => {
+                if !state.args.runtime.capture_allowed(&state.args.session_id) {
+                    let _ = reply.send(ListenerAudioResult::Closed);
+                    return Ok(());
+                }
                 let active_samples =
                     stream::active_audio_samples(&mic).max(stream::active_audio_samples(&spk));
                 let result = match &state.tx {

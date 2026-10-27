@@ -1,8 +1,10 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 
 import { commands as analyticsCommands } from "@anlg/plugin-analytics";
+import { commands as detectCommands } from "@anlg/plugin-detect";
 import { toast } from "@anlg/ui/components/ui/toast";
 
+import { selectAutomaticMeeting } from "./automatic-meeting";
 import { useCaptureLifecycle } from "./capture-lifecycle";
 import {
   clearCaptureAudioSaved,
@@ -18,6 +20,12 @@ import {
 } from "./meeting-disclosure";
 import { startMeetingScreenCapture } from "./meeting-screen-capture";
 import { startPrimaryDeviceCoordination } from "./primary-device";
+import {
+  bindRecordingSession,
+  isRecordingExcluded,
+  isRecordingSessionExcluded,
+  resolveRecordingOccurrence,
+} from "./recording-exclusions";
 import {
   classifyStartFailure,
   getMicrophonePermission,
@@ -61,6 +69,7 @@ export function useStartListeningState(
 ) {
   const {
     authenticatedUserId,
+    authenticationReady,
     conn,
     connectionReady,
     createCaptureLifecycle,
@@ -68,6 +77,14 @@ export function useStartListeningState(
     setStopMeetingChatCapture,
     stopMeetingChatTasks,
   } = useCaptureLifecycle(sessionId);
+  const identity = useRef({
+    userId: authenticatedUserId,
+    ready: authenticationReady,
+  });
+  identity.current = {
+    userId: authenticatedUserId,
+    ready: authenticationReady,
+  };
   const participantHumanIds = useSessionParticipantHumanIds(sessionId);
   const getSessionMode = useListener((state) => state.getSessionMode);
   const canStartLiveSession = useListener((state) => state.canStartLiveSession);
@@ -104,9 +121,61 @@ export function useStartListeningState(
   );
 
   const startListening = useCallback(async () => {
-    if (!canStartLiveSession(sessionId)) {
+    if (
+      !canStartLiveSession(sessionId) ||
+      identity.current.ready === false ||
+      identity.current.userId !== authenticatedUserId
+    ) {
       return;
     }
+    const owner = authenticatedUserId;
+    const inspection = owner
+      ? await detectCommands.inspectMeetingAccessibility().catch(() => null)
+      : null;
+    const meeting =
+      inspection?.status === "ok"
+        ? selectAutomaticMeeting(inspection.data, {
+            googleMeet: true,
+            slack: true,
+          })
+        : null;
+    const occurrence = owner
+      ? await resolveRecordingOccurrence(owner, {
+          sessionId,
+          meeting: meeting ?? undefined,
+        })
+      : null;
+    const callOccurrence =
+      owner &&
+      (meeting ||
+        inspection?.status !== "ok" ||
+        inspection.data.some(
+          (row) =>
+            row.activeCall ||
+            !row.accessibilityTrusted ||
+            row.platform === "googleMeet" ||
+            row.platform === "slack",
+        ))
+        ? await resolveRecordingOccurrence(owner, { meeting })
+        : null;
+    const excluded = () =>
+      Boolean(
+        identity.current.ready === false ||
+        identity.current.userId !== owner ||
+        (owner &&
+          (isRecordingSessionExcluded(owner, sessionId) ||
+            (occurrence && isRecordingExcluded(owner, occurrence)) ||
+            (callOccurrence && isRecordingExcluded(owner, callOccurrence)))),
+      );
+    if (excluded()) {
+      if (!automatic)
+        toast.warning("Recording is off for this meeting", {
+          description:
+            "Use Resume recording to start a new recording intentionally.",
+        });
+      return;
+    }
+    if (owner && occurrence) bindRecordingSession(owner, sessionId, occurrence);
     await stopMeetingChatTasks();
     const previousMarker = await loadCaptureLifecycleMarker(sessionId).catch(
       (error) => {
@@ -158,7 +227,7 @@ export function useStartListeningState(
         }),
         lifecycle.ready,
       ]);
-    if (!canStartLiveSession(sessionId)) {
+    if (excluded() || !canStartLiveSession(sessionId)) {
       await releaseCloudsyncDeferral();
       return;
     }
@@ -188,6 +257,11 @@ export function useStartListeningState(
       return;
     }
 
+    if (excluded()) {
+      await lifecycle.cleanupFailedStart();
+      await releaseCloudsyncDeferral();
+      return;
+    }
     let started = false;
     try {
       started = await start(
@@ -253,6 +327,12 @@ export function useStartListeningState(
       return;
     }
 
+    if (excluded()) {
+      stop();
+      await stopMeetingChatTasks();
+      await releaseCloudsyncDeferral();
+      return;
+    }
     if (pendingMarker) {
       void clearCaptureAudioSaved(sessionId).catch((error) => {
         console.error("[listener] failed to clear capture audio state", error);

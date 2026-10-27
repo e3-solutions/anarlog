@@ -18,6 +18,10 @@ const mocks = vi.hoisted(() => ({
   openIntegration: vi.fn(),
   observe: vi.fn(),
   flush: vi.fn(),
+  queue: vi.fn(
+    async () => [] as { id: string; sessionId: string; state: string }[],
+  ),
+  exclude: vi.fn(async (_sessionId: string, _userId: string) => {}),
   inspection: vi.fn(),
   uploaded: false,
   quarantined: false,
@@ -62,7 +66,8 @@ vi.mock("./native", () => ({
     mocks.saved = config;
     return config;
   },
-  sharedRecordingQueue: async () => [],
+  sharedRecordingQueue: mocks.queue,
+  excludeSharedRecording: mocks.exclude,
 }));
 vi.mock("~/env", () => ({
   env: { VITE_API_URL: "http://localhost:8789" },
@@ -73,6 +78,9 @@ import { SharedRecordingPreferences, SharedRecordingQueue } from "./settings";
 
 afterEach(() => {
   cleanup();
+  localStorage.clear();
+  mocks.queue.mockReset().mockResolvedValue([]);
+  mocks.exclude.mockReset().mockResolvedValue(undefined);
   mocks.saved = null;
   mocks.openIntegration.mockReset();
   mocks.live = { status: "active", sessionId: "session-one" };
@@ -407,3 +415,63 @@ it.each([
     client.clear();
   },
 );
+
+it("replays persisted opt-out before a restarted upload pump can send pending audio", async () => {
+  localStorage.setItem(
+    "e3.recording-exclusions.v1",
+    JSON.stringify({
+      "account-one": {
+        excluded: {},
+        sessions: { "excluded-session": true },
+        bindings: {},
+      },
+    }),
+  );
+  mocks.saved = {
+    enabled: true,
+    userId: "account-one",
+    organizationId: "organization-one",
+    apiBaseUrl: "http://localhost:8789",
+    connections: [],
+  };
+  mocks.live = { status: "inactive", sessionId: "excluded-session" };
+  mocks.inspection.mockResolvedValue({ status: "ok", data: [] });
+  mocks.queue.mockResolvedValue([
+    { id: "pending-job", sessionId: "excluded-session", state: "pending" },
+  ]);
+  let blockCompleted = false;
+  let finishBlock!: () => void;
+  mocks.exclude.mockImplementationOnce(async () => {
+    await new Promise<void>((resolve) => {
+      finishBlock = resolve;
+    });
+    blockCompleted = true;
+  });
+  mocks.uploaded = false;
+  mocks.flush.mockImplementation(async () => {
+    if (!blockCompleted) mocks.uploaded = true;
+  });
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  render(
+    <QueryClientProvider client={client}>
+      <SharedRecordingLifecycle />
+    </QueryClientProvider>,
+  );
+  await waitFor(() =>
+    expect(mocks.exclude).toHaveBeenCalledWith(
+      "excluded-session",
+      "account-one",
+    ),
+  );
+  expect(mocks.flush).not.toHaveBeenCalled();
+  await act(async () => {
+    finishBlock();
+  });
+  await waitFor(() =>
+    expect(mocks.flush).toHaveBeenCalledWith("token", "account-one"),
+  );
+  expect(mocks.uploaded).toBe(false);
+  client.clear();
+});

@@ -40,6 +40,7 @@ import { useSession } from "~/session/queries";
 import { useSessionSharedNoteIds } from "~/shared-notes/event-keys";
 import { type Tab, useTabs } from "~/store/zustand/tabs";
 import { useListener } from "~/stt/contexts";
+import { RecordingExclusionControl } from "~/stt/recording-exclusion-control";
 import { ScheduledSessionAutoStart } from "~/stt/scheduled-session-auto-start";
 
 export function TabContentNote({
@@ -268,25 +269,32 @@ function TabContentNoteInner({
         overlay={lockOverlay}
         header={
           lockOverlay ? undefined : (
-            <OuterHeader
-              sessionId={sessionId}
-              currentView={currentView}
-              tab={tab}
-              standaloneWindow={standaloneWindow}
-              viewSwitcher={
-                editorTabs.length > 1 ? (
-                  <SessionViewSwitcher
-                    sessionId={sessionId}
-                    editorTabs={editorTabs}
-                    currentTab={currentView}
-                    handleTabChange={handleTabChange}
-                    isTranscribing={isTranscribing}
-                    transcriptEditMode={transcriptEditMode}
-                    onTranscriptEditModeChange={handleTranscriptEditModeChange}
-                  />
-                ) : null
-              }
-            />
+            <>
+              <OuterHeader
+                sessionId={sessionId}
+                currentView={currentView}
+                tab={tab}
+                standaloneWindow={standaloneWindow}
+                viewSwitcher={
+                  editorTabs.length > 1 ? (
+                    <SessionViewSwitcher
+                      sessionId={sessionId}
+                      editorTabs={editorTabs}
+                      currentTab={currentView}
+                      handleTabChange={handleTabChange}
+                      isTranscribing={isTranscribing}
+                      transcriptEditMode={transcriptEditMode}
+                      onTranscriptEditModeChange={
+                        handleTranscriptEditModeChange
+                      }
+                    />
+                  ) : null
+                }
+              />
+              <div className="mx-3 mb-2">
+                <RecordingExclusionControl sessionId={sessionId} />
+              </div>
+            </>
           )
         }
         floatingButton={

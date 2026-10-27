@@ -144,6 +144,11 @@ impl Pipeline {
         listener_routing: &ListenerRouting,
         recorder: Option<&ActorRef<RecMsg>>,
     ) -> Result<DispatchFrameResult, String> {
+        if !self.runtime.capture_allowed(&self.session_id) {
+            self.audio_buffer.clear();
+            self.replay_history.clear();
+            return Ok(DispatchFrameResult::Complete);
+        }
         self.runtime.observe_raw_audio_frames(
             &self.session_id,
             frame

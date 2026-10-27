@@ -14,13 +14,25 @@ import {
   sameAutomaticMeeting,
   type AutomaticMeeting,
 } from "./automatic-meeting";
+import {
+  bindRecordingSession,
+  isRecordingExcluded,
+  resolveRecordingOccurrence,
+} from "./recording-exclusions";
 
+import { useOptionalAuth } from "~/auth";
 import { createSession, softDeleteSession } from "~/session/queries";
 import { useConfigValue } from "~/shared/config";
 import type { ListenerStore } from "~/store/zustand/listener";
 import { useTabs } from "~/store/zustand/tabs";
 
 export function useAutomaticMeetingRecording(store: ListenerStore) {
+  const auth = useOptionalAuth();
+  const userId = auth?.session?.user.id;
+  const identityReady = useRef(!auth || Boolean(userId));
+  identityReady.current = !auth || Boolean(userId);
+  const account = useRef(userId);
+  account.current = userId;
   const enabled = useConfigValue("auto_start_detected_meetings");
   const ignored = useConfigValue("ignored_platforms");
   const autoStop = useConfigValue("auto_stop_meetings");
@@ -73,7 +85,7 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
     });
 
     async function reconcile() {
-      if (cancelled || checking) return;
+      if (cancelled || checking || !identityReady.current) return;
       if (!policy.current.enabled) {
         reset.current();
         return;
@@ -246,12 +258,23 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
         }
         if (live.loading || now < retryAfter) return;
 
+        const owner = account.current;
+        const occurrence = owner
+          ? await resolveRecordingOccurrence(owner, { meeting: selected })
+          : null;
+        if (owner && occurrence && isRecordingExcluded(owner, occurrence))
+          return;
         const sessionId = await createSession(selected.title);
+        if (owner && occurrence)
+          bindRecordingSession(owner, sessionId, occurrence);
         let opened = false;
         try {
           const refreshed = await detectCommands.inspectMeetingAccessibility();
           if (
             cancelled ||
+            !identityReady.current ||
+            account.current !== owner ||
+            (owner && occurrence && isRecordingExcluded(owner, occurrence)) ||
             !policy.current.enabled ||
             refreshed.status !== "ok" ||
             selectAutomaticMeeting(

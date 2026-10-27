@@ -42,6 +42,9 @@ impl anlg_storage::StorageRuntime for TauriRuntime {
 }
 
 impl ListenerRuntime for TauriRuntime {
+    fn capture_allowed(&self, session_id: &str) -> bool {
+        crate::shared_recording::capture_allowed(&self.app, session_id)
+    }
     fn observe_raw_audio_frames(&self, session_id: &str, frames: u64, captured: bool) {
         crate::shared_recording::observe_raw(&self.app, session_id, frames, captured);
     }

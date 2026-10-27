@@ -6,12 +6,18 @@ import { useMountEffect } from "@anlg/ui/hooks/use-mount-effect";
 
 import { useSharingConfiguration } from "./configuration";
 import { SharedRecordingEnrollment } from "./enrollment";
-import { flushSharedRecordings, observeSharedRecording } from "./native";
+import {
+  flushSharedRecordings,
+  observeSharedRecording,
+  sharedRecordingQueue,
+  excludeSharedRecording,
+} from "./native";
 
 import { useAuth } from "~/auth";
 import { env } from "~/env";
 import { listenerStore } from "~/store/zustand/listener/instance";
 import { selectAutomaticMeeting } from "~/stt/automatic-meeting";
+import { isRecordingSessionExcluded } from "~/stt/recording-exclusions";
 
 export function SharedRecordingLifecycle() {
   const { session } = useAuth();
@@ -277,6 +283,12 @@ function ActiveSharedRecordingLifecycle({ userId }: { userId: string }) {
     queryFn: async () => {
       const session = await getSessionForRequest();
       if (!session || session.user.id !== userId) return null;
+      // Replay durable intent before the pump can retry pre-crash audio.
+      const pending = await sharedRecordingQueue(userId);
+      for (const job of pending) {
+        if (isRecordingSessionExcluded(userId, job.sessionId))
+          await excludeSharedRecording(job.sessionId, userId);
+      }
       await flushSharedRecordings(session.access_token, userId);
       return Date.now();
     },

@@ -123,6 +123,7 @@ struct RawTimeline {
     frames: u64,
     gaps: Vec<Gap>,
     owner: Option<Configuration>,
+    capture_user_id: Option<String>,
     started_at_ms: i64,
     storage_failed: bool,
     stopped_at_ms: Option<i64>,
@@ -145,6 +146,135 @@ pub(crate) struct QueueState {
     observe_serial: tokio::sync::Mutex<()>,
     flush_serial: tokio::sync::Mutex<()>,
     raw: Mutex<HashMap<String, RawTimeline>>,
+    excluded: Mutex<HashSet<String>>,
+    cancellations: Mutex<HashMap<String, tokio_util::sync::CancellationToken>>,
+}
+
+const EXCLUDED_MESSAGE: &str = "Recording was excluded. Resume intentionally in a new recording.";
+
+fn exclusion_path(dir: &Path, session: &str) -> PathBuf {
+    dir.join(format!("excluded-{}.json", key(session)))
+}
+
+pub(crate) fn ensure_allowed<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    session: &str,
+) -> Result<(), String> {
+    let state = app.state::<QueueState>();
+    if !capture_allowed(app, session)
+        || exclusion_path(&directory(app)?, session)
+            .try_exists()
+            .map_err(|e| e.to_string())?
+    {
+        state
+            .excluded
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(session.into());
+        return Err(EXCLUDED_MESSAGE.into());
+    }
+    Ok(())
+}
+
+pub(crate) fn capture_allowed<R: tauri::Runtime>(app: &tauri::AppHandle<R>, session: &str) -> bool {
+    !app.state::<QueueState>()
+        .excluded
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(session)
+}
+
+fn cancellation(state: &QueueState, session: &str) -> tokio_util::sync::CancellationToken {
+    state
+        .cancellations
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .entry(session.into())
+        .or_default()
+        .clone()
+}
+
+fn exclude_session(
+    dir: &Path,
+    state: &QueueState,
+    session_id: &str,
+    user_id: &str,
+) -> Result<(), String> {
+    {
+        let _binding = state.bindings.lock().unwrap_or_else(|e| e.into_inner());
+        if user_id.is_empty() {
+            return Err("Choose a signed-in account".into());
+        }
+        let binding_path = dir.join(format!("binding-{}.json", key(session_id)));
+        let mut binding = read::<Binding>(&binding_path)?;
+        let capture_user = state
+            .raw
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(session_id)
+            .and_then(|timeline| timeline.capture_user_id.clone());
+        if binding
+            .as_ref()
+            .is_some_and(|binding| binding.user_id != user_id)
+            || capture_user
+                .as_deref()
+                .is_some_and(|owner| owner != user_id)
+        {
+            return Err("Recording belongs to another account".into());
+        }
+        if binding.is_none() && capture_user.is_none() {
+            if let Some(config) = read::<Configuration>(&dir.join("configuration.json"))? {
+                if config.user_id != user_id {
+                    return Err("Recording belongs to another account".into());
+                }
+            }
+        }
+        // Block in memory before disk I/O so a persistence error still stops this run.
+        state
+            .excluded
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(session_id.to_string());
+        cancellation(&state, &session_id).cancel();
+        save(
+            &exclusion_path(&dir, &session_id),
+            &json!({"userId":user_id,"sessionId":session_id}),
+        )?;
+        // Existing releases already honor quarantined bindings on queued uploads.
+        if let Some(binding) = binding.as_mut() {
+            binding.quarantine("user_excluded");
+            binding.verification_pending = false;
+            save(&binding_path, binding)?;
+        }
+        Ok(())
+    }
+}
+
+async fn shared_recording_exclude<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    session_id: String,
+    user_id: String,
+) -> Result<(), String> {
+    use crate::listener2::Listener2PluginExt;
+    let state = app.state::<QueueState>();
+    let dir = directory(&app)?;
+    let persistence = exclude_session(&dir, &state, &session_id, &user_id);
+    if capture_allowed(&app, &session_id) {
+        return persistence;
+    }
+    crate::stop_capture_for_session(&app, &session_id).await;
+    for session in app
+        .listener2()
+        .list_transcription_sessions()
+        .map_err(|e| e.to_string())?
+    {
+        if session.session_id == session_id
+            || session.session_id.starts_with(&format!("{session_id}:"))
+        {
+            app.listener2().stop_transcription(session.session_id).await;
+        }
+    }
+    persistence
 }
 
 pub(crate) fn storage_failed<R: tauri::Runtime>(app: &tauri::AppHandle<R>, session_id: &str) {
@@ -185,6 +315,7 @@ pub(crate) fn start_raw<R: tauri::Runtime>(
             session_id.to_string(),
             RawTimeline {
                 owner,
+                capture_user_id: owner_user_id.map(str::to_string),
                 started_at_ms: chrono::Utc::now().timestamp_millis(),
                 ..Default::default()
             },
@@ -575,6 +706,11 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
     quarantine_reason: Option<String>,
     diagnostic_summary: Option<ObservationSummary>,
 ) -> Result<Option<String>, String> {
+    if platform == "unverified" && quarantine_reason.as_deref() == Some("user_excluded") {
+        shared_recording_exclude(app, session_id, user_id).await?;
+        return Ok(None);
+    }
+    ensure_allowed(&app, &session_id)?;
     let queue_state = app.state::<QueueState>();
     let dir = directory(&app)?;
     if platform == "unverified" {
@@ -732,9 +868,14 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
         config.organization_id
     );
     let request_started_at_ms = chrono::Utc::now().timestamp_millis();
-    let resolved = async {
+    let cancel = cancellation(&queue_state, &session_id);
+    let resolved = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => Err(EXCLUDED_MESSAGE.into()),
+        result = async {
         json_body(success(client()?.post(url).bearer_auth(access_token).json(&json!({"provider":provider,"roomIdentity":call_identity,"connectionId":connection_id})).send().await.map_err(|e|e.to_string())?).await?).await
-    }.await;
+        } => result,
+    };
     let resolved = resolved.and_then(|admission| {
         if admission
             .get("occurrenceId")
@@ -790,6 +931,7 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
     {
         return Err("Account configuration changed during admission".into());
     }
+    ensure_allowed(&app, &session_id)?;
     let existing = read::<Binding>(&path)?;
     if let Some(mut binding) = existing {
         if binding.admission.is_null() {
@@ -899,7 +1041,9 @@ pub async fn shared_recording_enqueue<R: tauri::Runtime>(
     started_at_ms: i64,
     stopped_at_ms: i64,
 ) -> Result<Option<Job>, String> {
+    ensure_allowed(&app, &session_id)?;
     let _audio = app.fs_sync().lock_session_audio(&session_id).await;
+    ensure_allowed(&app, &session_id)?;
     let dir = directory(&app)?;
     let Some(config) = read::<Configuration>(&dir.join("configuration.json"))? else {
         return Ok(None);
@@ -1012,6 +1156,7 @@ pub async fn shared_recording_enqueue<R: tauri::Runtime>(
         tokio::task::spawn_blocking(move || normalize(&target.join("original.audio"), &target))
             .await
             .map_err(|e| e.to_string())??;
+    ensure_allowed(&app, &job.session_id)?;
     finish_preparation(&mut job);
     save(&job_path(&dir, &job.id), &job)?;
     Ok(Some(job))
@@ -1058,6 +1203,9 @@ pub async fn shared_recording_flush<R: tauri::Runtime>(
     let jobs = shared_recording_queue(app.clone(), user_id.clone()).await?;
     let mut pending_attempts = HashSet::new();
     for mut job in jobs {
+        if ensure_allowed(&app, &job.session_id).is_err() {
+            continue;
+        }
         if queue_state
             .pins
             .lock()
@@ -1187,6 +1335,17 @@ fn verify_upload_binding(dir: &Path, job: &Job, state: &QueueState) -> Result<()
         .bindings
         .lock()
         .unwrap_or_else(|error| error.into_inner());
+    if exclusion_path(dir, &job.session_id)
+        .try_exists()
+        .map_err(|e| e.to_string())?
+        || state
+            .excluded
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&job.session_id)
+    {
+        return Err(EXCLUDED_MESSAGE.into());
+    }
     let latest = read::<Binding>(&dir.join(format!("binding-{}.json", key(&job.session_id))))?
         .ok_or("Meeting admission is unavailable; original retained")?;
     let admission = job.binding.as_ref().ok_or("Meeting identity unresolved")?;
@@ -1220,6 +1379,19 @@ fn verify_upload_binding(dir: &Path, job: &Job, state: &QueueState) -> Result<()
     Ok(())
 }
 async fn upload(dir: &Path, job: &Job, token: &str, state: &QueueState) -> Result<(), String> {
+    let cancel = cancellation(state, &job.session_id);
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => Err(EXCLUDED_MESSAGE.into()),
+        result = upload_allowed(dir, job, token, state) => result,
+    }
+}
+async fn upload_allowed(
+    dir: &Path,
+    job: &Job,
+    token: &str,
+    state: &QueueState,
+) -> Result<(), String> {
     let binding = job.binding.as_ref().ok_or("Meeting identity unresolved")?;
     let occurrence = binding["occurrenceId"]
         .as_str()
@@ -1287,6 +1459,9 @@ pub(crate) fn snapshot_stopped<R: tauri::Runtime>(
     started_at_ms: Option<i64>,
     stopped_at_ms: i64,
 ) {
+    if ensure_allowed(app, session_id).is_err() {
+        return;
+    }
     let state = app.state::<QueueState>();
     let capture_start = {
         let mut raw = state.raw.lock().unwrap_or_else(|error| error.into_inner());
