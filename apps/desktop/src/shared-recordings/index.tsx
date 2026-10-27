@@ -218,7 +218,9 @@ function OrganizationRecordings({
                 <span className="block font-medium">
                   {item.occurrence.provider === "google_meet"
                     ? "Google Meet"
-                    : "Slack huddle"}
+                    : item.occurrence.provider === "microsoft_teams"
+                      ? "Teams local capture"
+                      : "Slack huddle"}
                 </span>
                 <span className="text-muted-foreground block w-full truncate text-xs">
                   {sources
@@ -306,7 +308,9 @@ function RecordingDetail({
         <h2 className="text-xl font-semibold">
           {detail.data.occurrence.provider === "google_meet"
             ? "Google Meet"
-            : "Slack huddle"}
+            : detail.data.occurrence.provider === "microsoft_teams"
+              ? "Teams local capture"
+              : "Slack huddle"}
         </h2>
         {sources.length > 1 ? (
           <p className="text-muted-foreground text-sm">

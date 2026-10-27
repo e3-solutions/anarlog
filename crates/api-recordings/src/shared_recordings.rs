@@ -71,6 +71,7 @@ type Result<T> = std::result::Result<T, RecordingError>;
 pub enum Provider {
     GoogleMeet,
     SlackHuddle,
+    MicrosoftTeams,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -606,6 +607,18 @@ fn identifier(value: &str) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn local_capture_uuid(value: &str) -> bool {
+    value.len() == 36
+        && value.bytes().enumerate().all(|(index, byte)| {
+            if [8, 13, 18, 23].contains(&index) {
+                byte == b'-'
+            } else {
+                byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
+            }
+        })
+        && value != "00000000-0000-0000-0000-000000000000"
+}
+
 fn validate_occurrence(request: &CreateOccurrence) -> Result<()> {
     if request.duration_frames == 0 || request.duration_frames > MAX_FRAMES {
         return Err(RecordingError::Invalid(
@@ -623,6 +636,14 @@ fn validate_occurrence(request: &CreateOccurrence) -> Result<()> {
                         .bytes()
                         .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte))
             }),
+        Provider::MicrosoftTeams => {
+            request
+                .provider_occurrence_id
+                .split_once('/')
+                .is_some_and(|(actor, capture)| {
+                    identifier(actor).is_ok() && local_capture_uuid(capture)
+                })
+        }
         Provider::SlackHuddle => {
             request
                 .provider_occurrence_id
@@ -642,7 +663,7 @@ fn validate_occurrence(request: &CreateOccurrence) -> Result<()> {
         }
     };
     if !valid {
-        return Err(RecordingError::Invalid("actual provider occurrence ID required; room URLs, channels and calendar aliases are not accepted".into()));
+        return Err(RecordingError::Invalid("provider occurrence ID or scoped Teams local capture required; room URLs, channels and calendar aliases are not accepted".into()));
     }
     Ok(())
 }

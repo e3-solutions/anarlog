@@ -407,3 +407,78 @@ it.each([
     client.clear();
   },
 );
+
+it("keeps native Teams bound without a provider connection and quarantines a different call", async () => {
+  mocks.saved = {
+    enabled: true,
+    userId: "account-one",
+    organizationId: "organization-one",
+    apiBaseUrl: "http://localhost:8789",
+    connections: [],
+  };
+  const identity = "teams-window:123:abc";
+  const row = {
+    activeCall: true,
+    accessibilityTrusted: true,
+    windowTitle: "Customer call",
+    warnings: [],
+    platform: "microsoftTeams",
+    surface: "native",
+    app: { id: "com.microsoft.teams2", name: "Microsoft Teams" },
+    pid: 123,
+    callIdentity: identity,
+    openCallIdentities: [identity],
+  };
+  mocks.inspection.mockResolvedValue({ status: "ok", data: [row] });
+  const observations: Array<{ platform: string; callIdentity: string | null }> =
+    [];
+  mocks.observe.mockImplementation(async (input) => {
+    observations.push(input);
+    if (input.platform === "unverified") mocks.quarantined = true;
+    return "teams-occurrence";
+  });
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  render(
+    <QueryClientProvider client={client}>
+      <SharedRecordingLifecycle />
+    </QueryClientProvider>,
+  );
+  await waitFor(() => expect(observations).toHaveLength(1));
+  expect(observations[0]).toMatchObject({
+    platform: "microsoftTeams",
+    callIdentity: "teams-local:session-one",
+  });
+  const queryKey = ["shared-recording-observation", "account-one"];
+  await act(async () => {
+    await client.refetchQueries({ queryKey });
+  });
+  expect(mocks.quarantined).toBe(false);
+  expect(observations).toHaveLength(1);
+  mocks.inspection.mockResolvedValue({
+    status: "ok",
+    data: [
+      { ...row, activeCall: false, callIdentity: null, openCallIdentities: [] },
+    ],
+  });
+  await act(async () => {
+    await client.refetchQueries({ queryKey });
+  });
+  expect(mocks.quarantined).toBe(false);
+  mocks.inspection.mockResolvedValue({
+    status: "ok",
+    data: [
+      {
+        ...row,
+        callIdentity: "teams-window:123:def",
+        openCallIdentities: ["teams-window:123:def"],
+      },
+    ],
+  });
+  await act(async () => {
+    await client.refetchQueries({ queryKey });
+  });
+  expect(mocks.quarantined).toBe(true);
+  client.clear();
+});

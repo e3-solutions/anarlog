@@ -70,7 +70,7 @@ fn request(method: &str, url: &str, token: &str, body: Value) -> Request<Body> {
 }
 
 #[tokio::test]
-async fn signed_members_share_one_library_without_spoofing_uploader_or_retaining_revoked_access() {
+async fn local_teams_captures_stay_per_user_without_bypassing_library_auth_or_ownership() {
     let upstream = MockServer::start().await;
     Mock::given(method("GET")).and(path("/auth/v1/.well-known/jwks.json")).respond_with(ResponseTemplate::new(200).set_body_json(json!({"keys":[{"kty":"EC","use":"sig","crv":"P-256","kid":"recording-test","x":"w7JAoU_gJbZJvV-zCOvU9yFJq0FNC_edCMRM78P8eQQ","y":"wQg1EytcsEmGrM70Gb53oluoDbVhCZ3Uq3hHMslHVb4","alg":"ES256"}]}))).mount(&upstream).await;
     let a = token("member-a");
@@ -95,7 +95,7 @@ async fn signed_members_share_one_library_without_spoofing_uploader_or_retaining
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
         .mount(&upstream)
         .await;
-    let (_storage, service) = common::service("org").await;
+    let (storage, service) = common::service("org").await;
     let service = Arc::new(service);
     service
         .admit_actor(
@@ -117,6 +117,76 @@ async fn signed_members_share_one_library_without_spoofing_uploader_or_retaining
         },
         anlg_api_auth::AuthState::new(&upstream.uri()),
     );
+    let teams = json!({"provider":"microsoft_teams","roomIdentity":"teams-local:5f680d14-9c06-4d7d-b3f0-6775975e447e","connectionId":""});
+    let mut local_occurrences = Vec::new();
+    for member in [&a, &b, &a] {
+        let response = app
+            .clone()
+            .oneshot(request(
+                "POST",
+                "/v1/orgs/org/shared-recordings/admit",
+                member,
+                teams.clone(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let occurrence: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+        assert_eq!(occurrence["admissionBasis"], "local_capture");
+        assert_eq!(occurrence["provider"], "microsoft_teams");
+        assert_eq!(occurrence["providerStartedAtMs"], 0);
+        local_occurrences.push(occurrence["occurrenceId"].clone());
+    }
+    assert_ne!(local_occurrences[0], local_occurrences[1]);
+    assert_eq!(local_occurrences[0], local_occurrences[2]);
+    for (credential, body, expected) in [
+        (&outsider, teams.clone(), StatusCode::FORBIDDEN),
+        (
+            &a,
+            json!({"provider":"microsoft_teams","roomIdentity":"teams-local:not-a-uuid"}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            &a,
+            json!({"provider":"google_meet","roomIdentity":"https://meet.google.com/abc-defg-hij"}),
+            StatusCode::CONFLICT,
+        ),
+    ] {
+        assert_eq!(
+            app.clone()
+                .oneshot(request(
+                    "POST",
+                    "/v1/orgs/org/shared-recordings/admit",
+                    credential,
+                    body
+                ))
+                .await
+                .unwrap()
+                .status(),
+            expected
+        );
+    }
+    let admissions: Vec<Value> = storage
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|request| request.url.path() == "/rest/v1/rpc/recording_admit")
+        .map(|request| serde_json::from_slice(&request.body).unwrap())
+        .collect();
+    let local_admission = admissions
+        .iter()
+        .find(|admission| {
+            admission["p_metadata"]["provider"] == "microsoft_teams"
+                && admission["p_actor"] == "member-a"
+        })
+        .unwrap();
+    assert_eq!(
+        local_admission["p_metadata"]["providerOccurrenceId"],
+        "member-a/5f680d14-9c06-4d7d-b3f0-6775975e447e"
+    );
+    assert!(local_admission["p_provider_started_at_ms"].is_null());
     assert_eq!(
         app.clone()
             .oneshot(request(

@@ -286,3 +286,48 @@ describe("automatic meeting evidence", () => {
     ).toBe("unknown");
   });
 });
+
+it("requires native Teams window identity and complete evidence to confirm departure", () => {
+  const identity = "teams-window:123:abc";
+  const row: MeetingAccessibilityInspection = {
+    ...meet,
+    platform: "microsoftTeams",
+    surface: "native",
+    app: { id: "com.microsoft.teams2", name: "Microsoft Teams" },
+    callIdentity: identity,
+    openCallIdentities: [identity],
+  };
+  const teamsOptions = { ...options, microsoftTeams: true };
+  const selected = selectAutomaticMeeting([row], teamsOptions)!;
+  expect(automaticMeetingObservation(selected, [row])).toBe("active");
+  expect(selected).toMatchObject({
+    platform: "microsoftTeams",
+    callIdentity: identity,
+  });
+  for (const invalid of [
+    { ...row, surface: "web" as const },
+    { ...row, callIdentity: null },
+    { ...row, warnings: ["AX snapshot incomplete"] },
+  ]) {
+    expect(selectAutomaticMeeting([invalid], teamsOptions)).toBeNull();
+  }
+  expect(selectAutomaticMeeting([row], options)).toBeNull();
+  const missing = {
+    ...row,
+    activeCall: false,
+    callIdentity: null,
+    openCallIdentities: null,
+  };
+  expect(automaticMeetingObservation(selected, [missing])).toBe("unknown");
+  expect(
+    automaticMeetingObservation(selected, [
+      { ...missing, openCallIdentities: [] },
+    ]),
+  ).toBe("inactive");
+  expect(
+    selectAutomaticMeeting(
+      [{ ...row, callIdentity: "teams-window:123:def" }],
+      teamsOptions,
+    )?.key,
+  ).not.toBe(selected.key);
+});

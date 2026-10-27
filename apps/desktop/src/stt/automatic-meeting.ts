@@ -9,6 +9,7 @@ export const AUTOMATIC_MEETING_UNKNOWN_GRACE_MS = 60_000;
 export type AutomaticMeetingOptions = {
   googleMeet: boolean;
   slack: boolean;
+  microsoftTeams?: boolean;
 };
 
 export type AutomaticMeeting = {
@@ -16,7 +17,7 @@ export type AutomaticMeeting = {
   app: { id: string; name: string };
   pid: number;
   callIdentity: string | null;
-  platform: "googleMeet" | "slack";
+  platform: "googleMeet" | "slack" | "microsoftTeams";
   title: string;
 };
 
@@ -56,6 +57,23 @@ function inventoryProvesDeparture(
   meeting: Pick<AutomaticMeeting, "app" | "pid" | "callIdentity" | "platform">,
   inspections: MeetingAccessibilityInspection[],
 ) {
+  if (meeting.platform === "microsoftTeams") {
+    const rows = inspections.filter(
+      (row) => row.app.id === meeting.app.id && row.pid === meeting.pid,
+    );
+    if (!meeting.callIdentity || !rows.length) return false;
+    const inventory = rows[0]?.openCallIdentities;
+    return (
+      Array.isArray(inventory) &&
+      inventory.every((id) => /^teams-window:\d+:[a-f0-9]+$/.test(id)) &&
+      rows.every(
+        (row) =>
+          row.accessibilityTrusted &&
+          JSON.stringify(row.openCallIdentities) === JSON.stringify(inventory),
+      ) &&
+      !inventory.includes(meeting.callIdentity)
+    );
+  }
   if (
     meeting.platform !== "googleMeet" ||
     meeting.app.id !== "com.google.Chrome"
@@ -118,7 +136,13 @@ export function selectAutomaticMeeting(
     !inspectionShowsActiveMeeting(inspection) ||
     !(
       (inspection.platform === "googleMeet" && options.googleMeet) ||
-      (inspection.platform === "slack" && options.slack)
+      (inspection.platform === "slack" && options.slack) ||
+      (inspection.platform === "microsoftTeams" &&
+        options.microsoftTeams &&
+        inspection.surface === "native" &&
+        /^teams-window:\d+:[a-f0-9]+$/.test(
+          inspectionCallIdentity(inspection) ?? "",
+        ))
     )
   )
     return null;
@@ -130,7 +154,12 @@ export function selectAutomaticMeeting(
     pid: inspection.pid,
     callIdentity,
     platform,
-    title: platform === "slack" ? "Slack huddle" : "Google Meet",
+    title:
+      platform === "slack"
+        ? "Slack huddle"
+        : platform === "microsoftTeams"
+          ? "Microsoft Teams"
+          : "Google Meet",
   };
   return inventoryProvesDeparture(meeting, inspections) ? null : meeting;
 }
@@ -152,7 +181,7 @@ export function automaticMeetingObservation(
             inspectionShowsActiveMeeting(inspection)) &&
           sameAutomaticMeeting(meeting, {
             ...meeting,
-            key: `${inspection.app.id}:${inspection.pid}:${inspectionCallIdentity(inspection)}`,
+            key: `${inspection.platform}:${inspection.app.id}:${inspection.pid}${inspectionCallIdentity(inspection) ? `:${inspectionCallIdentity(inspection)}` : ""}`,
             callIdentity: inspectionCallIdentity(inspection),
           }))),
   );

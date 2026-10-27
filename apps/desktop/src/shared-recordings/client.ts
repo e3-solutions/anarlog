@@ -11,7 +11,7 @@ const transcriptSchema = z.object({
 const occurrenceSchema = z.object({
   occurrenceId: z.string(),
   occurrence: z.object({
-    provider: z.enum(["google_meet", "slack_huddle"]),
+    provider: z.enum(["google_meet", "slack_huddle", "microsoft_teams"]),
     providerOccurrenceId: z.string(),
   }),
   captures: z.array(

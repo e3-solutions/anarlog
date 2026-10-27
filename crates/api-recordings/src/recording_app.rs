@@ -14,14 +14,17 @@ use serde::Serialize;
 use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::{
-    recording_identity::{AdmissionRequest, RecordingIdentityResolver, ResolvedOccurrence},
+    recording_identity::{
+        AdmissionRequest, RecordingIdentityResolver, ResolvedOccurrence, resolve_local_teams,
+    },
     recording_members::{
         MemberError, OrganizationMembership, ProviderConnection, RecordingMemberships,
         RecordingPolicy,
     },
     recording_transcription::RecordingProcessor,
     shared_recordings::{
-        CaptureUpload, OccurrenceManifest, RecordingError, SharedRecordingService, TimingBasis,
+        CaptureUpload, OccurrenceManifest, Provider, RecordingError, SharedRecordingService,
+        TimingBasis,
     },
 };
 
@@ -189,8 +192,16 @@ async fn admit(
     Json(request): Json<AdmissionRequest>,
 ) -> Result<Json<ResolvedOccurrence>, MemberError> {
     state.members.authorize(&auth, &workspace).await?;
-    let resolver = state.identities.as_ref().ok_or(MemberError::Unresolved)?;
-    let mut resolved = resolver.resolve(&auth, &request).await?;
+    let mut resolved = if request.provider == Provider::MicrosoftTeams {
+        resolve_local_teams(&auth, &request)?
+    } else {
+        state
+            .identities
+            .as_ref()
+            .ok_or(MemberError::Unresolved)?
+            .resolve(&auth, &request)
+            .await?
+    };
     resolved.provider_started_at_ms = state
         .service
         .admit_actor(

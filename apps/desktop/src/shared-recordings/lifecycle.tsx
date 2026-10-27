@@ -11,7 +11,11 @@ import { flushSharedRecordings, observeSharedRecording } from "./native";
 import { useAuth } from "~/auth";
 import { env } from "~/env";
 import { listenerStore } from "~/store/zustand/listener/instance";
-import { selectAutomaticMeeting } from "~/stt/automatic-meeting";
+import {
+  automaticMeetingObservation,
+  selectAutomaticMeeting,
+  type AutomaticMeeting,
+} from "~/stt/automatic-meeting";
 
 export function SharedRecordingLifecycle() {
   const { session } = useAuth();
@@ -41,8 +45,15 @@ function ActiveSharedRecordingLifecycle({ userId }: { userId: string }) {
     room: string;
     occurrenceId: string;
   } | null>(null);
+  const teams = useRef<{
+    sessionId: string;
+    scope: string;
+    meeting: AutomaticMeeting;
+    admitted: boolean;
+  } | null>(null);
   useMountEffect(() => () => {
     verified.current = null;
+    teams.current = null;
     const live = listenerStore.getState().live;
     if (live.status === "active" && live.sessionId) {
       void observeSharedRecording({
@@ -91,6 +102,7 @@ function ActiveSharedRecordingLifecycle({ userId }: { userId: string }) {
       const selected = selectAutomaticMeeting(rows, {
         googleMeet: true,
         slack: true,
+        microsoftTeams: true,
       });
       const quarantine = async (
         quarantineReason: NonNullable<
@@ -98,6 +110,7 @@ function ActiveSharedRecordingLifecycle({ userId }: { userId: string }) {
         >,
       ) => {
         verified.current = null;
+        teams.current = null;
         const current = listenerStore.getState().live;
         if (current.status !== "active" || current.sessionId !== sessionId)
           return { blocked: false };
@@ -154,6 +167,28 @@ function ActiveSharedRecordingLifecycle({ userId }: { userId: string }) {
           ])
           .sort(),
       ]);
+      const local = teams.current;
+      if (local?.sessionId === sessionId) {
+        if (local.scope !== scope) return quarantine("call_changed");
+        if (selected && selected.key !== local.meeting.key)
+          return quarantine("call_changed");
+        if (!selected) {
+          if (active.length > 0) return quarantine("ax_ambiguous");
+          const departed =
+            inspection?.status === "ok" &&
+            (automaticMeetingObservation(local.meeting, inspected) ===
+              "inactive" ||
+              !inspected.some(
+                (row) =>
+                  row.app.id === local.meeting.app.id &&
+                  row.pid === local.meeting.pid,
+              ));
+          if (departed) return { blocked: false };
+          return quarantine("ax_unavailable");
+        }
+        // Local identity has no provider state to refresh; keep observing AX locally.
+        if (local.admitted) return { blocked: false };
+      }
       const known = verified.current;
       if (
         known?.sessionId === sessionId &&
@@ -230,18 +265,36 @@ function ActiveSharedRecordingLifecycle({ userId }: { userId: string }) {
       const current = listenerStore.getState().live;
       if (current.status !== "active" || current.sessionId !== sessionId)
         return { blocked: false };
+      if (selected?.platform === "microsoftTeams") {
+        teams.current = {
+          sessionId,
+          scope,
+          meeting: selected,
+          admitted: false,
+        };
+      }
       const occurrenceId = await observeSharedRecording({
         sessionId,
         platform: selected?.platform ?? "googleMeet",
         callIdentity:
           backgroundRoom ??
-          (selected?.platform === "googleMeet"
-            ? (url ?? selected.callIdentity)
-            : (selected?.callIdentity ?? null)),
+          (selected?.platform === "microsoftTeams"
+            ? `teams-local:${sessionId}`
+            : selected?.platform === "googleMeet"
+              ? (url ?? selected.callIdentity)
+              : (selected?.callIdentity ?? null)),
         observedAtMs: Date.now(),
         accessToken: session.access_token,
         userId,
       });
+      if (
+        selected?.platform === "microsoftTeams" &&
+        teams.current?.sessionId === sessionId &&
+        typeof occurrenceId === "string" &&
+        occurrenceId.length > 0
+      ) {
+        teams.current.admitted = true;
+      }
       if (backgroundRoom && occurrenceId !== known?.occurrenceId)
         return quarantine("inventory_conflict");
       if (

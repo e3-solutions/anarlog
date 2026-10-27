@@ -11,6 +11,7 @@ use crate::{recording_members::MemberError, shared_recordings::Provider};
 pub struct AdmissionRequest {
     pub provider: Provider,
     pub room_identity: Option<String>,
+    #[serde(default)]
     pub connection_id: String,
 }
 
@@ -19,6 +20,7 @@ pub struct AdmissionRequest {
 pub struct ResolvedOccurrence {
     pub occurrence_id: String,
     pub provider: Provider,
+    pub admission_basis: &'static str,
     pub provider_occurrence_id: String,
     pub provider_started_at_ms: Option<i64>,
     pub server_observed_at_ms: i64,
@@ -45,6 +47,9 @@ impl RecordingIdentityResolver {
         auth: &AuthContext,
         request: &AdmissionRequest,
     ) -> Result<ResolvedOccurrence, MemberError> {
+        if request.provider == Provider::MicrosoftTeams {
+            return resolve_local_teams(auth, request);
+        }
         if request.connection_id.is_empty() || request.connection_id.len() > 256 {
             return Err(MemberError::Invalid(
                 "provider connection is required".into(),
@@ -53,6 +58,7 @@ impl RecordingIdentityResolver {
         let integration = match request.provider {
             Provider::GoogleMeet => GoogleMeet::ID,
             Provider::SlackHuddle => Slack::ID,
+            Provider::MicrosoftTeams => unreachable!("local Teams capture resolved above"),
         };
         tokio::time::timeout(std::time::Duration::from_secs(30), async {
             let http = self
@@ -94,11 +100,30 @@ impl RecordingIdentityResolver {
                 Provider::SlackHuddle => {
                     resolve_slack(&http.with_base_url_override("https://slack.com")).await
                 }
+                Provider::MicrosoftTeams => unreachable!("local Teams capture resolved above"),
             }
         })
         .await
         .map_err(|_| MemberError::Upstream)?
     }
+}
+
+pub(crate) fn resolve_local_teams(
+    auth: &AuthContext,
+    request: &AdmissionRequest,
+) -> Result<ResolvedOccurrence, MemberError> {
+    let capture = request
+        .room_identity
+        .as_deref()
+        .and_then(|identity| identity.strip_prefix("teams-local:"))
+        .filter(|id| crate::shared_recordings::local_capture_uuid(id))
+        .ok_or_else(|| MemberError::Invalid("a Teams local capture UUID is required".into()))?;
+    // Scope an unverified device observation to its uploader, never to other attendees.
+    Ok(resolved(
+        Provider::MicrosoftTeams,
+        format!("{}/{capture}", auth.claims.sub),
+        None,
+    ))
 }
 
 async fn resolve_slack<C: HttpClient>(http: &C) -> Result<ResolvedOccurrence, MemberError> {
@@ -152,6 +177,7 @@ fn resolved(
     let provider_name = match provider {
         Provider::GoogleMeet => "google_meet",
         Provider::SlackHuddle => "slack_huddle",
+        Provider::MicrosoftTeams => "microsoft_teams",
     };
     let occurrence_id = format!(
         "meeting-{}",
@@ -161,6 +187,11 @@ fn resolved(
     );
     ResolvedOccurrence {
         occurrence_id,
+        admission_basis: if provider == Provider::MicrosoftTeams {
+            "local_capture"
+        } else {
+            "provider_verified"
+        },
         provider,
         provider_occurrence_id,
         provider_started_at_ms,

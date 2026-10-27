@@ -31,6 +31,17 @@ pub struct Configuration {
     pub connections: Vec<Connection>,
 }
 impl Configuration {
+    fn meeting_connection(&self, platform: &str) -> Result<Option<String>, String> {
+        let integration = match platform {
+            "googleMeet" => "google-meet",
+            "slack" => "slack",
+            "microsoftTeams" => return Ok(None),
+            _ => return Err("Unsupported meeting provider".into()),
+        };
+        self.unique_connection(integration)
+            .map(|connection| Some(connection.connection_id.clone()))
+            .ok_or_else(|| "Connect exactly one account for this meeting provider".into())
+    }
     fn unique_connection(&self, integration: &str) -> Option<&Connection> {
         let mut connected = self.connections.iter().filter(|connection| {
             connection.status == "connected" && connection.integration_id == integration
@@ -640,13 +651,15 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
     let provider = match platform.as_str() {
         "googleMeet" => "google_meet",
         "slack" => "slack_huddle",
+        "microsoftTeams" => "microsoft_teams",
         _ => return Err("Unsupported meeting provider".into()),
     };
-    let integration = if platform == "googleMeet" {
-        "google-meet"
-    } else {
-        "slack"
-    };
+    if platform == "microsoftTeams"
+        && (uuid::Uuid::parse_str(&session_id).is_err()
+            || call_identity.as_deref() != Some(format!("teams-local:{session_id}").as_str()))
+    {
+        return Err("Teams capture requires its local session identity".into());
+    }
     let path = dir.join(format!("binding-{}.json", key(&session_id)));
     let (config, connection_id, first_admission) = {
         let _preparation = queue_state.serial.lock().await;
@@ -684,24 +697,27 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
             save(&path, &binding)?;
         }
         let first_admission = existing.is_none();
-        let Some(connection) = config.unique_connection(integration) else {
-            if first_admission {
-                quarantine_unadmitted(
-                    &dir,
-                    &queue_state,
-                    &config,
-                    &session_id,
-                    &platform,
-                    observed_at_ms,
-                )?;
+        let connection_id = match config.meeting_connection(&platform) {
+            Ok(connection_id) => connection_id,
+            Err(error) => {
+                if first_admission {
+                    quarantine_unadmitted(
+                        &dir,
+                        &queue_state,
+                        &config,
+                        &session_id,
+                        &platform,
+                        observed_at_ms,
+                    )?;
+                }
+                return Err(error);
             }
-            return Err("Connect exactly one account for this meeting provider".into());
         };
         if let Some(binding) = existing.as_ref() {
             if binding
                 .connection_id
                 .as_ref()
-                .is_some_and(|id| id != &connection.connection_id)
+                .is_some_and(|id| Some(id) != connection_id.as_ref())
             {
                 return Err("Meeting connection changed; original stays local".into());
             }
@@ -722,7 +738,6 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
             }
             return Err("Sign in again to verify this meeting; original audio stays local".into());
         }
-        let connection_id = connection.connection_id.clone();
         (config, connection_id, first_admission)
     };
     validate_url(&config.api_base_url)?;
@@ -733,7 +748,7 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
     );
     let request_started_at_ms = chrono::Utc::now().timestamp_millis();
     let resolved = async {
-        json_body(success(client()?.post(url).bearer_auth(access_token).json(&json!({"provider":provider,"roomIdentity":call_identity,"connectionId":connection_id})).send().await.map_err(|e|e.to_string())?).await?).await
+        json_body(success(client()?.post(url).bearer_auth(access_token).json(&json!({"provider":provider,"roomIdentity":call_identity,"connectionId":connection_id.as_deref().unwrap_or_default()})).send().await.map_err(|e|e.to_string())?).await?).await
     }.await;
     let resolved = resolved.and_then(|admission| {
         if admission
@@ -783,10 +798,7 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
     bound(&current, &user_id)?;
     if current.organization_id != config.organization_id
         || current.api_base_url != config.api_base_url
-        || current
-            .unique_connection(integration)
-            .map(|connection| &connection.connection_id)
-            != Some(&connection_id)
+        || current.meeting_connection(&platform)? != connection_id
     {
         return Err("Account configuration changed during admission".into());
     }
@@ -805,7 +817,7 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
             );
         }
         binding.verification_pending = false;
-        binding.connection_id = Some(connection_id);
+        binding.connection_id = connection_id;
         binding.call_identity = call_identity;
         save(&path, &binding)?;
         return Ok(binding.admission["occurrenceId"]
@@ -825,7 +837,7 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
             platform,
             call_identity,
             verification_pending: false,
-            connection_id: Some(connection_id),
+            connection_id,
             quarantine_reason: None,
         },
     )?;
@@ -1125,15 +1137,9 @@ pub async fn shared_recording_flush<R: tauri::Runtime>(
             if !pending_attempts.insert(job.session_id.clone()) {
                 continue;
             }
-            let integration = match binding.platform.as_str() {
-                "googleMeet" => "google-meet",
-                "slack" => "slack",
-                _ => continue,
-            };
-            let Some(connection) = config.unique_connection(integration) else {
-                continue;
-            };
-            if binding.connection_id.as_deref() != Some(connection.connection_id.as_str()) {
+            if config.meeting_connection(&binding.platform).ok()
+                != Some(binding.connection_id.clone())
+            {
                 continue;
             }
             if shared_recording_observe(
@@ -1203,19 +1209,14 @@ fn verify_upload_binding(dir: &Path, job: &Job, state: &QueueState) -> Result<()
     if config.organization_id != job.organization_id || config.api_base_url != job.api_base_url {
         return Err("Sharing account changed".into());
     }
-    if let Some(connection_id) = latest.connection_id.as_ref() {
-        let integration = match latest.platform.as_str() {
-            "googleMeet" => "google-meet",
-            "slack" => "slack",
-            _ => return Err("Meeting provider changed; original retained".into()),
-        };
-        if config
-            .unique_connection(integration)
-            .map(|connection| &connection.connection_id)
-            != Some(connection_id)
-        {
-            return Err("Meeting connection changed; original retained".into());
-        }
+    if config.meeting_connection(&latest.platform)? != latest.connection_id {
+        return Err("Meeting connection changed; original retained".into());
+    }
+    if latest.platform == "microsoftTeams"
+        && latest.call_identity.as_deref()
+            != Some(format!("teams-local:{}", job.session_id).as_str())
+    {
+        return Err("Teams capture identity changed; original retained".into());
     }
     Ok(())
 }
