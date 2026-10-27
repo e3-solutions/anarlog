@@ -3,7 +3,7 @@ import { env } from "~/env";
 
 export function useE3CalendarAccess() {
   const { session } = useAuth();
-  const email = session?.user.email?.toLowerCase().split("@");
+  const email = session?.user?.email?.toLowerCase().split("@");
   return (
     env.VITE_E3_SCRIBE === "true" &&
     email?.length === 2 &&
