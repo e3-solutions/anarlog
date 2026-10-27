@@ -18,7 +18,7 @@ const THEME_OPTIONS = [
 export function ThemeSelector() {
   const { t } = useLingui();
   const storedValue = useConfigValue("theme") as ThemePreference;
-  const value = THEME_OPTIONS.includes(storedValue) ? storedValue : "system";
+  const value = THEME_OPTIONS.includes(storedValue) ? storedValue : "light";
   const appIcon = normalizeAppIconPreference(useConfigValue("app_icon"));
   const setTheme = useSetSettingValue("theme");
   const options = [

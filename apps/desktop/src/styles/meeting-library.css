@@ -61,7 +61,6 @@
 .meeting-row[aria-current="page"] {
   border-color: hsl(var(--ring) / 0.35);
   background: hsl(var(--accent));
-  box-shadow: inset 3px 0 hsl(var(--primary));
 }
 
 .meeting-row:active {
