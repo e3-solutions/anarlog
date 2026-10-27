@@ -76,6 +76,12 @@ pub(crate) async fn router(
             auth_state_basic.clone(),
         )
         .route_layer(middleware::from_fn(auth::sentry_and_analytics))
+        .route(
+            "/download",
+            axum::routing::get(|| async {
+                axum::response::Html(include_str!("e3-download.html"))
+            }),
+        )
     } else if env.upstreams.anarlog_core_origin.is_some() {
         anlg_api_recordings::recording_app::forwarding_router()
     } else {
