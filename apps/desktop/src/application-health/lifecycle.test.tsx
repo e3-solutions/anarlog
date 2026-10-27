@@ -63,8 +63,11 @@ vi.mock("~/store/zustand/listener/instance", () => ({
       live: {
         status: "inactive",
         sessionId: null,
+        captureOwnerUserId: null,
+        captureOwnerSessionId: null,
         seconds: 0,
         lastError: "secret raw message",
+        lastErrorSessionId: null,
         lastErrorIsAudioRelated: true,
         transcriptionStalled: false,
       },

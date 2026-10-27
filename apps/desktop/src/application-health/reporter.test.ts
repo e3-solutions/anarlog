@@ -12,7 +12,12 @@ function setup(initialActive = false) {
       ? "previous-account-session"
       : (null as string | null),
     seconds: 0,
+    captureOwnerUserId: initialActive ? "previous-account" : "current-account",
+    captureOwnerSessionId: initialActive
+      ? "previous-account-session"
+      : (null as string | null),
     lastError: null as string | null,
+    lastErrorSessionId: null as string | null,
     lastErrorIsAudioRelated: false,
     transcriptionStalled: false,
   };
@@ -34,6 +39,7 @@ function setup(initialActive = false) {
     uploadError: false,
   }));
   const stop = startHealthReporter({
+    userId: "current-account",
     readLive: () => live,
     subscribe: (callback) => {
       changed = callback;
@@ -65,7 +71,11 @@ it("retains a short recording start and stop across offline retries without queu
   const run = setup();
   run.offline(true);
   await vi.advanceTimersByTimeAsync(0);
-  run.update({ status: "active", sessionId: "private-local-id" });
+  run.update({
+    status: "active",
+    sessionId: "private-local-id",
+    captureOwnerSessionId: "private-local-id",
+  });
   run.update({ seconds: 4 });
   run.update({ status: "inactive", sessionId: null });
   await vi.advanceTimersByTimeAsync(15_000);
@@ -110,6 +120,8 @@ it("reports inherited active capture as unknown until a new account-owned captur
   run.update({
     status: "active",
     sessionId: "current-account-session",
+    captureOwnerUserId: "current-account",
+    captureOwnerSessionId: "current-account-session",
     seconds: 0,
   });
   await vi.advanceTimersByTimeAsync(15_000);

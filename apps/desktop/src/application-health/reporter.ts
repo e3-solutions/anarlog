@@ -19,11 +19,15 @@ export type HealthSnapshot = {
 };
 
 export function startHealthReporter(input: {
+  userId: string;
   readLive: () => {
     status: string;
     sessionId: string | null;
+    captureOwnerUserId: string | null;
+    captureOwnerSessionId: string | null;
     seconds: number;
     lastError: string | null;
+    lastErrorSessionId: string | null;
     lastErrorIsAudioRelated: boolean;
     transcriptionStalled: boolean;
   };
@@ -47,13 +51,10 @@ export function startHealthReporter(input: {
   let running = false;
   let lastAttempt = -Infinity;
   let activeId: string | null = null;
-  const initial = input.readLive();
-  const inheritedId = initial.status === "active" ? initial.sessionId : null;
   let startedAt: string | null = null;
   let stoppedAt: string | null = null;
   let duration: number | null = null;
   let activeSeconds = 0;
-  let ownedCaptureSeen = false;
   let previousFingerprint = "";
   let timer: ReturnType<typeof setTimeout>;
   let controller: AbortController | null = null;
@@ -61,21 +62,25 @@ export function startHealthReporter(input: {
   const observe = () => {
     const live = input.readLive();
     const observedId = live.status === "active" ? live.sessionId : null;
-    // Keep suppressing the inherited session even if it briefly becomes inactive.
-    const nextId = observedId === inheritedId ? null : observedId;
+    const owned =
+      live.captureOwnerUserId === input.userId &&
+      live.captureOwnerSessionId === observedId;
+    const nextId = owned ? observedId : null;
     if (activeId && nextId !== activeId) {
       stoppedAt = new Date().toISOString();
       duration = Math.min(
         Math.max(
           activeSeconds,
-          observedId && observedId !== activeId ? 0 : live.seconds,
+          live.captureOwnerUserId !== input.userId ||
+            live.captureOwnerSessionId !== activeId
+            ? 0
+            : live.seconds,
           0,
         ),
         86400,
       );
     }
     if (nextId && nextId !== activeId) {
-      ownedCaptureSeen = true;
       startedAt = new Date(
         Date.now() - Math.max(live.seconds, 0) * 1000,
       ).toISOString();
@@ -102,26 +107,26 @@ export function startHealthReporter(input: {
           const collected = await input.collect(attempt.signal);
           if (!collected || attempt.signal.aborted || stopped) return;
           const live = observe();
-          const inheritedCapture =
-            inheritedId &&
-            live.status === "active" &&
-            live.sessionId === inheritedId;
+          const owned = live.captureOwnerUserId === input.userId;
+          const ownedActive =
+            owned && live.captureOwnerSessionId === live.sessionId;
+          const ownedError =
+            owned && live.captureOwnerSessionId === live.lastErrorSessionId;
           await input.send(
             {
               ...collected,
               observedAt: new Date().toISOString(),
-              recording: inheritedCapture ? null : activeId !== null,
+              recording:
+                live.status === "active" && !ownedActive
+                  ? null
+                  : activeId !== null,
               lastRecordingStartedAt: startedAt,
               lastRecordingStoppedAt: stoppedAt,
               lastRecordingDurationSeconds: duration,
-              errorCategory: inheritedCapture
-                ? null
-                : live.lastError &&
-                    live.lastErrorIsAudioRelated &&
-                    (ownedCaptureSeen || live.lastError !== initial.lastError)
+              errorCategory:
+                ownedError && live.lastError && live.lastErrorIsAudioRelated
                   ? "audio_capture"
-                  : live.transcriptionStalled &&
-                      (ownedCaptureSeen || !initial.transcriptionStalled)
+                  : ownedActive && live.transcriptionStalled
                     ? "transcription"
                     : null,
             },
@@ -147,6 +152,8 @@ export function startHealthReporter(input: {
     const live = observe();
     const fingerprint = JSON.stringify([
       live.status === "active" ? live.sessionId : null,
+      live.captureOwnerUserId,
+      live.captureOwnerSessionId,
       !!live.lastError,
       live.transcriptionStalled,
     ]);

@@ -51,6 +51,7 @@ function ActiveApplicationHealth({ userId }: { userId: string }) {
       );
     };
     return startHealthReporter({
+      userId,
       readLive: () => listenerStore.getState().live,
       subscribe: (changed) => listenerStore.subscribe(changed),
       collect: async (signal) => {

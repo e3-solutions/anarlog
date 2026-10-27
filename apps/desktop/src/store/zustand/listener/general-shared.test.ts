@@ -73,6 +73,24 @@ function createActiveLive(): GeneralState["live"] {
 }
 
 describe("markLiveCaptureStarted", () => {
+  it("preserves requested capture ownership but clears it for an unknown native session", () => {
+    const live = createLive();
+    live.seconds = 900;
+    markLiveStartRequested(live, "session-a", "account-a");
+    expect(live.seconds).toBe(0);
+    markLiveCaptureStarted(live, "session-a");
+    expect([live.captureOwnerUserId, live.captureOwnerSessionId]).toEqual([
+      "account-a",
+      "session-a",
+    ]);
+    live.sessionId = "native-session";
+    markLiveCaptureStarted(live, "native-session");
+    expect([live.captureOwnerUserId, live.captureOwnerSessionId]).toEqual([
+      null,
+      null,
+    ]);
+  });
+
   it("keeps one generation per capture across lifecycle observations", () => {
     const live = createLive();
 

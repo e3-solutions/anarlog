@@ -42,6 +42,8 @@ export type GeneralState = {
     captureGenerationBySession: Record<string, number>;
     intervalId?: LiveIntervalId;
     sessionId: string | null;
+    captureOwnerUserId: string | null;
+    captureOwnerSessionId: string | null;
     muted: boolean;
     captureHealth: {
       mic: boolean | null;
@@ -81,6 +83,8 @@ const initialLiveState: LiveState = {
   captureGenerationCounter: 0,
   captureGenerationBySession: {},
   sessionId: null,
+  captureOwnerUserId: null,
+  captureOwnerSessionId: null,
   muted: false,
   captureHealth: { mic: null, speaker: null, unavailable: false },
   lastError: null,
@@ -172,6 +176,10 @@ export const releaseLiveCaptureGeneration = (
 };
 
 export const markLiveCaptureStarted = (live: LiveState, sessionId: string) => {
+  if (live.captureOwnerSessionId !== sessionId) {
+    live.captureOwnerUserId = null;
+    live.captureOwnerSessionId = null;
+  }
   if (live.sessionId !== sessionId && live.lastErrorSessionId !== sessionId) {
     live.captureHealth = { mic: null, speaker: null, unavailable: false };
     live.lastError = null;
@@ -184,12 +192,19 @@ export const markLiveCaptureStarted = (live: LiveState, sessionId: string) => {
   live.sessionId = sessionId;
 };
 
-export const markLiveStartRequested = (live: LiveState, sessionId: string) => {
+export const markLiveStartRequested = (
+  live: LiveState,
+  sessionId: string,
+  ownerUserId: string | null = null,
+) => {
   live.captureHealth = { mic: null, speaker: null, unavailable: false };
   ensureLiveCaptureGeneration(live, sessionId);
   live.loading = true;
   live.status = "inactive";
   live.sessionId = sessionId;
+  live.captureOwnerUserId = ownerUserId;
+  live.captureOwnerSessionId = ownerUserId ? sessionId : null;
+  live.seconds = 0;
   live.lastError = null;
   live.lastErrorSessionId = null;
   live.lastErrorIsAudioRelated = false;

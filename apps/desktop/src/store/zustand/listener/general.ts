@@ -85,7 +85,10 @@ export const createGeneralSlice = <
   get: StoreApi<T>["getState"],
 ): GeneralState & GeneralActions => ({
   ...initialGeneralState,
-  start: async (params: CaptureParams, options) => {
+  start: async (
+    params: CaptureParams & { authenticated_user_id?: string | null },
+    options,
+  ) => {
     const targetSessionId = params.session_id;
 
     if (!targetSessionId) {
@@ -109,7 +112,11 @@ export const createGeneralSlice = <
       }
 
       setLiveState(set, (live) => {
-        markLiveStartRequested(live, targetSessionId);
+        markLiveStartRequested(
+          live,
+          targetSessionId,
+          params.authenticated_user_id ?? null,
+        );
       });
 
       if (options?.handlePersist) {
@@ -139,6 +146,16 @@ export const createGeneralSlice = <
     if (!sessionId) {
       return "inactive";
     }
+
+    setLiveState(set, (live) => {
+      if (
+        live.sessionId !== sessionId ||
+        (live.status === "inactive" && !live.loading)
+      ) {
+        live.captureOwnerUserId = null;
+        live.captureOwnerSessionId = null;
+      }
+    });
 
     return attachLiveSession(set, get, sessionId, options);
   },
