@@ -29,14 +29,14 @@ export function SharedRecordingsLauncher() {
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent
           overlayClassName="bg-black/30 backdrop-blur-[2px] motion-reduce:animate-none"
-          className="meeting-library top-3 right-3 bottom-3 left-auto flex h-auto w-[calc(100vw-1.5rem)] max-w-6xl translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-xl p-0"
+          className="top-3 right-3 bottom-3 left-auto flex h-auto w-[calc(100vw-1.5rem)] max-w-6xl translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-xl p-0 data-[state=closed]:animate-none data-[state=open]:animate-none"
         >
-          <DialogHeader className="meeting-library-header border-b px-6 py-5 pr-14 text-left">
-            <DialogTitle className="text-foreground text-xl font-semibold tracking-tight">
+          <DialogHeader className="border-b px-6 py-4 pr-14 text-left">
+            <DialogTitle className="text-foreground text-xl font-semibold">
               Meeting library
             </DialogTitle>
             <DialogDescription>
-              Your team’s meeting audio and transcripts, together in one place.
+              Meetings shared with your team.
             </DialogDescription>
           </DialogHeader>
           {open ? (

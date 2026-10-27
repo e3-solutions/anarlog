@@ -46,7 +46,17 @@ vi.mock("./client", async (importOriginal) => ({
         providerOccurrenceId: `conferenceRecords/${token}`,
         durationFrames: 16000,
       },
-      captures: [],
+      captures: [
+        {
+          captureId: `preview-${token}`,
+          deleted: false,
+          transcript: {
+            provider: "asr",
+            model: "model",
+            result: { text: `Meeting preview for ${token}.` },
+          },
+        },
+      ],
     },
   ],
   readSharedRecording: mocks.readRecording,
@@ -55,7 +65,7 @@ vi.mock("./client", async (importOriginal) => ({
 import { SharedRecordingsAccount } from "./index";
 
 beforeEach(() => {
-  mocks.readRecording.mockResolvedValue({
+  mocks.readRecording.mockImplementation(async (token: string) => ({
     occurrence: { provider: "slack_huddle" },
     captures: ["source-one", "source-two"].map((captureId, index) => ({
       captureId,
@@ -68,7 +78,11 @@ beforeEach(() => {
         result: {
           results: {
             channels: [
-              { alternatives: [{ transcript: "Original source decision." }] },
+              {
+                alternatives: [
+                  { transcript: `Original source decision for ${token}.` },
+                ],
+              },
             ],
           },
         },
@@ -81,7 +95,7 @@ beforeEach(() => {
         gaps: [],
       },
     })),
-  });
+  }));
   vi.stubGlobal(
     "URL",
     class extends URL {
@@ -120,17 +134,25 @@ it("cancels the previous account's audio and removes its recordings when account
     return new Promise(() => {});
   });
   const view = renderAccount();
-  fireEvent.click(await screen.findByText("conferenceRecords/account-one"));
+  expect(
+    await screen.findByText("Meeting preview for account-one."),
+  ).toBeTruthy();
   fireEvent.click(
-    (await screen.findAllByRole("button", { name: "Load audio" }))[0],
+    (await screen.findAllByRole("button", { name: "Listen" }))[0],
   );
   await waitFor(() => expect(signal).toBeDefined());
   mocks.userId = "account-two";
   view.rerender(view.content());
   expect(signal!.aborted).toBe(true);
   expect(view.container.querySelector("audio")).toBeNull();
-  expect(screen.queryByText("conferenceRecords/account-one")).toBeNull();
-  expect(await screen.findByText("conferenceRecords/account-two")).toBeTruthy();
+  expect(screen.queryByText("Meeting preview for account-one.")).toBeNull();
+  expect(
+    await screen.findByText("Meeting preview for account-two."),
+  ).toBeTruthy();
+  fireEvent.click(await screen.findByRole("tab", { name: "Transcript" }));
+  expect(
+    await screen.findAllByText("Original source decision for account-two."),
+  ).toHaveLength(2);
   view.client.clear();
 });
 
@@ -139,18 +161,17 @@ it("shows original source transcripts and separate players, and retries failed s
     new Blob(["RIFF"], { type: "audio/wav" }),
   );
   const view = renderAccount();
-  fireEvent.click(await screen.findByText("conferenceRecords/account-one"));
+  fireEvent.click(await screen.findByRole("tab", { name: "Transcript" }));
+  expect(
+    await screen.findAllByText("Original source decision for account-one."),
+  ).toHaveLength(2);
+  fireEvent.click(screen.getByRole("tab", { name: "Recordings" }));
   fireEvent.click(
-    (await screen.findAllByRole("button", { name: "Load audio" }))[0],
+    (await screen.findAllByRole("button", { name: "Listen" }))[0],
   );
   await waitFor(() =>
     expect(view.container.querySelector("audio")).toBeTruthy(),
   );
-  expect(
-    screen.getByRole("heading", { name: "Original audio and transcripts" }),
-  ).toBeTruthy();
-  fireEvent.click(screen.getAllByText("Source transcript · ready")[0]);
-  expect(screen.getAllByText("Original source decision.")[0]).toBeTruthy();
   const audio = view.container.querySelector("audio")!;
   Object.defineProperty(audio, "error", { value: { code: 4 } });
   fireEvent.error(audio);
@@ -161,7 +182,7 @@ it("shows original source transcripts and separate players, and retries failed s
   await waitFor(() =>
     expect(view.container.querySelector("audio")).toBeTruthy(),
   );
-  fireEvent.click(screen.getByRole("button", { name: "Load audio" }));
+  fireEvent.click(screen.getByRole("button", { name: "Listen" }));
   await waitFor(() =>
     expect(view.container.querySelectorAll("audio")).toHaveLength(2),
   );

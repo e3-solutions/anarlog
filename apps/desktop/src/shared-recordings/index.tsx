@@ -1,13 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useId, useRef, useState } from "react";
 
 import { Button } from "@anlg/ui/components/ui/button";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@anlg/ui/components/ui/popover";
 import { useMountEffect } from "@anlg/ui/hooks/use-mount-effect";
+import { cn } from "@anlg/utils";
 
 import {
   listSharedRecordings,
@@ -22,7 +18,11 @@ import { SharedRecordingPreferences, SharedRecordingQueue } from "./settings";
 
 import { useAuth } from "~/auth";
 
-export function SharedRecordingsAccount() {
+export function SharedRecordingsAccount({
+  settings = false,
+}: {
+  settings?: boolean;
+}) {
   const auth = useAuth();
   const { getSessionForRequest } = auth;
   const session = auth.session;
@@ -62,14 +62,20 @@ export function SharedRecordingsAccount() {
   if (!account.data)
     return <p className="p-6 text-sm">Loading organizations…</p>;
   return (
-    <OrganizationRecordings key={session.user.id} account={account.data} />
+    <OrganizationRecordings
+      key={session.user.id}
+      account={account.data}
+      settings={settings}
+    />
   );
 }
 
 function OrganizationRecordings({
   account,
+  settings,
 }: {
   account: SharedRecordingAccount;
+  settings: boolean;
 }) {
   const [organizationId, setOrganizationId] = useState(
     account.workspaces[0]?.id ?? "",
@@ -87,10 +93,12 @@ function OrganizationRecordings({
         throw new Error("Account changed.");
       return listSharedRecordings(session.access_token, organizationId);
     },
-    enabled: !!organizationId,
+    enabled: !!organizationId && !settings,
     refetchInterval: 10_000,
     retry: false,
   });
+  const selectedOccurrenceId =
+    selected ?? recordings.data?.[0]?.occurrenceId ?? null;
   if (!account.workspaces.length) {
     return (
       <p className="p-6 text-sm">
@@ -99,55 +107,47 @@ function OrganizationRecordings({
       </p>
     );
   }
-  return (
-    <div className="meeting-library-content flex min-h-0 flex-1 flex-col">
-      <div className="meeting-toolbar flex shrink-0 flex-wrap items-start justify-between gap-3 border-b px-6 py-4">
-        <label className="flex min-w-0 items-center gap-3 text-sm font-medium">
-          Organization
-          <select
-            aria-label="Organization"
-            className="meeting-organization bg-card text-foreground h-9 max-w-64 min-w-0 rounded-lg border px-3 text-sm font-normal"
-            value={organizationId}
-            onChange={(event) => {
-              setOrganizationId(event.target.value);
-              setSelected(null);
-            }}
-          >
-            {account.workspaces.map((workspace) => (
-              <option key={workspace.id} value={workspace.id}>
-                {workspace.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <Popover>
-          <PopoverTrigger asChild>
-            <Button
-              variant="outline"
-              className="meeting-sharing-trigger text-primary gap-2"
-            >
-              Sharing settings
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent
-            align="end"
-            sideOffset={10}
-            className="meeting-sharing-popover w-[min(28rem,calc(100vw-3rem))] rounded-xl p-5"
-          >
-            <SharedRecordingPreferences
-              account={account}
-              organizationId={organizationId}
-            />
-          </PopoverContent>
-        </Popover>
-      </div>
-      <div className="meeting-queue px-6">
+  const organizationPicker =
+    account.workspaces.length > 1 ? (
+      <label className="flex items-center gap-3 text-sm">
+        Organization
+        <select
+          aria-label="Organization"
+          className="bg-background h-9 max-w-64 min-w-0 cursor-pointer rounded-lg border px-3 text-sm"
+          value={organizationId}
+          onChange={(event) => {
+            setOrganizationId(event.target.value);
+            setSelected(null);
+          }}
+        >
+          {account.workspaces.map((workspace) => (
+            <option key={workspace.id} value={workspace.id}>
+              {workspace.name}
+            </option>
+          ))}
+        </select>
+      </label>
+    ) : null;
+  if (settings)
+    return (
+      <div className="flex flex-col gap-4">
+        {organizationPicker}
+        <SharedRecordingPreferences
+          account={account}
+          organizationId={organizationId}
+        />
         <SharedRecordingQueue userId={account.userId} />
       </div>
-      <div className="meeting-library-body flex min-h-0 flex-1 flex-col sm:flex-row">
+    );
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {organizationPicker ? (
+        <div className="shrink-0 border-b px-6 py-3">{organizationPicker}</div>
+      ) : null}
+      <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
         <nav
           aria-label="Meetings"
-          className="meeting-list max-h-48 shrink-0 overflow-y-auto border-b p-3 sm:max-h-none sm:w-64 sm:border-r sm:border-b-0 lg:w-72"
+          className="bg-muted/30 max-h-48 shrink-0 overflow-y-auto border-b p-2 sm:max-h-none sm:w-64 sm:border-r sm:border-b-0"
         >
           {recordings.error ? (
             <ErrorMessage
@@ -160,57 +160,62 @@ function OrganizationRecordings({
           ) : null}
           {recordings.data?.length === 0 ? (
             <p className="text-muted-foreground text-sm">
-              No shared recordings yet. Enable sharing before joining a
-              supported meeting.
+              No meetings yet. Shared meetings will appear here.
             </p>
           ) : null}
           {recordings.data?.map((item) => (
             <button
               type="button"
               key={item.occurrenceId}
-              aria-current={selected === item.occurrenceId ? "page" : undefined}
+              aria-current={
+                selectedOccurrenceId === item.occurrenceId ? "page" : undefined
+              }
               onClick={() => setSelected(item.occurrenceId)}
-              title={item.occurrence.providerOccurrenceId}
-              className="meeting-row mb-1.5 w-full rounded-lg border border-transparent p-3 text-left text-sm"
+              className={cn([
+                "focus-visible:outline-ring mb-1 flex w-full min-w-0 cursor-pointer flex-col gap-1 rounded-lg px-3 py-2 text-left text-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2",
+                selectedOccurrenceId === item.occurrenceId
+                  ? "bg-accent text-accent-foreground"
+                  : "hover:bg-accent/50",
+              ])}
             >
               <span className="block font-medium">
                 {item.occurrence.provider === "google_meet"
                   ? "Google Meet"
                   : "Slack huddle"}
               </span>
-              <span className="text-muted-foreground mt-1 block truncate font-mono text-[11px]">
-                {item.occurrence.providerOccurrenceId}
+              <span className="text-muted-foreground block w-full truncate text-xs">
+                {item.captures
+                  .filter((capture) => !capture.deleted)
+                  .map(transcriptText)
+                  .find(Boolean)
+                  ?.replace(/\s+/g, " ")
+                  .slice(0, 120) || "Transcribing…"}
               </span>
-              <span className="text-muted-foreground mt-1.5 block text-xs tabular-nums">
+              <span className="text-muted-foreground text-xs">
                 {item.captures.filter((capture) => !capture.deleted).length}{" "}
-                sources ·{" "}
-                {
-                  item.captures.filter(
-                    (capture) =>
-                      !capture.deleted && capture.transcriptStatus === "ready",
-                  ).length
-                }{" "}
-                transcribed
+                {item.captures.filter((capture) => !capture.deleted).length ===
+                1
+                  ? "recording"
+                  : "recordings"}
               </span>
             </button>
           ))}
         </nav>
-        <div className="meeting-detail min-w-0 flex-1 overflow-y-auto p-5 sm:p-7">
-          {selected ? (
+        <div className="bg-card min-w-0 flex-1 overflow-y-auto px-6 py-6">
+          {selectedOccurrenceId ? (
             <RecordingDetail
-              key={`${account.userId}:${organizationId}:${selected}`}
+              key={`${account.userId}:${organizationId}:${selectedOccurrenceId}`}
               userId={account.userId}
               organizationId={organizationId}
-              occurrenceId={selected}
+              occurrenceId={selectedOccurrenceId}
             />
           ) : (
-            <div className="meeting-empty mx-auto flex h-full max-w-sm flex-col justify-center gap-3 pb-12">
+            <div className="mx-auto flex h-full max-w-sm flex-col justify-center gap-2 pb-12">
               <h2 className="text-xl font-semibold tracking-tight">
-                Every perspective, saved.
+                Your team’s meetings
               </h2>
               <p className="text-muted-foreground text-sm leading-relaxed">
-                Choose a meeting to listen to each person’s recording and read
-                its transcript.
+                Choose a meeting to listen or read the transcript.
               </p>
             </div>
           )}
@@ -231,7 +236,8 @@ function RecordingDetail({
 }) {
   const auth = useAuth();
   const { getSessionForRequest } = auth;
-  const queryClient = useQueryClient();
+  const [view, setView] = useState<"recordings" | "transcript">("recordings");
+  const viewId = useId();
   // Refresh credentials at request time; user IDs define cache ownership.
   // eslint-disable-next-line @tanstack/query/exhaustive-deps
   const detail = useQuery({
@@ -253,97 +259,107 @@ function RecordingDetail({
     return (
       <ErrorMessage error={detail.error} retry={() => void detail.refetch()} />
     );
-  if (!detail.data) return <p className="text-sm">Loading recording…</p>;
+  if (!detail.data) return <p className="text-sm">Loading meeting…</p>;
   const { captures } = detail.data;
   return (
     <div className="mx-auto max-w-3xl space-y-6">
-      <h2 className="text-foreground text-2xl font-semibold tracking-tight">
+      <h2 className="text-xl font-semibold">
         {detail.data.occurrence.provider === "google_meet"
           ? "Google Meet"
           : "Slack huddle"}
       </h2>
-      <details className="meeting-disclosure text-muted-foreground text-xs">
-        <summary className="cursor-pointer">Verified meeting identity</summary>
-        <p className="pt-2 font-mono break-all select-text">
-          {detail.data.occurrence.providerOccurrenceId}
-        </p>
-      </details>
-      <div className="space-y-1">
-        <h3 className="font-medium">Original audio and transcripts</h3>
-        <p className="text-muted-foreground text-sm">
-          Each person’s audio and transcript are saved separately.
-        </p>
+      <div
+        role="tablist"
+        aria-label="Meeting view"
+        className="bg-foreground/10 dark:bg-accent/55 rounded-pill flex w-fit gap-0.5 p-0.5 [corner-shape:round]"
+      >
+        {(["recordings", "transcript"] as const).map((tab) => (
+          <button
+            key={tab}
+            id={`${viewId}-${tab}`}
+            type="button"
+            role="tab"
+            data-view={tab}
+            aria-selected={view === tab}
+            aria-controls={`${viewId}-panel`}
+            tabIndex={view === tab ? 0 : -1}
+            className={cn([
+              "rounded-pill focus-visible:outline-ring h-7 cursor-pointer px-3 text-xs font-medium transition-colors [corner-shape:round] focus-visible:outline-2 focus-visible:outline-offset-2",
+              view === tab
+                ? "bg-card text-foreground shadow-xs"
+                : "text-muted-foreground hover:text-foreground",
+            ])}
+            onClick={() => setView(tab)}
+            onKeyDown={(event) => {
+              if (
+                !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)
+              )
+                return;
+              event.preventDefault();
+              const next =
+                event.key === "Home"
+                  ? "recordings"
+                  : event.key === "End"
+                    ? "transcript"
+                    : tab === "recordings"
+                      ? "transcript"
+                      : "recordings";
+              setView(next);
+              event.currentTarget.parentElement
+                ?.querySelector<HTMLButtonElement>(`[data-view="${next}"]`)
+                ?.focus();
+            }}
+          >
+            {tab === "recordings" ? "Recordings" : "Transcript"}
+          </button>
+        ))}
       </div>
-      <ul className="space-y-4">
+      <ul
+        id={`${viewId}-panel`}
+        role="tabpanel"
+        tabIndex={0}
+        aria-labelledby={`${viewId}-${view}`}
+        className="space-y-6"
+      >
         {captures
           .filter((capture) => !capture.deleted)
           .map((capture, index) => (
             <li
               key={`${capture.captureId}:${capture.metadata.sha256}`}
-              className="meeting-source bg-card space-y-4 rounded-xl border p-5"
+              className="space-y-4 border-b pb-6 last:border-b-0"
             >
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <p className="text-sm font-medium">
-                  Recording {index + 1} ·{" "}
-                  {capture.metadata.uploaderId.slice(0, 8)}
-                </p>
+              <div className="flex items-baseline justify-between gap-3">
+                <h3 className="text-sm font-medium">Recording {index + 1}</h3>
                 <p className="text-muted-foreground text-xs tabular-nums">
-                  {formatTime(capture.frameCount / 16000)} · starts at ~
-                  {formatTime(capture.metadata.offsetFrames / 16000)}
+                  {formatTime(capture.frameCount / 16000)}
                 </p>
               </div>
-              <details className="meeting-disclosure text-muted-foreground text-xs">
-                <summary className="cursor-pointer">Recording details</summary>
-                <p className="pt-2 break-all select-text">
-                  Contributor: {capture.metadata.uploaderId}
-                </p>
-                <p>
-                  Start time is estimated from the recording device’s clock.
-                </p>
-              </details>
+              {view === "recordings" ? (
+                <RecordingAudio
+                  userId={userId}
+                  organizationId={organizationId}
+                  occurrenceId={occurrenceId}
+                  source={capture}
+                />
+              ) : null}
               {capture.metadata.gaps.length ? (
-                <p className="text-muted-foreground text-xs">
-                  Missing audio within this source:{" "}
-                  {capture.metadata.gaps
-                    .map(
-                      (gap) =>
-                        `${formatTime(gap.start / 16000)}–${formatTime(gap.end / 16000)}`,
-                    )
-                    .join(", ")}
+                <p className="text-muted-foreground text-sm">
+                  Some audio is missing from this recording.
                 </p>
               ) : null}
-              <details className="meeting-transcript meeting-disclosure rounded-lg text-sm">
-                <summary className="text-primary cursor-pointer font-medium">
-                  Source transcript · {capture.transcriptStatus}
-                </summary>
-                <p className="text-foreground border-t px-4 py-4 leading-7 whitespace-pre-wrap select-text">
+              {view === "transcript" ? (
+                <p className="text-sm leading-7 whitespace-pre-wrap select-text">
                   {transcriptText(capture) ||
                     (capture.transcriptStatus === "ready"
-                      ? "No speech was returned for this source."
+                      ? "No speech detected."
                       : capture.transcriptStatus === "error"
-                        ? "Source transcription failed. Original audio is retained."
-                        : "Source transcription is pending. Original audio is retained.")}
+                        ? "Transcription failed. You can still listen to the recording."
+                        : "Transcribing…")}
                 </p>
-              </details>
-              <RecordingAudio
-                userId={userId}
-                organizationId={organizationId}
-                occurrenceId={occurrenceId}
-                source={capture}
-              />
+              ) : null}
             </li>
           ))}
       </ul>
-      <Button
-        variant="outline"
-        onClick={() =>
-          void queryClient.invalidateQueries({
-            queryKey: ["shared-recordings", userId, organizationId],
-          })
-        }
-      >
-        Refresh
-      </Button>
     </div>
   );
 }
@@ -428,7 +444,7 @@ function RecordingAudio({
     );
   return audio.data && !audio.isFetching ? (
     <audio
-      className="w-full accent-violet-600"
+      className="accent-primary w-full"
       controls
       preload="metadata"
       src={audio.data}
@@ -445,9 +461,11 @@ function RecordingAudio({
       <track kind="captions" />
     </audio>
   ) : audio.isFetching ? (
-    <p className="text-muted-foreground text-sm">Loading source audio…</p>
+    <p className="text-muted-foreground text-sm">Loading audio…</p>
   ) : (
-    <Button onClick={() => void audio.refetch()}>Load audio</Button>
+    <Button variant="outline" size="sm" onClick={() => void audio.refetch()}>
+      Listen
+    </Button>
   );
 }
 

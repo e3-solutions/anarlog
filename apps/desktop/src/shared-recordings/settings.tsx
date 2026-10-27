@@ -51,24 +51,25 @@ export function SharedRecordingPreferences({
     <div className="flex flex-col gap-4">
       <div className="space-y-1 text-sm">
         <p className="font-medium">
-          {enabled ? "Sharing is on" : "Automatic sharing is off"}
+          {enabled ? "Automatic sharing is on" : "Automatic sharing is off"}
         </p>
         <p className="text-muted-foreground">
-          Verified Google Meet and Slack recordings are available to
-          organization members. Offline uploads retry when you reconnect.
+          Recordings and transcripts from verified Google Meet calls and Slack
+          huddles are shared with everyone in this organization. Uploads resume
+          when you reconnect.
         </p>
         <p className="text-muted-foreground">
-          A local audio copy is kept for retries, even when audio retention is
-          off.
+          A local audio copy is kept for upload retries, even when audio
+          retention is off.
         </p>
         {!account.connections.some(
           (connection) => connection.status === "connected",
         ) ? (
           <p className="text-muted-foreground">
-            Connect Google Meet or Slack before enabling sharing.
+            Connect Google Meet or Slack to turn on sharing.
           </p>
         ) : null}
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           {(["google-meet", "slack"] as const).map((integrationId) => {
             const connection = account.connections.find(
               (connection) => connection.integrationId === integrationId,
@@ -104,7 +105,7 @@ export function SharedRecordingPreferences({
             ),
         ) ? (
           <p className="text-muted-foreground">
-            Turn off sharing before connecting another provider.
+            Turn off sharing before connecting another meeting app.
           </p>
         ) : null}
         {config.error || update.error ? (
@@ -178,7 +179,7 @@ export function SharedRecordingQueue({ userId }: { userId: string }) {
     ) : null;
   return (
     <div
-      className="meeting-queue-status text-muted-foreground bg-card flex flex-wrap items-start justify-between gap-3 rounded-lg border px-4 py-3 text-xs leading-relaxed"
+      className="text-muted-foreground bg-card flex flex-wrap items-start justify-between gap-3 rounded-lg border px-4 py-3 text-xs leading-relaxed"
       role="status"
     >
       <span>

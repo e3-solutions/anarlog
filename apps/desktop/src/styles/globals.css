@@ -4,7 +4,6 @@
 
 @import "tailwindcss";
 @import "./dark-theme.css";
-@import "./meeting-library.css";
 @import "../../../../packages/ui/src/styles/corners.css";
 @import "../../../../packages/ui/src/styles/scroll-fade.css";
 
