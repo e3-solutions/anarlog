@@ -110,6 +110,7 @@ def benchmark(root, output, variant, samples, replay):
         "cargo",
         "build",
         "--locked",
+        "--no-default-features",
         "-p",
         "desktop",
         "--features",
@@ -170,7 +171,7 @@ def benchmark(root, output, variant, samples, replay):
                 reason="Install the pinned Rust toolchain with rustup before timing native builds",
             )
             return result
-        if platform.system() == "Darwin" and "CARGO_BUILD_JOBS" not in env:
+        if platform.system() == "Darwin" and not env.get("CARGO_BUILD_JOBS"):
             memory = result["metadata"]["memory"]
             if memory["exit_code"] == 0 and memory["output"].strip().isdigit():
                 env["CARGO_BUILD_JOBS"] = str(

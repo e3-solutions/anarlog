@@ -11,6 +11,7 @@ const child = spawn(
     "apps/desktop/src-tauri/.cargo/config.toml",
     "check",
     "--locked",
+    "--no-default-features",
     "-p",
     "desktop",
     "--features",
