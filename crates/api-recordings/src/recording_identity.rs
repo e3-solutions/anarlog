@@ -53,6 +53,7 @@ impl RecordingIdentityResolver {
         let integration = match request.provider {
             Provider::GoogleMeet => GoogleMeet::ID,
             Provider::SlackHuddle => Slack::ID,
+            Provider::Unverified => return Err(MemberError::Unresolved),
         };
         tokio::time::timeout(std::time::Duration::from_secs(30), async {
             let http = self
@@ -66,6 +67,7 @@ impl RecordingIdentityResolver {
                 .await
                 .map_err(|_| MemberError::Unresolved)?;
             match request.provider {
+                Provider::Unverified => Err(MemberError::Unresolved),
                 Provider::GoogleMeet => {
                     let code = meet_code(
                         request
@@ -152,6 +154,7 @@ fn resolved(
     let provider_name = match provider {
         Provider::GoogleMeet => "google_meet",
         Provider::SlackHuddle => "slack_huddle",
+        Provider::Unverified => "unverified",
     };
     let occurrence_id = format!(
         "meeting-{}",

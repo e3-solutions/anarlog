@@ -1,0 +1,25 @@
+begin;
+select plan(8);
+select tests.create_supabase_user('unverified_owner','unverified-owner@example.com');
+select tests.create_supabase_user('unverified_member','unverified-member@example.com');
+select tests.authenticate_as_service_role();
+insert into public.workspace_memberships(workspace_id,user_id,role)
+values(tests.get_supabase_uid('unverified_owner'),tests.get_supabase_uid('unverified_member'),'member');
+select public.recording_admit(tests.get_supabase_uid('unverified_owner'),'verified-meeting',tests.get_supabase_uid('unverified_owner'),'GoogleMeet:verified','{"provider":"google_meet","durationFrames":1}',1000);
+select public.recording_admit(tests.get_supabase_uid('unverified_owner'),'verified-meeting',tests.get_supabase_uid('unverified_member'),'GoogleMeet:verified','{"provider":"google_meet","durationFrames":1}',1000);
+select public.recording_admit(tests.get_supabase_uid('unverified_owner'),'unassigned-recording',tests.get_supabase_uid('unverified_owner'),'Unverified:isolated','{"provider":"unverified","durationFrames":1}',1000);
+select public.recording_upload(tests.get_supabase_uid('unverified_owner'),'verified-meeting','verified-source','verified-device-source',jsonb_build_object('uploaderId',tests.get_supabase_uid('unverified_owner'),'offsetFrames',0),'verified-owner-source.wav',16000,32044);
+select public.recording_upload(tests.get_supabase_uid('unverified_owner'),'unassigned-recording','unassigned-source','unassigned-device-source',jsonb_build_object('uploaderId',tests.get_supabase_uid('unverified_owner'),'offsetFrames',0,'audioTimelineVerified',false),'unassigned-owner-source.wav',16000,32044);
+select throws_ok($$select public.recording_upload(tests.get_supabase_uid('unverified_owner'),'unassigned-recording','injected-source','injected-device-source',jsonb_build_object('uploaderId',tests.get_supabase_uid('unverified_member'),'offsetFrames',0),'injected-source.wav',16000,32044)$$,'42501','recording admission required','Another member cannot inject audio into an unassigned capture');
+insert into storage.objects(bucket_id,name) values('recording-audio','verified-owner-source.wav'),('recording-audio','unassigned-owner-source.wav');
+select tests.authenticate_as('unverified_member');
+select is((select count(*)::int from public.recording_occurrences),1,'Members retain verified meeting access while unassigned recordings stay private');
+select is((select count(*)::int from public.recording_captures),1,'Other members cannot read unassigned source metadata or transcripts');
+select is((select count(*)::int from storage.objects where bucket_id = 'recording-audio'),1,'Other members cannot fetch unassigned audio directly through storage');
+select tests.authenticate_as('unverified_owner');
+select is((select count(*)::int from public.recording_occurrences),2,'The uploader can recover both verified and unassigned recordings');
+select is((select count(*)::int from public.recording_captures),2,'The uploader can read their unassigned source');
+select is((select count(*)::int from storage.objects where bucket_id = 'recording-audio'),2,'The uploader can fetch their unassigned audio');
+select ok(not has_table_privilege('authenticated','public.recording_admissions','INSERT'),'Clients cannot grant themselves access to another uploader recording');
+select * from finish();
+rollback;

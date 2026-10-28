@@ -120,6 +120,7 @@ async fn each_original_is_transcribed_independently_and_partial_asr_retries_keep
                     rank,
                     gaps,
                     timing_basis: TimingBasis::OperatorVerified,
+                    audio_timeline_verified: None,
                 },
                 wav,
             )

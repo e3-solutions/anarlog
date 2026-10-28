@@ -124,7 +124,7 @@ it("keeps unverified active captures local without quarantining a stopped captur
   await waitFor(() => expect(mocks.quarantined).toBe(true));
   await waitFor(() =>
     expect(screen.getByRole("status").textContent).toContain(
-      "start a new recording",
+      "Uploads will retry",
     ),
   );
   view.unmount();
@@ -290,7 +290,7 @@ it("recovers identity and uploads while two account views of the same Meet are i
   );
   await vi.waitFor(() =>
     expect(screen.getByRole("status").textContent).toContain(
-      "sharing will retry",
+      "Uploads will retry",
     ),
   );
   await act(async () => {
@@ -410,7 +410,7 @@ it.each([
     } else {
       await waitFor(() =>
         expect(screen.getByRole("status").textContent).toContain(
-          "start a new recording",
+          "Uploads will retry",
         ),
       );
       expect(mocks.quarantined).toBe(true);
@@ -476,5 +476,34 @@ it("replays persisted opt-out before a restarted upload pump can send pending au
     expect(mocks.flush).toHaveBeenCalledWith("token", "account-one"),
   );
   expect(mocks.uploaded).toBe(false);
+  client.clear();
+});
+
+it("offers upload retry for legacy identity and timeline blocks while retaining storage blocks", async () => {
+  mocks.queue.mockResolvedValue([
+    { id: "identity", sessionId: "session-one", state: "blocked_identity" },
+    { id: "timeline", sessionId: "session-two", state: "blocked_timeline" },
+    { id: "storage", sessionId: "session-three", state: "blocked_storage" },
+  ]);
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const view = render(
+    <QueryClientProvider client={client}>
+      <SharedRecordingQueue userId="account-one" />
+    </QueryClientProvider>,
+  );
+  const retry = await screen.findByRole("button", { name: "Retry uploads" });
+  expect(screen.getByRole("status").textContent).toContain(
+    "2 recordings waiting to share",
+  );
+  expect(screen.getByRole("alert").textContent).toContain(
+    "1 recording kept locally",
+  );
+  fireEvent.click(retry);
+  await waitFor(() =>
+    expect(mocks.flush).toHaveBeenCalledWith("token", "account-one"),
+  );
+  view.unmount();
   client.clear();
 });

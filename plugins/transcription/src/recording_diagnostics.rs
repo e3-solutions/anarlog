@@ -14,6 +14,7 @@ const KINDS: &[&str] = &[
     "capture_source_ended",
     "capture_stopped",
     "capture_error",
+    "upload_state",
 ];
 const REASONS: &[&str] = &[
     "observed",
@@ -79,6 +80,73 @@ fn evidence_valid(evidence: &Evidence) -> bool {
             value.as_u64().is_some_and(|value| value <= 86_400_000)
         }
         "droppedCount" => value.as_u64().is_some_and(|value| value <= 1_000_000_000),
+        "jobId" => value.as_str().is_some_and(|value| {
+            value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+        }),
+        "uploadState" => value.as_str().is_some_and(|value| {
+            [
+                "preparing",
+                "awaiting_identity",
+                "pending",
+                "blocked_storage",
+                "blocked_identity",
+                "blocked_timeline",
+                "error",
+                "uploaded",
+            ]
+            .contains(&value)
+        }),
+        "blockReason" => value.as_str().is_some_and(|value| {
+            [
+                "identity_unverified",
+                "storage_failed",
+                "timeline_mismatch",
+                "account_changed",
+                "recording_excluded",
+                "upload_failed",
+                "normalize_failed",
+            ]
+            .contains(&value)
+        }),
+        "identityReason" => value.as_str().is_some_and(|value| {
+            [
+                "ax_unavailable",
+                "ax_ambiguous",
+                "meeting_unverified",
+                "inventory_missing",
+                "inventory_conflict",
+                "meeting_departed",
+                "auth_unavailable",
+                "observer_stopped",
+                "call_changed",
+                "occurrence_changed",
+                "configuration_changed",
+                "unverified",
+                "user_excluded",
+            ]
+            .contains(&value)
+        }),
+        "capturedFrames" | "decodedFrames" => {
+            value.as_u64().is_some_and(|value| value <= 1_382_400_000)
+        }
+        "recordingStartedAtMs" | "recordingStoppedAtMs" => value
+            .as_u64()
+            .is_some_and(|value| value <= 9_007_199_254_740_991),
+        "audioTimelineVerified" => value.is_boolean(),
+        "httpStatus" => value
+            .as_u64()
+            .is_some_and(|value| (100..=599).contains(&value)),
+        "uploadStage" => value.as_str().is_some_and(|value| {
+            [
+                "admission",
+                "normalize",
+                "audio_upload",
+                "processing",
+                "complete",
+            ]
+            .contains(&value)
+        }),
+        "segmentCount" => value.as_u64().is_some_and(|value| value <= 4096),
         _ => false,
     })
 }
@@ -107,6 +175,13 @@ impl Input {
         }
         if !evidence_valid(&self.evidence) {
             return Err("Unsupported diagnostic evidence".into());
+        }
+        if self.kind == "upload_state"
+            && (self.session_id.is_none()
+                || !self.evidence.contains_key("jobId")
+                || !self.evidence.contains_key("uploadState"))
+        {
+            return Err("Upload diagnostics require a session, job and state".into());
         }
         Ok(())
     }
@@ -199,6 +274,7 @@ struct Collector {
     directory: Option<PathBuf>,
     user_id: Option<String>,
     owners: HashMap<String, String>,
+    upload_seen: HashMap<(String, String), Evidence>,
     boot_id: String,
     started: Instant,
     // Timestamp observation before queued disk work can delay it.
@@ -260,6 +336,7 @@ impl RecordingDiagnostics {
             directory,
             user_id: None,
             owners: HashMap::new(),
+            upload_seen: HashMap::new(),
             boot_id: uuid::Uuid::new_v4().to_string(),
             started,
             observed: (now_ms(), started),
@@ -387,6 +464,8 @@ impl Collector {
                 self.user_id = None;
             }
             if purge {
+                self.upload_seen
+                    .retain(|(owner, _), _| user.as_ref().is_some_and(|user| user != owner));
                 self.owners
                     .retain(|_, owner| user.as_ref().is_some_and(|user| user != owner));
                 if let Some(user) = user {
@@ -412,6 +491,56 @@ impl Collector {
         } else {
             Err("Diagnostics account inactive".into())
         }
+    }
+
+    fn upload(&mut self, user: &str, session: &str, evidence: Evidence) -> Result<(), String> {
+        self.require_user(user)?;
+        let mut input = Input {
+            session_id: Some(session.into()),
+            kind: "upload_state".into(),
+            reason: "observed".into(),
+            evidence,
+        };
+        input.validate()?;
+        let key = (
+            user.to_string(),
+            input.evidence["jobId"].as_str().unwrap().to_string(),
+        );
+        if let Some(previous) = self.upload_seen.get(&key)
+            && previous.get("uploadState") == input.evidence.get("uploadState")
+            && !input.evidence.contains_key("uploadStage")
+        {
+            if input
+                .evidence
+                .get("uploadState")
+                .and_then(serde_json::Value::as_str)
+                == Some("error")
+                && input
+                    .evidence
+                    .get("blockReason")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("upload_failed")
+                && let Some(reason) = previous.get("blockReason")
+            {
+                input.evidence.insert("blockReason".into(), reason.clone());
+            }
+            for field in ["uploadStage", "httpStatus"] {
+                if !input.evidence.contains_key(field)
+                    && let Some(value) = previous.get(field)
+                {
+                    input.evidence.insert(field.into(), value.clone());
+                }
+            }
+        }
+        if self.upload_seen.get(&key) == Some(&input.evidence)
+            || (!self.upload_seen.contains_key(&key) && self.upload_seen.len() >= 4096)
+        {
+            return Ok(());
+        }
+        let signature = input.evidence.clone();
+        self.append(user, input)?;
+        self.upload_seen.insert(key, signature);
+        Ok(())
     }
 
     fn begin(&mut self, session: &str, user: Option<&str>, reason: &str) -> Result<(), String> {
@@ -498,6 +627,20 @@ fn with_collector<R: tauri::Runtime>(
 pub fn begin<R: tauri::Runtime>(app: &tauri::AppHandle<R>, session: &str, user: Option<&str>) {
     with_collector(app, |collector| {
         collector.begin(session, user, "start_requested")
+    });
+}
+
+pub(crate) fn upload<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    user: &str,
+    session: &str,
+    evidence: Evidence,
+) {
+    with_collector(app, |collector| {
+        if collector.require_user(user).is_err() {
+            return Ok(());
+        }
+        collector.upload(user, session, evidence)
     });
 }
 
@@ -742,6 +885,96 @@ mod tests {
         let _ = collector(dir.clone());
         assert!(!stale.exists());
         assert!(unrelated.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn upload_backfill_deduplicates_stable_jobs_preserves_failure_details_and_gates_accounts() {
+        let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let user = uuid::Uuid::new_v4().to_string();
+        let other = uuid::Uuid::new_v4().to_string();
+        let session = uuid::Uuid::new_v4().to_string();
+        let mut state = collector(dir.clone());
+        let evidence: Evidence = serde_json::from_value(serde_json::json!({
+            "jobId": "a".repeat(64), "uploadState": "awaiting_identity",
+            "blockReason": "identity_unverified", "identityReason": "ax_unavailable",
+            "capturedFrames": 16000, "decodedFrames": 0, "audioTimelineVerified": false,
+            "segmentCount": 0,
+            "recordingStartedAtMs": 1_700_000_000_000_u64,
+            "recordingStoppedAtMs": 1_700_000_100_000_u64,
+        }))
+        .unwrap();
+        assert!(state.upload(&user, &session, evidence.clone()).is_err());
+        state.configure(Some(user.clone()), true, false).unwrap();
+        state.upload(&user, &session, evidence.clone()).unwrap();
+        state.upload(&user, &session, evidence.clone()).unwrap();
+        assert_eq!(state.batch(&user).unwrap().events.len(), 1);
+        let mut failure = evidence.clone();
+        failure.insert("uploadState".into(), serde_json::json!("error"));
+        failure.insert("blockReason".into(), serde_json::json!("upload_failed"));
+        failure.insert("uploadStage".into(), serde_json::json!("admission"));
+        failure.insert("httpStatus".into(), serde_json::json!(503));
+        state.upload(&user, &session, failure.clone()).unwrap();
+        let mut snapshot = failure.clone();
+        snapshot.remove("uploadStage");
+        snapshot.remove("httpStatus");
+        state.upload(&user, &session, snapshot).unwrap();
+        state.upload(&user, &session, failure.clone()).unwrap();
+        assert_eq!(state.batch(&user).unwrap().events.len(), 2);
+        failure.remove("uploadStage");
+        failure.remove("httpStatus");
+        failure.insert("decodedFrames".into(), serde_json::json!(16000));
+        state.upload(&user, &session, failure.clone()).unwrap();
+        let updated = state.batch(&user).unwrap().events;
+        assert_eq!(updated.len(), 3);
+        assert_eq!(
+            updated[2].evidence["uploadStage"],
+            serde_json::json!("admission")
+        );
+        assert_eq!(updated[2].evidence["httpStatus"], serde_json::json!(503));
+        let mut network_failure = failure.clone();
+        network_failure.insert("uploadStage".into(), serde_json::json!("admission"));
+        state
+            .upload(&user, &session, network_failure.clone())
+            .unwrap();
+        let network_events = state.batch(&user).unwrap().events;
+        assert_eq!(network_events.len(), 4);
+        assert!(!network_events[3].evidence.contains_key("httpStatus"));
+        network_failure.remove("uploadStage");
+        state.upload(&user, &session, network_failure).unwrap();
+        let mut normalization = failure.clone();
+        normalization.insert("blockReason".into(), serde_json::json!("normalize_failed"));
+        normalization.insert("uploadStage".into(), serde_json::json!("normalize"));
+        state
+            .upload(&user, &session, normalization.clone())
+            .unwrap();
+        normalization.remove("uploadStage");
+        normalization.insert("blockReason".into(), serde_json::json!("upload_failed"));
+        state
+            .upload(&user, &session, normalization.clone())
+            .unwrap();
+        assert_eq!(state.batch(&user).unwrap().events.len(), 5);
+        normalization.insert("uploadStage".into(), serde_json::json!("admission"));
+        state.upload(&user, &session, normalization).unwrap();
+        assert_eq!(
+            state.batch(&user).unwrap().events[5].evidence["blockReason"],
+            serde_json::json!("upload_failed")
+        );
+        assert!(state.upload(&other, &session, evidence.clone()).is_err());
+        let mut private = evidence.clone();
+        private.insert("error".into(), serde_json::json!("private server response"));
+        assert!(state.upload(&user, &session, private).is_err());
+        let mut unbounded = evidence.clone();
+        unbounded.insert(
+            "capturedFrames".into(),
+            serde_json::json!(1_382_400_001_u64),
+        );
+        assert!(state.upload(&user, &session, unbounded).is_err());
+        assert_eq!(state.batch(&user).unwrap().events.len(), 6);
+        state.configure(Some(user.clone()), false, true).unwrap();
+        state.configure(Some(user.clone()), true, false).unwrap();
+        state.upload(&user, &session, evidence).unwrap();
+        assert_eq!(state.batch(&user).unwrap().events.len(), 1);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

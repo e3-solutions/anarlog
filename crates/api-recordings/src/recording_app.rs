@@ -3,14 +3,14 @@ use std::sync::Arc;
 use anlg_api_auth::{AuthContext, AuthState};
 use axum::{
     Extension, Json, Router,
-    extract::{DefaultBodyLimit, Path, State},
+    extract::{DefaultBodyLimit, Path, Query, State},
     http::{HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{any, get, post},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::{
@@ -21,7 +21,8 @@ use crate::{
     },
     recording_transcription::RecordingProcessor,
     shared_recordings::{
-        CaptureUpload, OccurrenceManifest, RecordingError, SharedRecordingService, TimingBasis,
+        CaptureUpload, OccurrenceManifest, Provider, RecordingError, SharedRecordingService,
+        TimingBasis,
     },
 };
 
@@ -33,11 +34,12 @@ pub struct RecordingAppState {
     pub processor: Option<Arc<RecordingProcessor>>,
 }
 
-const PATHS: [&str; 9] = [
+const PATHS: [&str; 10] = [
     "/v1/shared-recordings/me",
     "/v1/shared-recordings/enroll",
     "/v1/orgs/{workspace}/shared-recordings",
     "/v1/orgs/{workspace}/shared-recordings/admit",
+    "/v1/orgs/{workspace}/shared-recordings/admit-unverified",
     "/v1/orgs/{workspace}/shared-recordings/{id}",
     "/v1/orgs/{workspace}/shared-recordings/{id}/captures/{source}/audio",
     "/v1/orgs/{workspace}/shared-recordings/{id}/captures/{source}",
@@ -57,6 +59,7 @@ pub fn router(state: RecordingAppState, auth: AuthState) -> Router {
         enrollment,
         library_path,
         admission,
+        unverified_admission,
         occurrence,
         original_audio,
         capture,
@@ -68,6 +71,7 @@ pub fn router(state: RecordingAppState, auth: AuthState) -> Router {
         .route(enrollment, post(enroll))
         .route(library_path, get(library))
         .route(admission, post(admit))
+        .route(unverified_admission, post(admit_unverified))
         .route(occurrence, get(manifest).delete(delete_occurrence))
         .route(original_audio, get(audio))
         .route(capture, post(upload).delete(delete_capture))
@@ -167,16 +171,24 @@ async fn enroll(
 struct Library {
     items: Vec<OccurrenceManifest>,
 }
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LibraryQuery {
+    #[serde(default)]
+    include_unverified: bool,
+}
+
 async fn library(
     State(state): State<RecordingAppState>,
     Path(workspace): Path<String>,
+    Query(query): Query<LibraryQuery>,
     Extension(auth): Extension<AuthContext>,
 ) -> Result<Json<Library>, MemberError> {
     state.members.authorize(&auth, &workspace).await?;
     Ok(Json(Library {
         items: state
             .service
-            .list_occurrences(&workspace)
+            .list_for_actor(&workspace, &auth.claims.sub, query.include_unverified)
             .await
             .map_err(storage_error)?,
     }))
@@ -206,12 +218,58 @@ async fn admit(
     Ok(Json(resolved))
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct UnverifiedAdmissionRequest {
+    local_capture_id: String,
+}
+
+async fn admit_unverified(
+    State(state): State<RecordingAppState>,
+    Path(workspace): Path<String>,
+    Extension(auth): Extension<AuthContext>,
+    Json(request): Json<UnverifiedAdmissionRequest>,
+) -> Result<Json<ResolvedOccurrence>, MemberError> {
+    state.members.authorize(&auth, &workspace).await?;
+    let (id, started) = state
+        .service
+        .admit_unverified(&workspace, &auth.claims.sub, &request.local_capture_id)
+        .await
+        .map_err(storage_error)?;
+    Ok(Json(ResolvedOccurrence {
+        occurrence_id: id.clone(),
+        provider: Provider::Unverified,
+        provider_occurrence_id: id,
+        provider_started_at_ms: started,
+        server_observed_at_ms: chrono::Utc::now().timestamp_millis(),
+    }))
+}
+
+async fn require_occurrence_access(
+    state: &RecordingAppState,
+    workspace: &str,
+    id: &str,
+    actor: &str,
+) -> Result<(), MemberError> {
+    if state
+        .service
+        .actor_can_access(workspace, id, actor)
+        .await
+        .map_err(storage_error)?
+    {
+        Ok(())
+    } else {
+        Err(MemberError::NotFound)
+    }
+}
+
 async fn manifest(
     State(state): State<RecordingAppState>,
     Path((workspace, id)): Path<(String, String)>,
     Extension(auth): Extension<AuthContext>,
 ) -> Result<Json<OccurrenceManifest>, MemberError> {
     state.members.authorize(&auth, &workspace).await?;
+    require_occurrence_access(&state, &workspace, &id, &auth.claims.sub).await?;
     Ok(Json(
         state
             .service
@@ -226,6 +284,7 @@ async fn audio(
     Extension(auth): Extension<AuthContext>,
 ) -> Result<Response, MemberError> {
     state.members.authorize(&auth, &workspace).await?;
+    require_occurrence_access(&state, &workspace, &id, &auth.claims.sub).await?;
     let (capture, wav) = state
         .service
         .source_audio(&workspace, &id, &source)
@@ -241,6 +300,7 @@ async fn upload(
     Json(mut request): Json<CaptureUpload>,
 ) -> Result<Json<OccurrenceManifest>, MemberError> {
     state.members.authorize(&auth, &workspace).await?;
+    require_occurrence_access(&state, &workspace, &id, &auth.claims.sub).await?;
     if !state
         .service
         .actor_admitted(&workspace, &id, &auth.claims.sub)
@@ -252,6 +312,9 @@ async fn upload(
     request.metadata.uploader_id = auth.claims.sub;
     request.metadata.timing_basis = TimingBasis::DeviceClockHint;
     request.metadata.rank = 0;
+    if request.metadata.audio_timeline_verified == Some(false) {
+        request.metadata.gaps.clear();
+    }
     let wav = STANDARD
         .decode(&request.wav_base64)
         .map_err(|_| MemberError::Invalid("invalid base64 WAV".into()))?;
@@ -270,6 +333,7 @@ async fn process(
     Extension(auth): Extension<AuthContext>,
 ) -> Result<Json<OccurrenceManifest>, MemberError> {
     state.members.authorize(&auth, &workspace).await?;
+    require_occurrence_access(&state, &workspace, &id, &auth.claims.sub).await?;
     let processor = state.processor.as_ref().ok_or(MemberError::Upstream)?;
     match processor.process(&workspace, &id).await {
         Ok(manifest) => Ok(Json(manifest)),
@@ -293,6 +357,7 @@ async fn seal(
     Extension(auth): Extension<AuthContext>,
 ) -> Result<Json<OccurrenceManifest>, MemberError> {
     let membership = state.members.authorize(&auth, &workspace).await?;
+    require_occurrence_access(&state, &workspace, &id, &auth.claims.sub).await?;
     require_manager(&membership)?;
     Ok(Json(
         state
@@ -308,6 +373,7 @@ async fn delete_occurrence(
     Extension(auth): Extension<AuthContext>,
 ) -> Result<StatusCode, MemberError> {
     let membership = state.members.authorize(&auth, &workspace).await?;
+    require_occurrence_access(&state, &workspace, &id, &auth.claims.sub).await?;
     require_manager(&membership)?;
     state
         .service
@@ -322,6 +388,7 @@ async fn delete_capture(
     Extension(auth): Extension<AuthContext>,
 ) -> Result<StatusCode, MemberError> {
     let membership = state.members.authorize(&auth, &workspace).await?;
+    require_occurrence_access(&state, &workspace, &id, &auth.claims.sub).await?;
     let occurrence = state
         .service
         .manifest(&workspace, &id)

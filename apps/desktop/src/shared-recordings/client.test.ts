@@ -10,6 +10,7 @@ vi.mock("~/env", () => ({
 import {
   downloadSharedRecordingSource,
   readSharedRecordingAccount,
+  listSharedRecordings,
 } from "./client";
 
 afterEach(() => {
@@ -93,4 +94,45 @@ it("plays only complete checksum-verified audio for the current account and reje
   pending.abort();
   finish(Response.json({ userId: "user", workspaces: [], connections: [] }));
   await expect(canceled).rejects.toThrow();
+});
+
+it("opts into unverified recordings and accepts legacy and uncertain audio timelines", async () => {
+  vi.stubGlobal("fetch", mocks.fetch);
+  const metadata = {
+    uploaderId: "user",
+    deviceId: "device",
+    localCaptureId: "capture",
+    sha256: "checksum",
+    offsetFrames: 0,
+    timingBasis: "device_clock_hint",
+    gaps: [],
+  };
+  mocks.fetch.mockResolvedValueOnce(
+    Response.json({
+      items: [
+        {
+          occurrenceId: "local-session",
+          occurrence: {
+            provider: "unverified",
+            providerOccurrenceId: "opaque",
+          },
+          captures: [
+            { captureId: "legacy", deleted: false, metadata },
+            {
+              captureId: "uncertain",
+              deleted: false,
+              metadata: { ...metadata, audioTimelineVerified: false },
+            },
+          ],
+        },
+      ],
+    }),
+  );
+  const recordings = await listSharedRecordings("token", "organization");
+  expect(mocks.fetch.mock.calls[0][0]).toContain("?includeUnverified=true");
+  expect(recordings[0].occurrence.provider).toBe("unverified");
+  expect(
+    recordings[0].captures[0].metadata.audioTimelineVerified,
+  ).toBeUndefined();
+  expect(recordings[0].captures[1].metadata.audioTimelineVerified).toBe(false);
 });

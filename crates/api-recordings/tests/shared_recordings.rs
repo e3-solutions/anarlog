@@ -47,6 +47,7 @@ fn metadata(id: &str, bytes: &[u8]) -> CaptureMetadata {
         rank: 0,
         gaps: vec![FrameRange { start: 4, end: 8 }],
         timing_basis: TimingBasis::DeviceClockHint,
+        audio_timeline_verified: None,
     }
 }
 async fn admit(service: &SharedRecordingService) {

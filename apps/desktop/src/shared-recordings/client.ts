@@ -11,7 +11,7 @@ const transcriptSchema = z.object({
 const occurrenceSchema = z.object({
   occurrenceId: z.string(),
   occurrence: z.object({
-    provider: z.enum(["google_meet", "slack_huddle"]),
+    provider: z.enum(["google_meet", "slack_huddle", "unverified"]),
     providerOccurrenceId: z.string(),
   }),
   captures: z.array(
@@ -29,6 +29,7 @@ const occurrenceSchema = z.object({
         sha256: z.string(),
         offsetFrames: z.number(),
         timingBasis: z.string(),
+        audioTimelineVerified: z.boolean().optional(),
         gaps: z
           .array(z.object({ start: z.number(), end: z.number() }))
           .default([]),
@@ -133,7 +134,7 @@ export async function listSharedRecordings(
   organizationId: string,
 ) {
   const response = await request(
-    `/v1/orgs/${encodeURIComponent(organizationId)}/shared-recordings`,
+    `/v1/orgs/${encodeURIComponent(organizationId)}/shared-recordings?includeUnverified=true`,
     accessToken,
   );
   return z

@@ -14,7 +14,7 @@ use tauri_plugin_settings::SettingsPluginExt;
 
 pub(crate) mod meeting_control;
 
-const QUARANTINED_MESSAGE: &str = "Meeting activity could not be verified throughout this recording. Original audio stays local; start a new recording in a new note with one verified call to share.";
+const QUARANTINED_MESSAGE: &str = "Meeting identity is uncertain; this recording will upload without a verified meeting association.";
 
 #[derive(Clone, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
@@ -62,6 +62,8 @@ pub struct Job {
     gaps: Vec<Gap>,
     #[serde(default)]
     raw_frames: Option<u64>,
+    #[serde(default)]
+    audio_timeline_verified: Option<bool>,
 }
 #[derive(Clone, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
@@ -548,22 +550,30 @@ fn cleanup_uploaded_audio(dir: &Path, job: &Job) -> Result<(), String> {
     Ok(())
 }
 fn finish_preparation(job: &mut Job) {
-    if let Some(raw_frames) = job.raw_frames {
-        let decoded_frames: u64 = job.segments.iter().map(|segment| segment.frames).sum();
-        let Some(padding) = decoded_frames
+    let decoded_frames: u64 = job.segments.iter().map(|segment| segment.frames).sum();
+    let padding = job.raw_frames.and_then(|raw_frames| {
+        decoded_frames
             .checked_sub(raw_frames)
             .filter(|padding| *padding <= 16000)
-        else {
-            job.state = "blocked_timeline".into();
-            job.error = Some("Stored audio length does not match captured frames. Original retained; timeline needs verification.".into());
-            return;
-        };
+    });
+    job.audio_timeline_verified = job.raw_frames.map(|_| padding.is_some());
+    if let Some(padding) = padding {
         // MP3 encoder/decoder padding has no verified sample origin. Cover every
         // possible shift instead of mislabeling a failed interval as captured.
         for gap in &mut job.gaps {
             gap.end = gap.end.saturating_add(padding).min(decoded_frames);
         }
+    } else if job.raw_frames.is_some() {
+        // Frame positions cannot be mapped reliably after a length mismatch.
+        // The uploaded source explicitly reports unknown timeline coverage.
+        job.gaps.clear();
+    } else {
+        for gap in &mut job.gaps {
+            gap.end = gap.end.min(decoded_frames);
+        }
+        job.gaps.retain(|gap| gap.start < gap.end);
     }
+    job.error = None;
     job.state = if job.binding.is_some() {
         "pending"
     } else {
@@ -885,8 +895,7 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
                 binding.quarantine("call_changed");
                 save(&path, &binding)?;
                 return Err(
-                    "Meeting changed during this recording; start a new recording to share it"
-                        .into(),
+                    "Meeting changed during this recording; upload will remain unassigned".into(),
                 );
             }
             if binding.admission.is_null() {
@@ -915,7 +924,7 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
                 .as_ref()
                 .is_some_and(|id| id != &connection.connection_id)
             {
-                return Err("Meeting connection changed; original stays local".into());
+                return Err("Meeting connection changed; upload will remain unassigned".into());
             }
             if binding.call_identity.is_some() && call_identity.is_none() {
                 return Err("Meeting identity is unavailable; verification will retry".into());
@@ -1012,14 +1021,15 @@ pub async fn shared_recording_observe<R: tauri::Runtime>(
     if let Some(mut binding) = existing {
         if binding.admission.is_null() {
             return Err(
-                "Meeting activity became unverified during admission; original stays local".into(),
+                "Meeting activity became unverified during admission; upload will remain unassigned".into(),
             );
         }
         if binding.admission["occurrenceId"] != admission["occurrenceId"] {
             binding.quarantine("occurrence_changed");
             save(&path, &binding)?;
             return Err(
-                "Provider occurrence changed during this recording; original stays local".into(),
+                "Provider occurrence changed during this recording; upload will remain unassigned"
+                    .into(),
             );
         }
         binding.verification_pending = false;
@@ -1181,9 +1191,6 @@ pub async fn shared_recording_enqueue<R: tauri::Runtime>(
                 && b.organization_id == config.organization_id
                 && b.api_base_url == config.api_base_url
         });
-    let identity_quarantined = observed_binding
-        .as_ref()
-        .is_some_and(|binding| binding.admission.is_null());
     let binding = observed_binding.and_then(|b| b.valid_binding().then_some(b.admission));
     let (gaps, storage_failed, raw_frames) = {
         let raw = queue_state.raw.lock().unwrap_or_else(|e| e.into_inner());
@@ -1199,8 +1206,6 @@ pub async fn shared_recording_enqueue<R: tauri::Runtime>(
         session_id,
         state: if storage_failed {
             "blocked_storage"
-        } else if identity_quarantined {
-            "blocked_identity"
         } else {
             "preparing"
         }
@@ -1208,7 +1213,7 @@ pub async fn shared_recording_enqueue<R: tauri::Runtime>(
         error: if storage_failed {
             Some("Audio storage reported a failure. Original retained; sharing is blocked until its timeline can be verified.".into())
         } else {
-            identity_quarantined.then(|| QUARANTINED_MESSAGE.into())
+            None
         },
         user_id: config.user_id,
         organization_id: config.organization_id,
@@ -1221,10 +1226,11 @@ pub async fn shared_recording_enqueue<R: tauri::Runtime>(
         segments: Vec::new(),
         gaps,
         raw_frames,
+        audio_timeline_verified: None,
     };
     save(&job_path(&dir, &job.id), &job)?;
     drop(_audio);
-    if storage_failed || identity_quarantined {
+    if storage_failed {
         return Ok(Some(job));
     }
     let target = job_dir.clone();
@@ -1254,6 +1260,7 @@ pub async fn shared_recording_queue<R: tauri::Runtime>(
         if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
             if let Some(job) = read::<Job>(&entry.path().join("job.json"))? {
                 if job.user_id == user_id {
+                    report_upload(&app, &job, None, None, None);
                     jobs.push(job)
                 }
             }
@@ -1261,6 +1268,85 @@ pub async fn shared_recording_queue<R: tauri::Runtime>(
     }
     Ok(jobs)
 }
+
+fn report_upload<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    job: &Job,
+    stage: Option<&str>,
+    reason: Option<&str>,
+    status: Option<u16>,
+) {
+    let mut evidence = crate::recording_diagnostics::Evidence::from([
+        ("jobId".into(), json!(job.id)),
+        ("uploadState".into(), json!(job.state)),
+        ("segmentCount".into(), json!(job.segments.len().min(4096))),
+    ]);
+    let reason = reason.or(match job.state.as_str() {
+        "blocked_identity" => Some("identity_unverified"),
+        "blocked_timeline" => Some("timeline_mismatch"),
+        "blocked_storage" => Some("storage_failed"),
+        "error" => Some(upload_failure_reason(
+            job.error.as_deref().unwrap_or_default(),
+        )),
+        _ => None,
+    });
+    if let Some(reason) = reason {
+        evidence.insert("blockReason".into(), json!(reason));
+    }
+    if let Some(stage) = stage {
+        evidence.insert("uploadStage".into(), json!(stage));
+    }
+    if let Some(status) = status {
+        evidence.insert("httpStatus".into(), json!(status));
+    }
+    for (field, time) in [
+        ("recordingStartedAtMs", job.started_at_ms),
+        ("recordingStoppedAtMs", job.stopped_at_ms),
+    ] {
+        if (1..=9_007_199_254_740_991).contains(&time) {
+            evidence.insert(field.into(), json!(time));
+        }
+    }
+    if let Some(frames) = job.raw_frames {
+        evidence.insert("capturedFrames".into(), json!(frames.min(1_382_400_000)));
+    }
+    if !job.segments.is_empty() {
+        let frames: u64 = job.segments.iter().map(|segment| segment.frames).sum();
+        evidence.insert("decodedFrames".into(), json!(frames.min(1_382_400_000)));
+    }
+    if let Some(verified) = job
+        .audio_timeline_verified
+        .or_else(|| (job.state == "blocked_timeline").then_some(false))
+    {
+        evidence.insert("audioTimelineVerified".into(), json!(verified));
+    }
+    if let Some(binding) = directory(app).ok().and_then(|dir| {
+        read::<Binding>(&dir.join(format!("binding-{}.json", key(&job.session_id))))
+            .ok()
+            .flatten()
+    }) && let Some(reason) = binding.quarantine_reason
+        && [
+            "ax_unavailable",
+            "ax_ambiguous",
+            "meeting_unverified",
+            "inventory_missing",
+            "inventory_conflict",
+            "meeting_departed",
+            "auth_unavailable",
+            "observer_stopped",
+            "call_changed",
+            "occurrence_changed",
+            "configuration_changed",
+            "unverified",
+            "user_excluded",
+        ]
+        .contains(&reason.as_str())
+    {
+        evidence.insert("identityReason".into(), json!(reason));
+    }
+    crate::recording_diagnostics::upload(app, &job.user_id, &job.session_id, evidence);
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn shared_recording_flush<R: tauri::Runtime>(
@@ -1277,7 +1363,6 @@ pub async fn shared_recording_flush<R: tauri::Runtime>(
     let _guard = queue_state.flush_serial.lock().await;
     let dir = directory(&app)?;
     let jobs = shared_recording_queue(app.clone(), user_id.clone()).await?;
-    let mut pending_attempts = HashSet::new();
     for mut job in jobs {
         if ensure_allowed(&app, &job.session_id).is_err() {
             continue;
@@ -1295,26 +1380,15 @@ pub async fn shared_recording_flush<R: tauri::Runtime>(
             continue;
         }
         if job.state == "blocked_storage"
-            || job.state == "blocked_timeline"
-            || job.state == "blocked_identity"
             || job.organization_id != config.organization_id
             || job.api_base_url != config.api_base_url
         {
+            if job.state != "blocked_storage" {
+                report_upload(&app, &job, None, Some("account_changed"), None);
+            }
             continue;
         }
         let binding_path = dir.join(format!("binding-{}.json", key(&job.session_id)));
-        if read::<Binding>(&binding_path)?.is_some_and(|binding| {
-            binding.admission.is_null()
-                && binding.user_id == user_id
-                && binding.organization_id == config.organization_id
-                && binding.api_base_url == config.api_base_url
-        }) {
-            job.state = "blocked_identity".into();
-            job.binding = None;
-            job.error = Some(QUARANTINED_MESSAGE.into());
-            save(&job_path(&dir, &job.id), &job)?;
-            continue;
-        }
         if job.segments.is_empty() {
             let target = dir.join(&job.id);
             match tokio::task::spawn_blocking(move || {
@@ -1327,69 +1401,61 @@ pub async fn shared_recording_flush<R: tauri::Runtime>(
                     job.segments = segments;
                     finish_preparation(&mut job);
                     save(&job_path(&dir, &job.id), &job)?;
-                    if job.state == "blocked_timeline" {
-                        continue;
-                    }
                 }
                 Err(error) => {
                     job.state = "error".into();
                     job.error = Some(error);
                     save(&job_path(&dir, &job.id), &job)?;
+                    report_upload(
+                        &app,
+                        &job,
+                        Some("normalize"),
+                        Some("normalize_failed"),
+                        None,
+                    );
                     continue;
                 }
             }
         }
-        if let Some(binding) = read::<Binding>(&binding_path)?.filter(|binding| {
-            binding.verification_pending
-                && !binding.admission.is_null()
-                && binding.user_id == user_id
-                && binding.organization_id == config.organization_id
-                && binding.api_base_url == config.api_base_url
-        }) {
-            if !pending_attempts.insert(job.session_id.clone()) {
-                continue;
-            }
-            let integration = match binding.platform.as_str() {
-                "googleMeet" => "google-meet",
-                "slack" => "slack",
-                _ => continue,
-            };
-            let Some(connection) = config.unique_connection(integration) else {
-                continue;
-            };
-            if binding.connection_id.as_deref() != Some(connection.connection_id.as_str()) {
-                continue;
-            }
-            if shared_recording_observe(
-                app.clone(),
-                job.session_id.clone(),
-                binding.platform,
-                binding.call_identity,
-                chrono::Utc::now().timestamp_millis(),
-                access_token.clone(),
-                user_id.clone(),
-                None,
-                None,
-            )
-            .await
-            .is_err()
-            {
-                continue;
-            }
+        if job.state == "blocked_timeline" {
+            finish_preparation(&mut job);
         }
-        if job.binding.is_none() {
+        if !job.binding.as_ref().is_some_and(unverified_admission) {
             job.binding = read::<Binding>(&binding_path)?
-                .filter(|b| {
-                    b.user_id == user_id
-                        && b.organization_id == config.organization_id
-                        && b.api_base_url == config.api_base_url
+                .filter(|binding| {
+                    binding.user_id == user_id
+                        && binding.organization_id == config.organization_id
+                        && binding.api_base_url == config.api_base_url
+                        && binding.valid_binding()
                 })
-                .and_then(|b| b.valid_binding().then_some(b.admission));
+                .map(|binding| binding.admission);
         }
         if job.binding.is_none() {
-            continue;
+            let (admission, status) = admit_unverified(&dir, &job, &access_token).await;
+            match admission {
+                Ok(admission) => job.binding = Some(admission),
+                Err(error) => {
+                    job.state = "error".into();
+                    job.error = Some(error);
+                    save(&job_path(&dir, &job.id), &job)?;
+                    report_upload(
+                        &app,
+                        &job,
+                        Some("admission"),
+                        Some(upload_failure_reason(
+                            job.error.as_deref().unwrap_or_default(),
+                        )),
+                        status,
+                    );
+                    continue;
+                }
+            }
         }
-        match upload(&dir, &job, &access_token, &queue_state).await {
+        job.state = "pending".into();
+        job.error = None;
+        save(&job_path(&dir, &job.id), &job)?;
+        let (result, stage, status) = upload(&dir, &job, &access_token, &queue_state).await;
+        match result {
             Ok(()) => {
                 job.state = "uploaded".into();
                 job.error = None;
@@ -1400,12 +1466,86 @@ pub async fn shared_recording_flush<R: tauri::Runtime>(
             }
         }
         save(&job_path(&dir, &job.id), &job)?;
+        report_upload(
+            &app,
+            &job,
+            Some(if job.state == "uploaded" {
+                "complete"
+            } else {
+                stage
+            }),
+            (job.state == "error")
+                .then(|| upload_failure_reason(job.error.as_deref().unwrap_or_default())),
+            status,
+        );
         if job.state == "uploaded" {
             cleanup_uploaded_audio(&dir, &job)?;
         }
     }
     Ok(())
 }
+fn upload_failure_reason(error: &str) -> &'static str {
+    match error {
+        EXCLUDED_MESSAGE => "recording_excluded",
+        "Sharing account changed"
+        | "Shared recording is disabled or belongs to another account" => "account_changed",
+        _ => "upload_failed",
+    }
+}
+
+fn unverified_admission(admission: &Value) -> bool {
+    admission["provider"] == "unverified"
+}
+
+fn upload_capture_id(job: &Job) -> String {
+    if job.binding.as_ref().is_some_and(unverified_admission) {
+        // Earlier parts may already belong to a verified meeting and are immutable.
+        format!("{}:unverified", job.id)
+    } else {
+        job.id.clone()
+    }
+}
+
+async fn admit_unverified(
+    dir: &Path,
+    job: &Job,
+    token: &str,
+) -> (Result<Value, String>, Option<u16>) {
+    let mut status = None;
+    let result = async {
+        let config: Configuration =
+            read(&dir.join("configuration.json"))?.ok_or("Sharing disabled")?;
+        bound(&config, &job.user_id)?;
+        if config.organization_id != job.organization_id || config.api_base_url != job.api_base_url
+        {
+            return Err("Sharing account changed".into());
+        }
+        let response = client()?
+            .post(format!(
+                "{}/v1/orgs/{}/shared-recordings/admit-unverified",
+                job.api_base_url.trim_end_matches('/'),
+                job.organization_id
+            ))
+            .bearer_auth(token)
+            .json(&json!({"localCaptureId":format!("{}:unverified",job.id)}))
+            .send()
+            .await
+            .map_err(|error| error.to_string())?;
+        status = Some(response.status().as_u16());
+        let admission = json_body(success(response).await?).await?;
+        if !unverified_admission(&admission)
+            || !admission["occurrenceId"]
+                .as_str()
+                .is_some_and(|id| !id.is_empty())
+        {
+            return Err("Recording admission unavailable".into());
+        }
+        Ok(admission)
+    }
+    .await;
+    (result, status)
+}
+
 fn verify_upload_binding(dir: &Path, job: &Job, state: &QueueState) -> Result<(), String> {
     let _binding = state
         .bindings
@@ -1422,9 +1562,17 @@ fn verify_upload_binding(dir: &Path, job: &Job, state: &QueueState) -> Result<()
     {
         return Err(EXCLUDED_MESSAGE.into());
     }
+    let config: Configuration = read(&dir.join("configuration.json"))?.ok_or("Sharing disabled")?;
+    bound(&config, &job.user_id)?;
+    if config.organization_id != job.organization_id || config.api_base_url != job.api_base_url {
+        return Err("Sharing account changed".into());
+    }
+    let admission = job.binding.as_ref().ok_or("Meeting identity unresolved")?;
+    if unverified_admission(admission) {
+        return Ok(());
+    }
     let latest = read::<Binding>(&dir.join(format!("binding-{}.json", key(&job.session_id))))?
         .ok_or("Meeting admission is unavailable; original retained")?;
-    let admission = job.binding.as_ref().ok_or("Meeting identity unresolved")?;
     if !latest.valid_binding()
         || latest.user_id != job.user_id
         || latest.organization_id != job.organization_id
@@ -1432,11 +1580,6 @@ fn verify_upload_binding(dir: &Path, job: &Job, state: &QueueState) -> Result<()
         || latest.admission["occurrenceId"] != admission["occurrenceId"]
     {
         return Err("Meeting admission changed; original retained".into());
-    }
-    let config: Configuration = read(&dir.join("configuration.json"))?.ok_or("Sharing disabled")?;
-    bound(&config, &job.user_id)?;
-    if config.organization_id != job.organization_id || config.api_base_url != job.api_base_url {
-        return Err("Sharing account changed".into());
     }
     if let Some(connection_id) = latest.connection_id.as_ref() {
         let integration = match latest.platform.as_str() {
@@ -1454,19 +1597,29 @@ fn verify_upload_binding(dir: &Path, job: &Job, state: &QueueState) -> Result<()
     }
     Ok(())
 }
-async fn upload(dir: &Path, job: &Job, token: &str, state: &QueueState) -> Result<(), String> {
+async fn upload(
+    dir: &Path,
+    job: &Job,
+    token: &str,
+    state: &QueueState,
+) -> (Result<(), String>, &'static str, Option<u16>) {
     let cancel = cancellation(state, &job.session_id);
-    tokio::select! {
+    let mut stage = "audio_upload";
+    let mut status = None;
+    let result = tokio::select! {
         biased;
         _ = cancel.cancelled() => Err(EXCLUDED_MESSAGE.into()),
-        result = upload_allowed(dir, job, token, state) => result,
-    }
+        result = upload_allowed(dir, job, token, state, &mut stage, &mut status) => result,
+    };
+    (result, stage, status)
 }
 async fn upload_allowed(
     dir: &Path,
     job: &Job,
     token: &str,
     state: &QueueState,
+    stage: &mut &'static str,
+    status: &mut Option<u16>,
 ) -> Result<(), String> {
     let binding = job.binding.as_ref().ok_or("Meeting identity unresolved")?;
     let occurrence = binding["occurrenceId"]
@@ -1493,7 +1646,12 @@ async fn upload_allowed(
         .saturating_add(server_reference.saturating_sub(clock_reference))
         .saturating_sub(provider_started)
         .saturating_mul(16);
+    if unverified_admission(binding) {
+        offset = 0;
+    }
+    let capture_id = upload_capture_id(job);
     for (sequence, segment) in job.segments.iter().enumerate() {
+        *status = None;
         verify_upload_binding(dir, job, state)?;
         let bytes = std::fs::read(dir.join(&job.id).join(format!("{sequence}.wav")))
             .map_err(|e| e.to_string())?;
@@ -1509,23 +1667,29 @@ async fn upload_allowed(
                 (start < end).then(|| json!({"start":start-segment_start,"end":end-segment_start}))
             })
             .collect();
-        let metadata = json!({"uploaderId":job.user_id,"deviceId":job.device_id,"localCaptureId":job.id,"segmentSequence":sequence,"localSessionId":job.session_id,"localTranscriptId":job.transcript_id,"sha256":segment.sha256,"offsetFrames":offset,"rank":0,"gaps":gaps,"timingBasis":"device_clock_hint"});
-        let request = client()?.post(format!("{base}/captures/{}:{sequence}",job.id)).bearer_auth(token).json(&json!({"metadata":metadata,"wavBase64":base64::engine::general_purpose::STANDARD.encode(bytes)}));
+        let mut metadata = json!({"uploaderId":job.user_id,"deviceId":job.device_id,"localCaptureId":capture_id,"segmentSequence":sequence,"localSessionId":job.session_id,"localTranscriptId":job.transcript_id,"sha256":segment.sha256,"offsetFrames":offset,"rank":0,"gaps":gaps,"timingBasis":"device_clock_hint"});
+        if let Some(verified) = job.audio_timeline_verified {
+            metadata["audioTimelineVerified"] = json!(verified);
+        }
+        let request = client()?.post(format!("{base}/captures/{capture_id}:{sequence}")).bearer_auth(token).json(&json!({"metadata":metadata,"wavBase64":base64::engine::general_purpose::STANDARD.encode(bytes)}));
         verify_upload_binding(dir, job, state)?;
-        success(request.send().await.map_err(|e| e.to_string())?).await?;
+        let response = request.send().await.map_err(|e| e.to_string())?;
+        *status = Some(response.status().as_u16());
+        success(response).await?;
         offset += segment.frames as i64;
         segment_start += segment.frames;
     }
+    *stage = "processing";
+    *status = None;
     verify_upload_binding(dir, job, state)?;
-    success(
-        client()?
-            .post(format!("{base}/process"))
-            .bearer_auth(token)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?,
-    )
-    .await?;
+    let response = client()?
+        .post(format!("{base}/process"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    *status = Some(response.status().as_u16());
+    success(response).await?;
     Ok(())
 }
 pub(crate) fn snapshot_stopped<R: tauri::Runtime>(
