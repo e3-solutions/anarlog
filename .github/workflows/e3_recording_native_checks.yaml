@@ -91,7 +91,7 @@ jobs:
         if: ${{ !cancelled() && steps.pnpm.outcome == 'success' }}
         run: |
           pnpm exec cargo test --locked --release --target aarch64-apple-darwin -p tauri-plugin-transcription -p tauri-plugin-analytics --features tauri-plugin-analytics/disable-analytics --lib test::export_types -- --exact
-          pnpm exec cargo test --locked --release --target aarch64-apple-darwin -p tauri-plugin-detect --lib test::export_types -- --exact
+          pnpm exec cargo test --locked --release --target aarch64-apple-darwin -p tauri-plugin-detect -p tauri-plugin-analytics --features tauri-plugin-analytics/disable-analytics --lib test::export_types -- --exact
       - name: Upload generated command contracts
         if: ${{ !cancelled() && steps.pnpm.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

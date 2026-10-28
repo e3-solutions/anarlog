@@ -4,6 +4,74 @@
 /** user-defined commands **/
 
 export const commands = {
+  async recordingDiagnosticsConfigure(
+    userId: string | null,
+    enabled: boolean,
+    purge: boolean | null,
+  ): Promise<Result<null, string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE(
+          "plugin:transcription|recording_diagnostics_configure",
+          { userId, enabled, purge },
+        ),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async recordingDiagnosticsRecord(
+    userId: string,
+    input: Input,
+  ): Promise<Result<null, string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE(
+          "plugin:transcription|recording_diagnostics_record",
+          { userId, input },
+        ),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async recordingDiagnosticsBatch(
+    userId: string,
+  ): Promise<Result<DiagnosticBatch, string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE(
+          "plugin:transcription|recording_diagnostics_batch",
+          { userId },
+        ),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async recordingDiagnosticsAck(
+    userId: string,
+    eventIds: string[],
+  ): Promise<Result<null, string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE(
+          "plugin:transcription|recording_diagnostics_ack",
+          { userId, eventIds },
+        ),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
   async sharedRecordingConfiguration(): Promise<
     Result<Configuration | null, string>
   > {
@@ -1236,6 +1304,54 @@ export type DegradedError =
   | { type: "connection_timeout" }
   | { type: "provider_configuration"; provider: string; message: string }
   | { type: "stream_error"; message: string };
+export type DiagnosticBatch = {
+  deviceId: string;
+  bootId: string;
+  events: DiagnosticEvent[];
+  droppedCount: number;
+  retentionDropped: boolean;
+  lastAckAtMs: number | null;
+  queuedCount: number;
+};
+export type DiagnosticEvent = {
+  id: string;
+  deviceId: string;
+  bootId: string;
+  sequence: number;
+  observedAtMs: number;
+  elapsedMs: number;
+  appVersion: string;
+  buildSha: string;
+  sessionId: string | null;
+  kind: string;
+  reason: string;
+  evidence: Evidence;
+};
+export type Evidence = {
+  observation?: string | null;
+  inspectionStatus?: string | null;
+  micStatus?: string | null;
+  micActive?: boolean | null;
+  autoStop?: boolean | null;
+  autoStart?: boolean | null;
+  identityReady?: boolean | null;
+  online?: boolean | null;
+  owned?: boolean | null;
+  speakerRecent?: boolean | null;
+  missingForMs?: number | null;
+  networkHoldRemainingMs?: number | null;
+  probeElapsedMs?: number | null;
+  queuedCount?: number | null;
+  droppedCount?: number | null;
+  retentionDropped?: boolean | null;
+  lastAckAgeMs?: number | null;
+  platform?: string | null;
+  os?: string | null;
+  leaveControlPresent?: boolean | null;
+  leaveControlEnabled?: boolean | null;
+  leaveControlVisible?: boolean | null;
+  matchedBy?: string | null;
+};
 export type FinalizedWord = {
   id: string;
   text: string;
@@ -1260,6 +1376,12 @@ export type InheritedCapture = {
   retainAudio?: boolean | null;
   provider?: string | null;
   model?: string | null;
+};
+export type Input = {
+  sessionId: string | null;
+  kind: string;
+  reason: string;
+  evidence?: Evidence;
 };
 export type Job = {
   id: string;
