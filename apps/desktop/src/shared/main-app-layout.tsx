@@ -13,6 +13,7 @@ import {
   useNewNote,
 } from "./useNewNote";
 
+import { ApplicationHealthLifecycle } from "~/application-health/lifecycle";
 import { AuthProvider } from "~/auth";
 import { BillingProvider } from "~/auth/billing";
 import { EnterpriseCaptureSync } from "~/enterprise-capture/lifecycle";
@@ -50,6 +51,7 @@ function MainAppContent() {
   return (
     <>
       <Outlet />
+      {isMainWindow ? <ApplicationHealthLifecycle /> : null}
       {isMainWindow ? <MeetingImportSync /> : null}
       {isMainWindow ? <EnterpriseCaptureSync /> : null}
       {isMainWindow ? <WorkspaceInvitationToasts /> : null}
