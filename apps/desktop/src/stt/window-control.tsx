@@ -8,6 +8,7 @@ import { useMountEffect } from "@anlg/ui/hooks/use-mount-effect";
 import { useListener } from "./contexts";
 import { useStartListeningWithBatchOverride } from "./useStartListeningWithBatchOverride";
 
+import { recordRecordingDiagnostic } from "~/application-health/recording-diagnostics";
 import { listenerStore } from "~/store/zustand/listener/instance";
 
 const LISTENER_CONTROL_EVENT = "anlg:listener-control";
@@ -139,6 +140,11 @@ function MainListenerControlRequestRunner({
           await startListeningRef.current();
         }
       } else if (live.sessionId === request.sessionId) {
+        recordRecordingDiagnostic(
+          request.sessionId,
+          "stop_requested",
+          "manual_stop",
+        );
         stopRef.current();
       }
 

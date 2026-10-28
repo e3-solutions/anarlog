@@ -46,7 +46,7 @@ impl ListenerRuntime for TauriRuntime {
         crate::recording_diagnostics::lifecycle(
             &self.app,
             session_id,
-            "capture_ended",
+            "capture_source_ended",
             "native_capture_ended",
         );
     }

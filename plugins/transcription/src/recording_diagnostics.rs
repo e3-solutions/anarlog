@@ -13,7 +13,7 @@ const KINDS: &[&str] = &[
     "stop_requested",
     "capture_started",
     "capture_finalizing",
-    "capture_ended",
+    "capture_source_ended",
     "capture_stopped",
     "recovery_interrupted",
     "capture_error",
@@ -106,6 +106,8 @@ pub struct Evidence {
     pub leave_control_visible: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub matched_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_actor_present: Option<bool>,
 }
 
 #[derive(Clone, Serialize, Deserialize, specta::Type)]
@@ -193,6 +195,15 @@ pub struct DiagnosticEvent {
 }
 
 impl DiagnosticEvent {
+    fn is_witness(&self) -> bool {
+        (self.kind == "detector_observation"
+            && matches!(
+                self.reason.as_str(),
+                "observed" | "probe_started" | "native_lifecycle"
+            ))
+            || (self.kind == "policy_decision" && self.reason == "collector_started")
+    }
+
     fn valid(&self, device: &str) -> bool {
         self.device_id == device
             && uuid::Uuid::parse_str(&self.id).is_ok()
@@ -262,8 +273,40 @@ fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
+fn prune_expired_files(directory: Option<&std::path::Path>) {
+    let Some(directory) = directory else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    let cutoff =
+        std::time::SystemTime::now() - std::time::Duration::from_millis(RETENTION_MS as u64);
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let owned = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .is_some_and(|s| uuid::Uuid::parse_str(s).is_ok())
+            && matches!(
+                path.extension().and_then(|s| s.to_str()),
+                Some("json" | "tmp")
+            );
+        if owned
+            && entry.file_type().is_ok_and(|kind| kind.is_file())
+            && entry
+                .metadata()
+                .and_then(|meta| meta.modified())
+                .is_ok_and(|modified| modified < cutoff)
+        {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
 impl RecordingDiagnostics {
     pub fn new(directory: Option<PathBuf>, app_version: String) -> Self {
+        prune_expired_files(directory.as_deref());
         Self(Mutex::new(Collector {
             directory,
             user_id: None,
@@ -316,7 +359,16 @@ impl Collector {
         let expired = before - self.journal.events.len();
         self.journal.retention_dropped |= expired > 0;
         let overflow = self.journal.events.len().saturating_sub(LIMIT);
-        self.journal.events.drain(..overflow);
+        let mut remaining = overflow;
+        self.journal.events.retain(|event| {
+            if remaining > 0 && event.is_witness() {
+                remaining -= 1;
+                false
+            } else {
+                true
+            }
+        });
+        self.journal.events.drain(..remaining);
         self.journal.dropped_count = self
             .journal
             .dropped_count
@@ -494,6 +546,16 @@ impl Collector {
     }
 
     fn native_event(&mut self, session_id: &str, kind: &str, reason: &str) -> Result<(), String> {
+        self.native_event_with_evidence(session_id, kind, reason, Evidence::default())
+    }
+
+    fn native_event_with_evidence(
+        &mut self,
+        session_id: &str,
+        kind: &str,
+        reason: &str,
+        evidence: Evidence,
+    ) -> Result<(), String> {
         if kind == "capture_started" {
             self.owners
                 .entry(session_id.into())
@@ -506,7 +568,7 @@ impl Collector {
             return Ok(());
         };
         let result = if self.user_id.as_ref() == Some(&owner) {
-            self.append_native(session_id, kind, reason)
+            self.append_native(session_id, kind, reason, evidence)
         } else {
             // Finish an already consented session in its original account's outbox.
             let mut detached = Collector {
@@ -520,7 +582,7 @@ impl Collector {
             };
             detached
                 .configure(Some(owner), true, false)
-                .and_then(|_| detached.append_native(session_id, kind, reason))
+                .and_then(|_| detached.append_native(session_id, kind, reason, evidence))
         };
         if kind == "capture_stopped" {
             self.owners.remove(session_id);
@@ -528,7 +590,13 @@ impl Collector {
         result
     }
 
-    fn append_native(&mut self, session_id: &str, kind: &str, reason: &str) -> Result<(), String> {
+    fn append_native(
+        &mut self,
+        session_id: &str,
+        kind: &str,
+        reason: &str,
+        evidence: Evidence,
+    ) -> Result<(), String> {
         if kind == "capture_started" {
             self.journal
                 .active_sessions
@@ -540,9 +608,59 @@ impl Collector {
             session_id: Some(session_id.into()),
             kind: kind.into(),
             reason: reason.into(),
-            evidence: Evidence::default(),
+            evidence,
         })
     }
+
+    fn heartbeat(&mut self, source_present: impl Fn(&str) -> bool) {
+        let sessions = self
+            .owners
+            .iter()
+            .filter(|(_, owner)| owner.is_some())
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        for id in sessions {
+            let evidence = Evidence {
+                source_actor_present: Some(source_present(&id)),
+                ..Default::default()
+            };
+            if self
+                .native_event_with_evidence(
+                    &id,
+                    "detector_observation",
+                    "native_lifecycle",
+                    evidence,
+                )
+                .is_err()
+            {
+                tracing::warn!("recording_diagnostics_heartbeat_failed");
+            }
+        }
+    }
+}
+
+pub fn spawn_heartbeat(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let mut timer = tokio::time::interval(std::time::Duration::from_secs(30));
+        timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            timer.tick().await;
+            let app = app.clone();
+            let _ = tauri::async_runtime::spawn_blocking(move || {
+                if let Some(state) = app.try_state::<RecordingDiagnostics>()
+                    && let Ok(mut collector) = state.0.lock()
+                {
+                    collector.heartbeat(|id| {
+                        ractor::registry::where_is(
+                            anlg_transcription_core::listener::actors::SourceActor::name(id),
+                        )
+                        .is_some()
+                    });
+                }
+            })
+            .await;
+        }
+    });
 }
 
 pub fn lifecycle(app: &tauri::AppHandle, session_id: &str, kind: &str, reason: &str) {
@@ -762,7 +880,7 @@ mod tests {
             .unwrap();
         state.configure(Some(a.clone()), false, false).unwrap();
         state
-            .native_event(&session, "capture_ended", "native_capture_ended")
+            .native_event(&session, "capture_source_ended", "native_capture_ended")
             .unwrap();
         let unowned = uuid::Uuid::new_v4().to_string();
         state
@@ -779,7 +897,7 @@ mod tests {
         state.configure(Some(a.clone()), true, false).unwrap();
         let batch = state.batch(&a).unwrap();
         assert_eq!(batch.events.len(), 3);
-        assert_eq!(batch.events[1].kind, "capture_ended");
+        assert_eq!(batch.events[1].kind, "capture_source_ended");
         assert_eq!(batch.events[2].kind, "capture_stopped");
         assert!(state.owners.is_empty());
         state
@@ -791,6 +909,101 @@ mod tests {
             .unwrap();
         state.configure(Some(a.clone()), true, false).unwrap();
         assert!(state.batch(&a).unwrap().events.is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn native_heartbeat_only_observes_owned_pending_sessions_and_honors_opt_out() {
+        let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let account = uuid::Uuid::new_v4().to_string();
+        let owned = uuid::Uuid::new_v4().to_string();
+        let unowned = uuid::Uuid::new_v4().to_string();
+        let mut state = collector(dir.clone());
+        state
+            .native_event(&unowned, "capture_started", "native_lifecycle")
+            .unwrap();
+        state.configure(Some(account.clone()), true, false).unwrap();
+        state
+            .native_event(&owned, "capture_started", "native_lifecycle")
+            .unwrap();
+        state
+            .configure(Some(account.clone()), false, false)
+            .unwrap();
+        state.heartbeat(|id| {
+            assert_eq!(id, owned);
+            false
+        });
+        state.configure(Some(account.clone()), true, false).unwrap();
+        let events = state.batch(&account).unwrap().events;
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[1].kind, "detector_observation");
+        assert_eq!(events[1].evidence.source_actor_present, Some(false));
+        state.configure(Some(account.clone()), false, true).unwrap();
+        state.heartbeat(|_| panic!("Opted-out sessions must not be inspected"));
+        state.configure(Some(account.clone()), true, false).unwrap();
+        assert!(state.batch(&account).unwrap().events.is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn dormant_account_cleanup_only_removes_expired_owned_journals() {
+        let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&dir).unwrap();
+        let old = std::time::SystemTime::now()
+            - std::time::Duration::from_millis(RETENTION_MS as u64 + 60_000);
+        let stale = dir.join(format!("{}.json", uuid::Uuid::new_v4()));
+        let partial = dir.join(format!("{}.tmp", uuid::Uuid::new_v4()));
+        let unrelated = dir.join("unrelated.json");
+        for path in [&stale, &partial, &unrelated] {
+            std::fs::File::create(path)
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(old))
+                .unwrap();
+        }
+        let recent = dir.join(format!("{}.json", uuid::Uuid::new_v4()));
+        std::fs::write(&recent, b"recent").unwrap();
+        prune_expired_files(Some(&dir));
+        assert!(!stale.exists());
+        assert!(!partial.exists());
+        assert!(unrelated.exists());
+        assert!(recent.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn offline_witness_bursts_cannot_crowd_out_stop_events_and_critical_only_backlogs_stay_bounded()
+    {
+        let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let account = uuid::Uuid::new_v4().to_string();
+        let mut state = collector(dir.clone());
+        state.configure(Some(account.clone()), true, false).unwrap();
+        let stop = Input {
+            session_id: None,
+            kind: "capture_stopped".into(),
+            reason: "saved_audio_ready".into(),
+            evidence: Evidence::default(),
+        };
+        state.append(stop.clone()).unwrap();
+        let stop_id = state.journal.events[0].id.clone();
+        state.append(observation()).unwrap();
+        let witness = state.journal.events[1].clone();
+        state.journal.events.extend(vec![witness; LIMIT]);
+        state.append(observation()).unwrap();
+        assert_eq!(state.journal.events.len(), LIMIT);
+        assert!(state.journal.events.iter().any(|event| event.id == stop_id));
+        assert_eq!(state.journal.dropped_count, 3);
+        let critical = state.journal.events[0].clone();
+        state.journal.events = vec![critical; LIMIT + 3];
+        state.append(stop).unwrap();
+        assert_eq!(state.journal.events.len(), LIMIT);
+        assert!(
+            state
+                .journal
+                .events
+                .iter()
+                .all(|event| event.kind == "capture_stopped")
+        );
+        assert_eq!(state.journal.dropped_count, 7);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

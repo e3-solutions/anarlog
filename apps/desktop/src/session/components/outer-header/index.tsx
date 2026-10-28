@@ -17,6 +17,7 @@ import { RecordingIcon, useHasTranscript } from "../shared";
 import { TitleInput } from "../title-input";
 import { OverflowButton } from "./overflow";
 
+import { recordRecordingDiagnostic } from "~/application-health/recording-diagnostics";
 import { useAudioPlayer } from "~/audio-player";
 import { useNow } from "~/calendar/hooks";
 import { useShell } from "~/contexts/shell";
@@ -281,6 +282,7 @@ function HeaderMeetingAction({
       return;
     }
 
+    recordRecordingDiagnostic(sessionId, "stop_requested", "manual_stop");
     stop();
   }, [sessionId, stop]);
   const action = (() => {

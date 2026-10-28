@@ -26,6 +26,7 @@ export type RecordingDiagnosticEvidence = {
   leaveControlEnabled?: boolean;
   leaveControlVisible?: boolean;
   matchedBy?: "context" | "toolbar" | "none";
+  sourceActorPresent?: boolean;
 };
 
 export type RecordingDiagnosticEvent = {
@@ -99,13 +100,32 @@ export function recordRecordingDiagnostic(
   evidence: RecordingDiagnosticEvidence = {},
 ) {
   if (!owner || env.VITE_E3_SCRIBE !== "true" || !isTauri()) return;
-  const key = `${sessionId}:${kind}${kind === "detector_observation" ? `:${reason}` : ""}`;
-  const { missingForMs, networkHoldRemainingMs, probeElapsedMs, ...stable } =
-    evidence;
+  if (
+    !sessionId &&
+    reason !== "collector_started" &&
+    reason !== "delivery_failed"
+  )
+    return;
+  const key = `${sessionId}:${kind}${kind === "detector_observation" || reason === "collector_started" ? `:${reason}` : ""}`;
+  const {
+    missingForMs,
+    networkHoldRemainingMs,
+    probeElapsedMs,
+    lastAckAgeMs,
+    queuedCount,
+    ...stable
+  } = evidence;
   const signature = JSON.stringify({ reason, evidence: stable });
   const now = Date.now();
   const previous = recent.get(key);
-  if (previous?.signature === signature && now - previous.at < 30_000) return;
+  const witnessInterval =
+    kind === "policy_decision"
+      ? Infinity
+      : reason === "probe_started"
+        ? 300_000
+        : 60_000;
+  if (previous?.signature === signature && now - previous.at < witnessInterval)
+    return;
   if (recent.size >= 64 && !recent.has(key))
     recent.delete(recent.keys().next().value!);
   recent.set(key, { signature, at: now });
@@ -124,6 +144,8 @@ export function recordRecordingDiagnostic(
         missingForMs: bounded(missingForMs),
         networkHoldRemainingMs: bounded(networkHoldRemainingMs),
         probeElapsedMs: bounded(probeElapsedMs),
+        lastAckAgeMs: bounded(lastAckAgeMs),
+        queuedCount,
       },
     },
   }).catch(() => {

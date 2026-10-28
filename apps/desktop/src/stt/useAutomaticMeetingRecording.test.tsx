@@ -556,7 +556,6 @@ describe("automatic local meeting recording", () => {
       "observed",
       expect.objectContaining({
         platform: "slack",
-        os: "macos",
         leaveControlPresent: true,
         leaveControlVisible: false,
         matchedBy: "context",

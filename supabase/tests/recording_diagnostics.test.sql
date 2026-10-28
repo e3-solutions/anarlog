@@ -1,5 +1,5 @@
 begin;
-select plan(27);
+select plan(30);
 select tests.create_supabase_user('diagnostics_owner','diagnostics-owner@example.com');
 select tests.create_supabase_user('diagnostics_member','diagnostics-member@example.com');
 select tests.create_supabase_user('diagnostics_outsider','diagnostics-outsider@example.com');
@@ -58,6 +58,18 @@ select tests.authenticate_as('diagnostics_outsider');
 select set_config('request.jwt.claims',jsonb_set(current_setting('request.jwt.claims')::jsonb,'{session_id}','"00000000-0000-4000-8000-00000000d004"')::text,true);
 select is((select count(*) from public.recording_diagnostics),0::bigint,'Unrelated accounts cannot read diagnostic evidence');
 select throws_ok('select public.recording_diagnostics_ingest(jsonb_build_array(value)) from diagnostic_event','42501','active organization session required','Confirmed users without shared membership cannot ingest');
+select tests.clear_authentication();
+reset role;
+insert into public.recording_diagnostics(user_id,id,device_id,boot_id,sequence,observed_at,elapsed_ms,app_version,build_sha,kind,reason)
+select tests.get_supabase_uid('diagnostics_member'),md5('diagnostic-witness-' || n)::uuid,'00000000-0000-4000-8000-00000000d006','00000000-0000-4000-8000-00000000d007',n,now(),200,'0.1.22','1234567','detector_observation','native_lifecycle'
+from generate_series(1,4096) n;
+insert into public.recording_diagnostics(user_id,id,device_id,boot_id,sequence,observed_at,elapsed_ms,app_version,build_sha,kind,reason)
+values(tests.get_supabase_uid('diagnostics_member'),'00000000-0000-4000-8000-00000000d010','00000000-0000-4000-8000-00000000d006','00000000-0000-4000-8000-00000000d007',0,now() - interval '6 days',100,'0.1.22','1234567','stop_requested','manual_stop');
+select tests.authenticate_as('diagnostics_member');
+select set_config('request.jwt.claims',jsonb_set(current_setting('request.jwt.claims')::jsonb,'{session_id}','"00000000-0000-4000-8000-00000000d003"')::text,true);
+select lives_ok($$select public.recording_diagnostics_ingest(jsonb_build_array(value || '{"id":"00000000-0000-4000-8000-00000000d009"}'::jsonb)) from diagnostic_event$$,'Ingestion prunes a saturated witness backlog');
+select is((select count(*) from public.recording_diagnostics),4096::bigint,'Per-device retention remains bounded after witness saturation');
+select is((select kind from public.recording_diagnostics where id = '00000000-0000-4000-8000-00000000d010'),'stop_requested','Newer periodic witnesses cannot evict an older stop decision');
 select tests.clear_authentication();
 reset role;
 delete from auth.sessions where id = '00000000-0000-4000-8000-00000000d003';

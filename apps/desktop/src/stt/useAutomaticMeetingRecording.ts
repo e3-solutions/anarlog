@@ -72,11 +72,8 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
       evidence: Parameters<typeof recordRecordingDiagnostic>[3] = {},
       sessionId = capture?.sessionId ?? store.getState().live.sessionId,
     ) => {
-      const os = platform();
       recordRecordingDiagnostic(sessionId, kind, reason, {
         platform: capture?.meeting.platform ?? "unknown",
-        os:
-          os === "macos" || os === "linux" || os === "windows" ? os : "unknown",
         autoStart: Boolean(policy.current.enabled),
         autoStop: policy.current.autoStop !== false,
         identityReady: identityReady.current,

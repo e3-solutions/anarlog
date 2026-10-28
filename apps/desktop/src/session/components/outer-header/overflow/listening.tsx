@@ -1,6 +1,7 @@
 import { Microphone, MicrophoneSlash } from "@anlg/ui/components/icons";
 import { DropdownMenuItem } from "@anlg/ui/components/ui/dropdown-menu";
 
+import { recordRecordingDiagnostic } from "~/application-health/recording-diagnostics";
 import { useListener } from "~/stt/contexts";
 import { useStartListeningWithBatchOverride } from "~/stt/useStartListeningWithBatchOverride";
 import {
@@ -34,6 +35,7 @@ export function Listening({
     }
 
     if (isListening) {
+      recordRecordingDiagnostic(sessionId, "stop_requested", "manual_stop");
       stop();
     } else {
       void startListening();

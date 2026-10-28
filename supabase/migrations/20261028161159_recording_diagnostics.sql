@@ -81,7 +81,7 @@ BEGIN
     IF jsonb_typeof(event->'sessionId') NOT IN ('string','null')
       OR event->>'appVersion' !~ '^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$'
       OR event->>'buildSha' !~ '^([0-9a-fA-F]{7,64}|unknown)?$'
-      OR event->>'kind' NOT IN ('detector_observation','policy_decision','stop_requested','capture_started','capture_finalizing','capture_ended','capture_stopped','recovery_interrupted','capture_error')
+      OR event->>'kind' NOT IN ('detector_observation','policy_decision','stop_requested','capture_started','capture_finalizing','capture_source_ended','capture_stopped','recovery_interrupted','capture_error')
       OR event->>'reason' NOT IN ('observed','meeting_active','meeting_ended','ax_unknown','ax_error','ax_probe_timeout','mic_still_active','mic_inactive','network_recovery_hold','user_kept_recording','auto_stop_disabled','auto_start_disabled','identity_unavailable','owner_mismatch','account_changed','manual_stop','sleep','silence_timeout','grace_pending','grace_elapsed','native_lifecycle','native_capture_ended','process_interrupted','probe_error','probe_timeout','probe_started','stop_failed','saved_audio_ready','saving_failed','collector_started','audio_capture_error','transcription_error','sharing_lookup_pending','sharing_lookup_failed','delivery_failed','recording_excluded') THEN
       RAISE EXCEPTION 'invalid recording diagnostics' USING ERRCODE = '22023';
     END IF;
@@ -99,7 +99,7 @@ BEGIN
     END IF;
     IF jsonb_typeof(evidence_value) = 'object' THEN
       FOR field IN SELECT key,value FROM jsonb_each(evidence_value) LOOP
-        IF field.key IN ('micActive','autoStop','autoStart','identityReady','online','owned','speakerRecent','retentionDropped','leaveControlPresent','leaveControlEnabled','leaveControlVisible') THEN
+        IF field.key IN ('micActive','autoStop','autoStart','identityReady','online','owned','speakerRecent','retentionDropped','leaveControlPresent','leaveControlEnabled','leaveControlVisible','sourceActorPresent') THEN
           IF jsonb_typeof(field.value) <> 'boolean' THEN RAISE EXCEPTION 'invalid recording diagnostics' USING ERRCODE = '22023'; END IF;
         ELSIF field.key IN ('missingForMs','networkHoldRemainingMs','probeElapsedMs','lastAckAgeMs') THEN
           IF jsonb_typeof(field.value) <> 'number' THEN RAISE EXCEPTION 'invalid recording diagnostics' USING ERRCODE = '22023'; END IF;
@@ -134,13 +134,13 @@ BEGIN
   END IF;
   DELETE FROM public.recording_diagnostics WHERE (user_id,id) IN (
     SELECT user_id,id FROM (
-      SELECT d.user_id,d.id,row_number() OVER (PARTITION BY d.device_id ORDER BY d.observed_at DESC,d.received_at DESC,d.id) AS position
+      SELECT d.user_id,d.id,row_number() OVER (PARTITION BY d.device_id ORDER BY CASE WHEN (d.kind = 'detector_observation' AND d.reason IN ('observed','probe_started','native_lifecycle')) OR (d.kind = 'policy_decision' AND d.reason = 'collector_started') THEN 1 ELSE 0 END, d.observed_at DESC,d.received_at DESC,d.id) AS position
       FROM public.recording_diagnostics d WHERE d.user_id = actor
     ) ranked WHERE position > 4096
   );
   DELETE FROM public.recording_diagnostics WHERE (user_id,id) IN (
     SELECT d.user_id,d.id FROM public.recording_diagnostics d WHERE d.user_id = actor
-    ORDER BY d.observed_at DESC,d.received_at DESC,d.id OFFSET 16384
+    ORDER BY CASE WHEN (d.kind = 'detector_observation' AND d.reason IN ('observed','probe_started','native_lifecycle')) OR (d.kind = 'policy_decision' AND d.reason = 'collector_started') THEN 1 ELSE 0 END, d.observed_at DESC,d.received_at DESC,d.id OFFSET 16384
   );
   RETURN acknowledgements;
 EXCEPTION WHEN invalid_text_representation OR invalid_datetime_format OR datetime_field_overflow OR numeric_value_out_of_range THEN
