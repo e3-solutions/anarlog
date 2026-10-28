@@ -137,8 +137,8 @@ pub enum BatchTerminalState {
     Finished,
 }
 
-fn make_specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
-    tauri_specta::Builder::<R>::new()
+fn make_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
+    tauri_specta::Builder::<tauri::Wry>::new()
         .plugin_name(PLUGIN_NAME)
         .typ::<CaptureParams>()
         .commands(tauri_specta::collect_commands![
@@ -286,7 +286,7 @@ mod test {
     fn export_types() {
         const OUTPUT_FILE: &str = "./js/bindings.gen.ts";
 
-        make_specta_builder::<tauri::Wry>()
+        make_specta_builder()
             .export(
                 specta_typescript::Typescript::default()
                     .formatter(specta_typescript::formatter::prettier)
