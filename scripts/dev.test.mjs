@@ -64,6 +64,7 @@ test("preserves overrides and forwards flags without shell interpolation", (t) =
   env.PC_PORT_NUM = "19000";
   env.PC_DISABLE_TUI = "0";
   env.VITE_API_URL = "http://localhost:39001";
+  env.CARGO_BUILD_JOBS = "2";
   const flags = ["--dry-run", "-f", "config with spaces and $(literal).yaml"];
   const result = spawnSync(
     process.execPath,
@@ -78,6 +79,7 @@ test("preserves overrides and forwards flags without shell interpolation", (t) =
     "PC_DISABLE_TUI",
     "PC_LOG_DIR",
     "VITE_API_URL",
+    "CARGO_BUILD_JOBS",
   ]) {
     assert.equal(invocation.env[key], env[key]);
   }

@@ -86,7 +86,10 @@ Use local development for everyday testing. GitHub's versioned app builds are
 for release verification and distribution; they are not required to test edits.
 Run `pnpm dev:desktop:doctor` after installing the prerequisites. The launcher
 also runs this check before compiling the native shell and uses Xcode from
-`/Applications/Xcode.app` when no `DEVELOPER_DIR` override is supplied.
+`/Applications/Xcode.app` when no `DEVELOPER_DIR` override is supplied. On Macs,
+the launcher limits parallel Rust jobs based on total RAM (four jobs on a 16 GiB
+Mac) to leave room for the app and other tools. Set `CARGO_BUILD_JOBS` to override
+this limit.
 
 Keep `pnpm dev:desktop` running while editing React, TypeScript, or CSS. Vite
 updates the frontend in the running app; these edits do not invoke Cargo or

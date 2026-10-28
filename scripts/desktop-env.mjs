@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
+import { availableParallelism, homedir, totalmem } from "node:os";
 import { delimiter, join } from "node:path";
 
 export function desktopEnv() {
@@ -11,6 +11,15 @@ export function desktopEnv() {
     existsSync(join(cargoBin, "cargo"))
   ) {
     env.PATH = [cargoBin, ...paths].join(delimiter);
+  }
+  if (process.platform === "darwin" && !env.CARGO_BUILD_JOBS) {
+    // Leave memory for the running app and other tools during a native build.
+    env.CARGO_BUILD_JOBS = String(
+      Math.min(
+        availableParallelism(),
+        Math.max(1, Math.floor(totalmem() / (4 * 1024 ** 3))),
+      ),
+    );
   }
   const xcode = "/Applications/Xcode.app/Contents/Developer";
   if (

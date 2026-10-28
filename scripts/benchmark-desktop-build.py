@@ -170,6 +170,15 @@ def benchmark(root, output, variant, samples, replay):
                 reason="Install the pinned Rust toolchain with rustup before timing native builds",
             )
             return result
+        if platform.system() == "Darwin" and "CARGO_BUILD_JOBS" not in env:
+            memory = result["metadata"]["memory"]
+            if memory["exit_code"] == 0 and memory["output"].strip().isdigit():
+                env["CARGO_BUILD_JOBS"] = str(
+                    min(
+                        os.cpu_count() or 1,
+                        max(1, int(memory["output"].strip()) // (4 * 1024**3)),
+                    )
+                )
         if variant != "swift-cache" and platform.system() == "Darwin":
             if (
                 result["metadata"]["xcode"]["exit_code"]
@@ -284,6 +293,7 @@ def benchmark(root, output, variant, samples, replay):
             key: env[key]
             for key in (
                 "CARGO_TARGET_DIR",
+                "CARGO_BUILD_JOBS",
                 "CARGO_INCREMENTAL",
                 "RUSTC_WRAPPER",
                 "RUSTFLAGS",

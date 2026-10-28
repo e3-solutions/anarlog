@@ -49,6 +49,9 @@ if (process.platform === "darwin") {
     "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -downloadComponent MetalToolchain",
   );
 }
+if (env.CARGO_BUILD_JOBS) {
+  console.log(`Parallel Rust jobs: ${env.CARGO_BUILD_JOBS}`);
+}
 const disk = statfsSync(root);
 const free = (disk.bavail * disk.bsize) / 1024 ** 3;
 console.log(`Free disk space: ${free.toFixed(1)} GiB`);
