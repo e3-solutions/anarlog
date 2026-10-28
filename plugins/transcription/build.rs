@@ -1,5 +1,7 @@
 const COMMANDS: &[&str] = &[
     "shared_recording_configuration",
+    "meeting_recording_control_set",
+    "meeting_recording_exclusions",
     "shared_recording_configure",
     "shared_recording_observe",
     "shared_recording_enqueue",

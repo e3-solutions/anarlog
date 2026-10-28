@@ -25,6 +25,11 @@ import {
 
 import { enqueueSessionAudioOperation } from "~/session/audio-operations";
 
+vi.mock("./meeting-recording-control", () => ({
+  replayNativeRecordingExclusions: vi.fn(async () => []),
+  prepareMeetingRecording: vi.fn(async () => ({})),
+}));
+
 vi.mock("./recording-exclusions", () => ({
   resolveRecordingOccurrence: vi.fn(async () => ({
     key: "session:session-1",

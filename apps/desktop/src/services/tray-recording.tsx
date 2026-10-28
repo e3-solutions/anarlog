@@ -3,6 +3,8 @@ import { useStore } from "zustand";
 import { commands as trayCommands } from "@anlg/plugin-tray";
 import { useMountEffect } from "@anlg/ui/hooks/use-mount-effect";
 
+import { TrayRecordingControls } from "./tray-recording-controls";
+
 import { useSession } from "~/session/queries";
 import { type LiveSessionStatus } from "~/store/zustand/listener/general-shared";
 import { listenerStore } from "~/store/zustand/listener/instance";
@@ -38,10 +40,13 @@ export function TrayRecordingSync() {
   );
 
   return (
-    <TrayRecordingPublisher
-      key={`${activeSessionId}:${title ?? ""}`}
-      title={title}
-    />
+    <>
+      <TrayRecordingControls />
+      <TrayRecordingPublisher
+        key={`${activeSessionId}:${title ?? ""}`}
+        title={title}
+      />
+    </>
   );
 }
 

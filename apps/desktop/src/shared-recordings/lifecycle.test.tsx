@@ -29,6 +29,9 @@ const mocks = vi.hoisted(() => ({
   live: { status: "active", sessionId: "session-one" },
 }));
 
+vi.mock("~/stt/meeting-recording-control", () => ({
+  replayNativeRecordingExclusions: async () => [],
+}));
 vi.mock("~/auth", () => ({
   useAuth: () => ({
     session: { user: { id: "account-one" } },

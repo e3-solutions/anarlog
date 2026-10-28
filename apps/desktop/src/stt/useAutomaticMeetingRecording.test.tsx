@@ -19,6 +19,12 @@ const mocks = vi.hoisted(() => ({
   resolve: vi.fn(),
   excluded: vi.fn(),
   bind: vi.fn(),
+  replay: vi.fn(),
+}));
+
+vi.mock("./meeting-recording-control", () => ({
+  replayNativeRecordingExclusions: mocks.replay,
+  prepareMeetingRecording: vi.fn(async () => ({})),
 }));
 
 vi.mock("@tauri-apps/plugin-os", () => ({ platform: mocks.platform }));
@@ -111,6 +117,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.resetAllMocks();
   mocks.platform.mockReturnValue("macos");
+  mocks.replay.mockResolvedValue([]);
   mocks.config.mockImplementation((key: string) => {
     if (key === "ignored_platforms") return [];
     return (
@@ -615,6 +622,18 @@ describe("automatic local meeting recording", () => {
     expect(mocks.open).not.toHaveBeenCalled();
     snapshot([slack]);
     await tick();
+    expect(mocks.open).not.toHaveBeenCalled();
+  });
+
+  it("replays native exclusions before creating a detector recording", async () => {
+    mocks.auth.mockReturnValue({ session: { user: { id: "account-1" } } });
+    mocks.replay.mockImplementationOnce(async () => {
+      mocks.excluded.mockReturnValue(true);
+      return [];
+    });
+    setup();
+    await tick(0);
+    expect(mocks.create).not.toHaveBeenCalled();
     expect(mocks.open).not.toHaveBeenCalled();
   });
 

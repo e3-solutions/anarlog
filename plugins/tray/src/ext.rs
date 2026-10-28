@@ -222,6 +222,9 @@ impl<'a, M: tauri::Manager<tauri::Wry>> Tray<'a, tauri::Wry, M> {
         #[cfg(target_os = "macos")]
         crate::macos_position::seed_default_position(TRAY_ID);
 
+        let builder = builder.on_menu_event(|_app, event| {
+            crate::meeting_control::handle_meeting_recording_menu(event.id().as_ref());
+        });
         builder.build(app)?;
         #[cfg(target_os = "macos")]
         crate::macos_position::apply_autosave_name(app, TRAY_ID);
@@ -348,13 +351,28 @@ impl<'a, M: tauri::Manager<tauri::Wry>> Tray<'a, tauri::Wry, M> {
             .unwrap_or_default()
             .as_millis() as f64;
         let recording_title = RECORDING_TITLE.lock().unwrap().clone();
-        let title = menu_bar_title(
-            &SCHEDULE.lock().unwrap(),
-            now_ms,
-            SHOW_EVENTS.load(Ordering::SeqCst),
-            IS_RECORDING.load(Ordering::SeqCst),
-            recording_title.as_deref(),
-        );
+        let title = if let (Some(context), _, uncertain) = crate::meeting_control::menu_context() {
+            Some(
+                if uncertain {
+                    "E3 Check recording"
+                } else if IS_RECORDING.load(Ordering::SeqCst) {
+                    "E3 Recording"
+                } else if context.state == crate::MeetingRecordingState::Excluded {
+                    "E3 Off"
+                } else {
+                    "E3 Ready"
+                }
+                .to_string(),
+            )
+        } else {
+            menu_bar_title(
+                &SCHEDULE.lock().unwrap(),
+                now_ms,
+                SHOW_EVENTS.load(Ordering::SeqCst),
+                IS_RECORDING.load(Ordering::SeqCst),
+                recording_title.as_deref(),
+            )
+        };
         let mut current_title = MENU_BAR_TITLE.lock().unwrap();
 
         if *current_title != title {
@@ -383,6 +401,27 @@ impl<'a, M: tauri::Manager<tauri::Wry>> Tray<'a, tauri::Wry, M> {
         agenda: &[TrayAgendaSection],
     ) -> Result<Menu<tauri::Wry>> {
         let menu = Menu::new(app)?;
+        if let (Some(context), pending, uncertain) = crate::meeting_control::menu_context() {
+            let excluded = context.state == crate::MeetingRecordingState::Excluded;
+            let action = if excluded { "resume" } else { "stop" };
+            let label = if pending {
+                "Updating recording…"
+            } else if uncertain {
+                "Retry stop for this meeting"
+            } else if excluded {
+                "Resume recording"
+            } else {
+                "Stop for this meeting"
+            };
+            menu.append(&MenuItem::with_id(
+                app,
+                format!("e3_meeting_{action}:{}", context.revision),
+                label,
+                !pending,
+                None::<&str>,
+            )?)?;
+            menu.append(&PredefinedMenuItem::separator(app)?)?;
+        }
 
         for (section_index, section) in agenda.iter().enumerate() {
             let heading = MenuItem::with_id(
@@ -419,6 +458,11 @@ impl<'a, M: tauri::Manager<tauri::Wry>> Tray<'a, tauri::Wry, M> {
         menu.append(&TrayQuitCompletely::build(app)?)?;
 
         Ok(menu)
+    }
+
+    pub fn refresh_meeting_control(&self) -> Result<()> {
+        Self::refresh_menu_bar_title(self.manager.app_handle())?;
+        Self::rebuild_menu(self.manager.app_handle())
     }
 
     pub fn refresh_menu(&self) -> Result<()> {

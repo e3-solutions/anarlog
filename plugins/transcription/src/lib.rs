@@ -143,6 +143,8 @@ fn make_specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
         .typ::<CaptureParams>()
         .commands(tauri_specta::collect_commands![
             shared_recording::shared_recording_configuration::<tauri::Wry>,
+            shared_recording::meeting_control::meeting_recording_control_set,
+            shared_recording::meeting_control::meeting_recording_exclusions,
             shared_recording::shared_recording_configure::<tauri::Wry>,
             shared_recording::shared_recording_observe::<tauri::Wry>,
             shared_recording::shared_recording_enqueue::<tauri::Wry>,
@@ -241,6 +243,7 @@ pub fn init() -> tauri::plugin::TauriPlugin<tauri::Wry> {
             });
             listener2::load_completed_batches(&batch_registry);
             app.manage(batch_registry);
+            shared_recording::meeting_control::setup(&app_handle);
 
             let audio = app.state::<Arc<dyn AudioProvider>>().inner().clone();
             let session_state_cache: SessionStateCache = Arc::new(StdMutex::new(HashMap::new()));

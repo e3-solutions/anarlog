@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-meeting-recording-control-set"
+description = "Enables the meeting_recording_control_set command without any pre-configured scope."
+commands.allow = ["meeting_recording_control_set"]
+
+[[permission]]
+identifier = "deny-meeting-recording-control-set"
+description = "Denies the meeting_recording_control_set command without any pre-configured scope."
+commands.deny = ["meeting_recording_control_set"]

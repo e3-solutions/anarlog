@@ -18,6 +18,10 @@ import {
   MEETING_DISCLOSURE_MESSAGE,
   startMeetingRecordingDisclosure,
 } from "./meeting-disclosure";
+import {
+  prepareMeetingRecording,
+  replayNativeRecordingExclusions,
+} from "./meeting-recording-control";
 import { startMeetingScreenCapture } from "./meeting-screen-capture";
 import { startPrimaryDeviceCoordination } from "./primary-device";
 import {
@@ -129,6 +133,21 @@ export function useStartListeningState(
       return;
     }
     const owner = authenticatedUserId;
+    const identityChanged = () =>
+      identity.current.ready === false || identity.current.userId !== owner;
+    if (owner) {
+      try {
+        await replayNativeRecordingExclusions(owner);
+      } catch {
+        if (!automatic)
+          toast.warning("Recording choices could not be checked", {
+            description:
+              "Recording remains off. Try again when saved choices are available.",
+          });
+        return;
+      }
+      if (identityChanged()) return;
+    }
     const inspection = owner
       ? await detectCommands.inspectMeetingAccessibility().catch(() => null)
       : null;
@@ -158,6 +177,8 @@ export function useStartListeningState(
         ))
         ? await resolveRecordingOccurrence(owner, { meeting })
         : null;
+    const recordingOccurrence =
+      meeting && callOccurrence ? callOccurrence : occurrence;
     const excluded = () =>
       Boolean(
         identity.current.ready === false ||
@@ -175,7 +196,8 @@ export function useStartListeningState(
         });
       return;
     }
-    if (owner && occurrence) bindRecordingSession(owner, sessionId, occurrence);
+    if (owner && recordingOccurrence)
+      bindRecordingSession(owner, sessionId, recordingOccurrence);
     await stopMeetingChatTasks();
     const previousMarker = await loadCaptureLifecycleMarker(sessionId).catch(
       (error) => {
@@ -264,6 +286,13 @@ export function useStartListeningState(
     }
     let started = false;
     try {
+      if (owner && recordingOccurrence)
+        await prepareMeetingRecording(owner, sessionId, recordingOccurrence);
+      if (excluded() || !canStartLiveSession(sessionId)) {
+        await lifecycle.cleanupFailedStart();
+        await releaseCloudsyncDeferral();
+        return;
+      }
       started = await start(
         {
           session_id: sessionId,

@@ -12,6 +12,8 @@ use tauri::Manager;
 use tauri_plugin_fs_sync::FsSyncPluginExt;
 use tauri_plugin_settings::SettingsPluginExt;
 
+pub(crate) mod meeting_control;
+
 const QUARANTINED_MESSAGE: &str = "Meeting activity could not be verified throughout this recording. Original audio stays local; start a new recording in a new note with one verified call to share.";
 
 #[derive(Clone, Serialize, Deserialize, specta::Type)]
@@ -147,6 +149,9 @@ pub(crate) struct QueueState {
     flush_serial: tokio::sync::Mutex<()>,
     raw: Mutex<HashMap<String, RawTimeline>>,
     excluded: Mutex<HashSet<String>>,
+    control: Mutex<Option<tauri_plugin_tray::MeetingRecordingContext>>,
+    holds: Mutex<HashMap<String, tauri_plugin_tray::MeetingRecordingContext>>,
+    hold_errors: Mutex<HashSet<String>>,
     cancellations: Mutex<HashMap<String, tokio_util::sync::CancellationToken>>,
 }
 
@@ -222,7 +227,13 @@ fn exclude_session(
         {
             return Err("Recording belongs to another account".into());
         }
-        if binding.is_none() && capture_user.is_none() {
+        let known_context = state
+            .control
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .is_some_and(|context| context.session_id == session_id && context.user_id == user_id);
+        if binding.is_none() && capture_user.is_none() && !known_context {
             if let Some(config) = read::<Configuration>(&dir.join("configuration.json"))? {
                 if config.user_id != user_id {
                     return Err("Recording belongs to another account".into());
@@ -250,31 +261,78 @@ fn exclude_session(
     }
 }
 
+fn exclude_gate<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    session: &str,
+    user: &str,
+) -> Result<(), String> {
+    let state = app.state::<QueueState>();
+    let result = match directory(app) {
+        Ok(dir) => exclude_session(&dir, &state, session, user),
+        Err(error) => {
+            let capture_owner = state
+                .raw
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(session)
+                .and_then(|timeline| timeline.capture_user_id.clone());
+            let known_context = state
+                .control
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+                .is_some_and(|context| context.session_id == session && context.user_id == user);
+            if capture_owner.as_deref() != Some(user) && !known_context {
+                return Err("Recording ownership could not be verified".into());
+            }
+            state
+                .excluded
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(session.into());
+            cancellation(&state, session).cancel();
+            Err(error)
+        }
+    };
+    if !capture_allowed(app, session) {
+        meeting_control::cancel_transcriptions(app, session);
+    }
+    result
+}
+
 async fn shared_recording_exclude<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     session_id: String,
     user_id: String,
 ) -> Result<(), String> {
-    use crate::listener2::Listener2PluginExt;
     let state = app.state::<QueueState>();
-    let dir = directory(&app)?;
-    let persistence = exclude_session(&dir, &state, &session_id, &user_id);
+    let persistence = exclude_gate(&app, &session_id, &user_id);
     if capture_allowed(&app, &session_id) {
         return persistence;
     }
-    crate::stop_capture_for_session(&app, &session_id).await;
-    for session in app
-        .listener2()
-        .list_transcription_sessions()
-        .map_err(|e| e.to_string())?
-    {
-        if session.session_id == session_id
-            || session.session_id.starts_with(&format!("{session_id}:"))
-        {
-            app.listener2().stop_transcription(session.session_id).await;
-        }
+    let current_session = state
+        .control
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .is_some_and(|context| context.session_id == session_id && context.user_id == user_id);
+    let hold = if current_session {
+        meeting_control::hold_for_session(&app, &session_id, &user_id).map(|_| ())
+    } else {
+        Ok(())
+    };
+    let expected = state
+        .control
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .filter(|context| context.session_id == session_id && context.user_id == user_id);
+    let stopped = meeting_control::stop_verified(&app, &session_id).await;
+    let result = stopped.and(persistence).and(hold);
+    if let Some(expected) = expected {
+        meeting_control::finish_stop(&app, &expected, result.is_err());
     }
-    persistence
+    result
 }
 
 pub(crate) fn storage_failed<R: tauri::Runtime>(app: &tauri::AppHandle<R>, session_id: &str) {
@@ -1459,9 +1517,6 @@ pub(crate) fn snapshot_stopped<R: tauri::Runtime>(
     started_at_ms: Option<i64>,
     stopped_at_ms: i64,
 ) {
-    if ensure_allowed(app, session_id).is_err() {
-        return;
-    }
     let state = app.state::<QueueState>();
     let capture_start = {
         let mut raw = state.raw.lock().unwrap_or_else(|error| error.into_inner());
@@ -1471,6 +1526,9 @@ pub(crate) fn snapshot_stopped<R: tauri::Runtime>(
         timeline.stopped_at_ms = Some(stopped_at_ms);
         timeline.owner.as_ref().map(|_| timeline.started_at_ms)
     };
+    if ensure_allowed(app, session_id).is_err() {
+        return;
+    }
     let Some(audio_path) = audio_path.map(str::to_string) else {
         return;
     };

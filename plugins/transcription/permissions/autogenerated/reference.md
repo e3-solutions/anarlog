@@ -5,6 +5,8 @@ Default permissions for the plugin
 #### This default permission set includes the following:
 
 - `allow-shared-recording-configuration`
+- `allow-meeting-recording-control-set`
+- `allow-meeting-recording-exclusions`
 - `allow-shared-recording-configure`
 - `allow-shared-recording-observe`
 - `allow-shared-recording-enqueue`
@@ -874,6 +876,58 @@ Enables the mark_capture_audio_saved command without any pre-configured scope.
 <td>
 
 Denies the mark_capture_audio_saved command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:allow-meeting-recording-control-set`
+
+</td>
+<td>
+
+Enables the meeting_recording_control_set command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:deny-meeting-recording-control-set`
+
+</td>
+<td>
+
+Denies the meeting_recording_control_set command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:allow-meeting-recording-exclusions`
+
+</td>
+<td>
+
+Enables the meeting_recording_exclusions command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:deny-meeting-recording-exclusions`
+
+</td>
+<td>
+
+Denies the meeting_recording_exclusions command without any pre-configured scope.
 
 </td>
 </tr>

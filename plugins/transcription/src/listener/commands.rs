@@ -182,6 +182,11 @@ pub async fn start_capture<R: tauri::Runtime>(
     crate::shared_recording::ensure_allowed(&app, &session_id)?;
     let _audio_guard = app.fs_sync().lock_session_audio(&session_id).await;
     crate::shared_recording::ensure_allowed(&app, &session_id)?;
+    crate::shared_recording::meeting_control::prepare_capture(
+        &app,
+        &session_id,
+        authenticated_user_id.as_deref(),
+    )?;
     if crate::shared_recording::start_raw(&app, &session_id, authenticated_user_id.as_deref()) {
         params.retain_audio = Some(true);
     }

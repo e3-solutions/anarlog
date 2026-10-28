@@ -26,8 +26,8 @@ fn job_fixture() -> Job {
     }
 }
 
-struct Fixture {
-    app: tauri::App<tauri::test::MockRuntime>,
+pub(super) struct Fixture {
+    pub(super) app: tauri::App<tauri::test::MockRuntime>,
     root: std::path::PathBuf,
     session: String,
     audio: std::path::PathBuf,
@@ -35,7 +35,7 @@ struct Fixture {
 }
 
 impl Fixture {
-    async fn new(user: &str, api_base_url: String, connected: bool) -> Self {
+    pub(super) async fn new(user: &str, api_base_url: String, connected: bool) -> Self {
         let root =
             std::env::temp_dir().join(format!("shared-recording-test-{}", uuid::Uuid::new_v4()));
         let session = uuid::Uuid::new_v4().to_string();

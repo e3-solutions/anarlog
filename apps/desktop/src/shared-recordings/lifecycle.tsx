@@ -17,6 +17,7 @@ import { useAuth } from "~/auth";
 import { env } from "~/env";
 import { listenerStore } from "~/store/zustand/listener/instance";
 import { selectAutomaticMeeting } from "~/stt/automatic-meeting";
+import { replayNativeRecordingExclusions } from "~/stt/meeting-recording-control";
 import { isRecordingSessionExcluded } from "~/stt/recording-exclusions";
 
 export function SharedRecordingLifecycle() {
@@ -284,6 +285,7 @@ function ActiveSharedRecordingLifecycle({ userId }: { userId: string }) {
       const session = await getSessionForRequest();
       if (!session || session.user.id !== userId) return null;
       // Replay durable intent before the pump can retry pre-crash audio.
+      await replayNativeRecordingExclusions(userId);
       const pending = await sharedRecordingQueue(userId);
       for (const job of pending) {
         if (isRecordingSessionExcluded(userId, job.sessionId))

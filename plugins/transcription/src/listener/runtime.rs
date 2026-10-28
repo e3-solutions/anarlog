@@ -51,12 +51,25 @@ impl ListenerRuntime for TauriRuntime {
     fn emit_lifecycle(&self, event: anlg_transcription_core::listener::SessionLifecycleEvent) {
         use tauri_plugin_tray::TrayPluginExt;
         match &event {
-            anlg_transcription_core::listener::SessionLifecycleEvent::Active { error, .. } => {
+            anlg_transcription_core::listener::SessionLifecycleEvent::Active {
+                session_id,
+                error,
+                ..
+            } => {
+                crate::shared_recording::meeting_control::publish_runtime(
+                    &self.app, session_id, true,
+                );
                 let _ = self.app.tray().set_start_disabled(true);
                 let _ = self.app.tray().set_degraded(error.is_some());
                 let _ = self.app.tray().set_recording(true);
             }
-            anlg_transcription_core::listener::SessionLifecycleEvent::Inactive { .. } => {
+            anlg_transcription_core::listener::SessionLifecycleEvent::Inactive {
+                session_id,
+                ..
+            } => {
+                crate::shared_recording::meeting_control::publish_runtime(
+                    &self.app, session_id, false,
+                );
                 let app = self.app.clone();
                 tauri::async_runtime::spawn(async move {
                     match current_root_state().await {

@@ -3,6 +3,14 @@ import { beforeEach, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
   excluded: false,
+  meeting: null as unknown,
+  resolve: vi.fn(async (_owner: string, _input: { sessionId?: string }) => ({
+    key: "call",
+    room: null as string | null,
+    kind: "session",
+  })),
+  replay: vi.fn(async () => []),
+  prepare: vi.fn(async () => ({})),
   userId: "alice",
   authenticationReady: true,
   lifecycle: {
@@ -16,6 +24,13 @@ const state = vi.hoisted(() => ({
   stop: vi.fn(),
   chat: vi.fn(),
   screen: vi.fn(),
+}));
+vi.mock("./automatic-meeting", () => ({
+  selectAutomaticMeeting: () => state.meeting,
+}));
+vi.mock("./meeting-recording-control", () => ({
+  replayNativeRecordingExclusions: state.replay,
+  prepareMeetingRecording: state.prepare,
 }));
 vi.mock("./capture-lifecycle", () => ({
   useCaptureLifecycle: () => ({
@@ -40,11 +55,7 @@ vi.mock("./capture-lifecycle-storage", () => ({
   hasPendingZeroRetentionAudio: () => false,
 }));
 vi.mock("./recording-exclusions", () => ({
-  resolveRecordingOccurrence: vi.fn(async () => ({
-    key: "call",
-    room: null,
-    kind: "session",
-  })),
+  resolveRecordingOccurrence: state.resolve,
   bindRecordingSession: vi.fn(),
   isRecordingExcluded: () => state.excluded,
   isRecordingSessionExcluded: () => state.excluded,
@@ -125,6 +136,10 @@ import { useStartListening } from "./useStartListening";
 beforeEach(() => {
   vi.clearAllMocks();
   state.excluded = false;
+  state.meeting = null;
+  state.resolve.mockResolvedValue({ key: "call", room: null, kind: "session" });
+  state.replay.mockResolvedValue([]);
+  state.prepare.mockResolvedValue({});
   state.userId = "alice";
   state.authenticationReady = true;
   state.lifecycle.ready = Promise.resolve();
@@ -205,4 +220,41 @@ it("waits for account restoration and abandons startup when the account changes"
     await pending;
   });
   expect(state.start).not.toHaveBeenCalled();
+});
+
+it("replays a native privacy hold before a manual start can reach capture", async () => {
+  state.replay.mockImplementationOnce(async () => {
+    state.excluded = true;
+    return [];
+  });
+  const { result } = renderHook(() => useStartListening("session"));
+  await act(async () => {
+    await result.current();
+  });
+  expect(state.start).not.toHaveBeenCalled();
+  expect(state.prepare).not.toHaveBeenCalled();
+});
+
+it("prepares tray opt-out for the current call when recording from an older calendar note", async () => {
+  const current = {
+    key: "room:current",
+    room: "https://meet.google.com/abc-defg-hij",
+    kind: "room",
+  };
+  state.meeting = { key: "detected-current-call" };
+  state.resolve.mockImplementation(async (_owner, input) =>
+    input.sessionId
+      ? {
+          key: "calendar:older-note",
+          room: "https://meet.google.com/xyz-abcd-uvw",
+          kind: "calendar",
+        }
+      : current,
+  );
+  const { result } = renderHook(() => useStartListening("session"));
+  await act(async () => {
+    await result.current();
+  });
+  expect(state.prepare).toHaveBeenCalledWith("alice", "session", current);
+  expect(state.start).toHaveBeenCalled();
 });

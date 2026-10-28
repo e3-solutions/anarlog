@@ -14,6 +14,7 @@ import {
   sameAutomaticMeeting,
   type AutomaticMeeting,
 } from "./automatic-meeting";
+import { replayNativeRecordingExclusions } from "./meeting-recording-control";
 import {
   bindRecordingSession,
   isRecordingExcluded,
@@ -259,6 +260,9 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
         if (live.loading || now < retryAfter) return;
 
         const owner = account.current;
+        if (owner) await replayNativeRecordingExclusions(owner);
+        if (cancelled || !identityReady.current || account.current !== owner)
+          return;
         const occurrence = owner
           ? await resolveRecordingOccurrence(owner, { meeting: selected })
           : null;
