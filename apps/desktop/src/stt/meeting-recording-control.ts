@@ -98,6 +98,7 @@ export function replayNativeRecordingExclusions(userId: string) {
     );
     if (!Array.isArray(held))
       throw new Error("Saved recording choices are unavailable");
+    const replayedSessions = new Set<string>();
     for (const context of held) {
       if (context.userId !== userId)
         throw new Error("Recording account changed");
@@ -109,7 +110,10 @@ export function replayNativeRecordingExclusions(userId: string) {
           context.sessionId,
         ]);
       }
-      contexts.set(contextKey(userId, context.sessionId), context);
+      if (!replayedSessions.has(context.sessionId)) {
+        contexts.set(contextKey(userId, context.sessionId), context);
+        replayedSessions.add(context.sessionId);
+      }
     }
     return held;
   });
@@ -134,4 +138,30 @@ export async function prepareMeetingRecording(
     ...meetingRecordingContext(userId, sessionId, occurrence),
     state: "pending",
   });
+}
+
+export async function stopMeetingRecordingForExcludedOccurrence(
+  userId: string,
+  sessionId: string,
+  occurrence: RecordingOccurrence,
+) {
+  let persistenceError: unknown;
+  try {
+    excludeRecordingOccurrence(userId, occurrence, [sessionId]);
+  } catch (error) {
+    persistenceError = error;
+  }
+  // The running session has crossed into a held call. Block that session while
+  // preserving the held call's scope, rather than excluding its previous call.
+  await setMeetingRecordingControl({
+    userId,
+    sessionId,
+    occurrence,
+    revision: crypto.randomUUID(),
+    state: "excluded",
+  });
+  if (persistenceError)
+    throw new Error(
+      "Recording stopped, but the saved choice could not be confirmed.",
+    );
 }

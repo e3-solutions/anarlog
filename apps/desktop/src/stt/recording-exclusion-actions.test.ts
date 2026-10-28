@@ -21,10 +21,12 @@ vi.mock("~/store/zustand/tabs", () => ({
 import {
   replayNativeRecordingExclusions,
   prepareMeetingRecording,
+  stopMeetingRecordingForExcludedOccurrence,
   type NativeMeetingContext,
 } from "./meeting-recording-control";
 import { resumeMeetingRecording } from "./recording-exclusion-actions";
 import {
+  bindRecordingSession,
   isRecordingExcluded,
   isRecordingSessionExcluded,
   type RecordingOccurrence,
@@ -155,4 +157,30 @@ it("rebinds a resumed note to the call actually present before capture and inval
   expect(context.occurrence).toEqual(currentCall);
   expect(context.revision).not.toBe(oldContext.revision);
   expect(isRecordingSessionExcluded("alice", "old")).toBe(true);
+});
+
+it("blocks a running session that crosses into an excluded call without excluding its previous allowed occurrence", async () => {
+  const allowed: RecordingOccurrence = {
+    ...occurrence,
+    key: "calendar:allowed",
+  };
+  bindRecordingSession("alice", "crossed-session", allowed);
+  const before = await prepareMeetingRecording(
+    "alice",
+    "crossed-session",
+    allowed,
+  );
+  await stopMeetingRecordingForExcludedOccurrence(
+    "alice",
+    "crossed-session",
+    occurrence,
+  );
+  expect(isRecordingSessionExcluded("alice", "crossed-session")).toBe(true);
+  expect(isRecordingExcluded("alice", occurrence)).toBe(true);
+  expect(isRecordingExcluded("alice", allowed)).toBe(false);
+  const after =
+    mocks.invoke.mock.calls[mocks.invoke.mock.calls.length - 1][1].context;
+  expect(after.occurrence).toEqual(occurrence);
+  expect(after.state).toBe("excluded");
+  expect(after.revision).not.toBe(before.revision);
 });

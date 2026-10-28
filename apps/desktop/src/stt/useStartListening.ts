@@ -4,7 +4,10 @@ import { commands as analyticsCommands } from "@anlg/plugin-analytics";
 import { commands as detectCommands } from "@anlg/plugin-detect";
 import { toast } from "@anlg/ui/components/ui/toast";
 
-import { selectAutomaticMeeting } from "./automatic-meeting";
+import {
+  sameAutomaticMeeting,
+  selectAutomaticMeeting,
+} from "./automatic-meeting";
 import { useCaptureLifecycle } from "./capture-lifecycle";
 import {
   clearCaptureAudioSaved,
@@ -288,6 +291,35 @@ export function useStartListeningState(
     try {
       if (owner && recordingOccurrence)
         await prepareMeetingRecording(owner, sessionId, recordingOccurrence);
+      if (meeting) {
+        const refreshed = await detectCommands
+          .inspectMeetingAccessibility()
+          .catch(() => null);
+        const currentMeeting =
+          refreshed?.status === "ok"
+            ? selectAutomaticMeeting(refreshed.data, {
+                googleMeet: true,
+                slack: true,
+              })
+            : null;
+        const currentOccurrence =
+          owner && currentMeeting
+            ? await resolveRecordingOccurrence(owner, {
+                meeting: currentMeeting,
+              })
+            : null;
+        if (
+          !currentMeeting ||
+          !sameAutomaticMeeting(meeting, currentMeeting) ||
+          (owner &&
+            currentOccurrence &&
+            isRecordingExcluded(owner, currentOccurrence))
+        ) {
+          await lifecycle.cleanupFailedStart();
+          await releaseCloudsyncDeferral();
+          return;
+        }
+      }
       if (excluded() || !canStartLiveSession(sessionId)) {
         await lifecycle.cleanupFailedStart();
         await releaseCloudsyncDeferral();

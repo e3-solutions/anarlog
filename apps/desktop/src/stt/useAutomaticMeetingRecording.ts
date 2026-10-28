@@ -14,7 +14,10 @@ import {
   sameAutomaticMeeting,
   type AutomaticMeeting,
 } from "./automatic-meeting";
-import { replayNativeRecordingExclusions } from "./meeting-recording-control";
+import {
+  replayNativeRecordingExclusions,
+  stopMeetingRecordingForExcludedOccurrence,
+} from "./meeting-recording-control";
 import {
   bindRecordingSession,
   isRecordingExcluded,
@@ -122,6 +125,41 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
             suppressed.delete(key);
         }
 
+        const owner = account.current;
+        if (owner) await replayNativeRecordingExclusions(owner);
+        if (cancelled || !identityReady.current || account.current !== owner)
+          return;
+        const occurrence =
+          owner && selected
+            ? await resolveRecordingOccurrence(owner, { meeting: selected })
+            : null;
+        if (cancelled || !identityReady.current || account.current !== owner)
+          return;
+        if (owner && occurrence && isRecordingExcluded(owner, occurrence)) {
+          const live = store.getState().live;
+          const blockedSession =
+            capture && live.sessionId === capture.sessionId
+              ? capture.sessionId
+              : null;
+          if (blockedSession) {
+            capture = null;
+            ownedSession.current = null;
+            try {
+              await stopMeetingRecordingForExcludedOccurrence(
+                owner,
+                blockedSession,
+                occurrence,
+              );
+            } finally {
+              if (
+                account.current === owner &&
+                store.getState().live.sessionId === blockedSession
+              )
+                store.getState().stop();
+            }
+          }
+          return;
+        }
         const live = store.getState().live;
         if (capture) {
           if (
@@ -259,15 +297,6 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
         }
         if (live.loading || now < retryAfter) return;
 
-        const owner = account.current;
-        if (owner) await replayNativeRecordingExclusions(owner);
-        if (cancelled || !identityReady.current || account.current !== owner)
-          return;
-        const occurrence = owner
-          ? await resolveRecordingOccurrence(owner, { meeting: selected })
-          : null;
-        if (owner && occurrence && isRecordingExcluded(owner, occurrence))
-          return;
         const sessionId = await createSession(selected.title);
         if (owner && occurrence)
           bindRecordingSession(owner, sessionId, occurrence);

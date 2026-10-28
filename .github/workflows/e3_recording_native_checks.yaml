@@ -73,10 +73,10 @@ jobs:
       - name: Build shared UI
         run: pnpm -F @anlg/ui build
       - name: Test shared recording privacy and lifecycle
-        run: cargo test --locked --release --target aarch64-apple-darwin -p tauri-plugin-transcription --lib shared_recording -- --test-threads=1
+        run: cargo test --locked --release --target aarch64-apple-darwin -p tauri-plugin-transcription -p tauri-plugin-analytics --features tauri-plugin-analytics/disable-analytics --lib shared_recording -- --test-threads=1
       - name: Test native tray controls
         if: ${{ !cancelled() && steps.pnpm.outcome == 'success' }}
-        run: pnpm exec cargo test --locked --release --target aarch64-apple-darwin -p tauri-plugin-anlg-tray --lib -- --test-threads=1
+        run: pnpm exec cargo test --locked --release --target aarch64-apple-darwin -p tauri-plugin-anlg-tray -p tauri-plugin-analytics --features tauri-plugin-analytics/disable-analytics --lib -- --test-threads=1
       - name: Test listener lifecycle without audio devices
         if: ${{ !cancelled() && steps.pnpm.outcome == 'success' }}
         run: |
@@ -86,7 +86,7 @@ jobs:
           cargo test --locked --release --target aarch64-apple-darwin -p listener-core --lib actors::listener::tests -- --test-threads=1
       - name: Generate transcription command bindings
         if: ${{ !cancelled() && steps.pnpm.outcome == 'success' }}
-        run: pnpm exec cargo test --locked --release --target aarch64-apple-darwin -p tauri-plugin-transcription --lib test::export_types -- --exact
+        run: pnpm exec cargo test --locked --release --target aarch64-apple-darwin -p tauri-plugin-transcription -p tauri-plugin-analytics --features tauri-plugin-analytics/disable-analytics --lib test::export_types -- --exact
       - name: Upload generated command contracts
         if: ${{ !cancelled() && steps.pnpm.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

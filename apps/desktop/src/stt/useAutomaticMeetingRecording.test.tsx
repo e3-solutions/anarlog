@@ -20,10 +20,12 @@ const mocks = vi.hoisted(() => ({
   excluded: vi.fn(),
   bind: vi.fn(),
   replay: vi.fn(),
+  block: vi.fn(),
 }));
 
 vi.mock("./meeting-recording-control", () => ({
   replayNativeRecordingExclusions: mocks.replay,
+  stopMeetingRecordingForExcludedOccurrence: mocks.block,
   prepareMeetingRecording: vi.fn(async () => ({})),
 }));
 
@@ -118,6 +120,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   mocks.platform.mockReturnValue("macos");
   mocks.replay.mockResolvedValue([]);
+  mocks.block.mockResolvedValue(undefined);
   mocks.config.mockImplementation((key: string) => {
     if (key === "ignored_platforms") return [];
     return (
@@ -635,6 +638,26 @@ describe("automatic local meeting recording", () => {
     await tick(0);
     expect(mocks.create).not.toHaveBeenCalled();
     expect(mocks.open).not.toHaveBeenCalled();
+  });
+
+  it("stops an owned capture immediately when the selected call switches to an excluded occurrence", async () => {
+    mocks.auth.mockReturnValue({ session: { user: { id: "account-1" } } });
+    const { active, stop } = setup();
+    await tick(0);
+    active();
+    const blocked = { ...occurrence, key: "calendar:excluded-call" };
+    mocks.resolve.mockResolvedValue(blocked);
+    mocks.excluded.mockReturnValue(true);
+    snapshot([
+      {
+        ...meet,
+        callIdentity: "https://meet.google.com/xyz-abcd-uvw:tab:99",
+      },
+    ]);
+    await tick();
+    expect(mocks.block).toHaveBeenCalledWith("account-1", "session-1", blocked);
+    expect(stop).toHaveBeenCalled();
+    expect(mocks.create).toHaveBeenCalledOnce();
   });
 
   it("never arms an excluded occurrence across polling, rejoin, and remount", async () => {

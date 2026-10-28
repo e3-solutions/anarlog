@@ -3,6 +3,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
   excluded: false,
+  excludedKey: null as string | null,
   meeting: null as unknown,
   resolve: vi.fn(async (_owner: string, _input: { sessionId?: string }) => ({
     key: "call",
@@ -27,6 +28,8 @@ const state = vi.hoisted(() => ({
 }));
 vi.mock("./automatic-meeting", () => ({
   selectAutomaticMeeting: () => state.meeting,
+  sameAutomaticMeeting: (left: { key: string }, right: { key: string }) =>
+    left.key === right.key,
 }));
 vi.mock("./meeting-recording-control", () => ({
   replayNativeRecordingExclusions: state.replay,
@@ -57,7 +60,8 @@ vi.mock("./capture-lifecycle-storage", () => ({
 vi.mock("./recording-exclusions", () => ({
   resolveRecordingOccurrence: state.resolve,
   bindRecordingSession: vi.fn(),
-  isRecordingExcluded: () => state.excluded,
+  isRecordingExcluded: (_owner: string, occurrence: { key: string }) =>
+    state.excluded || occurrence.key === state.excludedKey,
   isRecordingSessionExcluded: () => state.excluded,
 }));
 vi.mock("./contexts", () => ({
@@ -136,6 +140,7 @@ import { useStartListening } from "./useStartListening";
 beforeEach(() => {
   vi.clearAllMocks();
   state.excluded = false;
+  state.excludedKey = null;
   state.meeting = null;
   state.resolve.mockResolvedValue({ key: "call", room: null, kind: "session" });
   state.replay.mockResolvedValue([]);
@@ -257,4 +262,33 @@ it("prepares tray opt-out for the current call when recording from an older cale
   });
   expect(state.prepare).toHaveBeenCalledWith("alice", "session", current);
   expect(state.start).toHaveBeenCalled();
+});
+
+it("abandons deferred startup when the user switches into an excluded call", async () => {
+  state.meeting = { key: "allowed-call" };
+  state.excludedKey = "excluded-call";
+  state.resolve.mockImplementation(async () => ({
+    key: (state.meeting as { key: string }).key,
+    room: null,
+    kind: "room",
+  }));
+  let ready!: () => void;
+  state.lifecycle.ready = new Promise<void>((resolve) => {
+    ready = resolve;
+  });
+  const { result } = renderHook(() => useStartListening("session"));
+  let pending!: Promise<void>;
+  act(() => {
+    pending = result.current();
+  });
+  await waitFor(() =>
+    expect(state.lifecycle.deferCloudsync).toHaveBeenCalled(),
+  );
+  state.meeting = { key: "excluded-call" };
+  await act(async () => {
+    ready();
+    await pending;
+  });
+  expect(state.start).not.toHaveBeenCalled();
+  expect(state.lifecycle.cleanupFailedStart).toHaveBeenCalled();
 });

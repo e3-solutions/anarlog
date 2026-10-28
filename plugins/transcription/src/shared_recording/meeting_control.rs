@@ -12,6 +12,8 @@ const CONTROL_EVENT: &str = "e3:meeting-recording-control";
 struct Hold {
     context: MeetingRecordingContext,
     active: bool,
+    #[serde(default)]
+    generation: u64,
 }
 
 #[derive(Clone, Serialize)]
@@ -28,21 +30,58 @@ fn control_path(dir: &Path) -> PathBuf {
 fn hold_path(dir: &Path, revision: &str) -> PathBuf {
     dir.join(format!("meeting-hold-{}.json", key(revision)))
 }
-fn held_contexts(dir: &Path, user: &str) -> Result<Vec<MeetingRecordingContext>, String> {
-    let mut contexts = Vec::new();
+fn hold_records(dir: &Path) -> Result<Vec<Hold>, String> {
+    let mut holds = Vec::new();
     for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if name.starts_with("meeting-hold-") && name.ends_with(".json") {
             if let Some(hold) = read::<Hold>(&entry.path())? {
-                if hold.active && hold.context.user_id == user {
-                    contexts.push(hold.context);
-                }
+                holds.push(hold);
             }
         }
     }
-    Ok(contexts)
+    Ok(holds)
+}
+#[cfg(test)]
+fn held_contexts(dir: &Path, user: &str) -> Result<Vec<MeetingRecordingContext>, String> {
+    Ok(hold_records(dir)?
+        .into_iter()
+        .filter(|hold| hold.active && hold.context.user_id == user)
+        .map(|hold| hold.context)
+        .collect())
+}
+fn next_generation(dir: &Path) -> Result<u64, String> {
+    // Include released holds so an older Resume never outranks a later Stop after restart.
+    hold_records(dir)?
+        .iter()
+        .map(|hold| hold.generation)
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| "Recording hold sequence is exhausted".into())
+}
+fn live_source(
+    state: &QueueState,
+    current: Option<&MeetingRecordingContext>,
+    except_session: Option<&str>,
+) -> bool {
+    use anlg_transcription_core::listener::actors::SourceActor;
+    let mut sessions = state
+        .raw
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    if let Some(current) = current {
+        sessions.push(current.session_id.clone());
+    }
+    sessions.into_iter().any(|session| {
+        except_session != Some(session.as_str())
+            && ractor::registry::where_is(SourceActor::name(&session)).is_some()
+    })
 }
 fn active_holds<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
@@ -57,18 +96,42 @@ fn active_holds<R: tauri::Runtime>(
         .filter(|context| context.user_id == user)
         .cloned()
         .collect::<Vec<_>>();
-    let disk = directory(app).and_then(|dir| held_contexts(&dir, user));
-    let mut contexts = match disk {
-        Ok(contexts) => contexts,
+    let disk = directory(app).and_then(|dir| hold_records(&dir));
+    let records = match disk {
+        Ok(records) => records,
         Err(_) if !memory.is_empty() => Vec::new(),
         Err(error) => return Err(error),
     };
+    let generations = records
+        .iter()
+        .map(|hold| (hold.context.revision.clone(), hold.generation))
+        .collect::<HashMap<_, _>>();
+    let mut contexts = records
+        .into_iter()
+        .filter(|hold| hold.active && hold.context.user_id == user)
+        .map(|hold| hold.context)
+        .collect::<Vec<_>>();
     for context in memory {
         contexts.retain(|held| held.revision != context.revision);
         contexts.push(context);
     }
+    let current_revision = state
+        .control
+        .try_lock()
+        .ok()
+        .and_then(|current| current.as_ref().map(|context| context.revision.clone()));
+    contexts.sort_by_key(|context| {
+        std::cmp::Reverse((
+            generations
+                .get(&context.revision)
+                .copied()
+                .unwrap_or(u64::MAX),
+            current_revision.as_ref() == Some(&context.revision),
+        ))
+    });
     Ok(contexts)
 }
+
 fn overlaps(held: &MeetingRecordingContext, next: &MeetingRecordingContext) -> bool {
     if held.user_id != next.user_id {
         return false;
@@ -124,6 +187,9 @@ pub(crate) fn prepare_capture<R: tauri::Runtime>(
     let dir = directory(app)?;
     let user = user.unwrap_or("local-device");
     let mut current = state.control.lock().unwrap_or_else(|e| e.into_inner());
+    if live_source(&state, current.as_ref(), None) {
+        return Err("Another recording is still active".into());
+    }
     let context = current
         .clone()
         .or(read::<Option<MeetingRecordingContext>>(&control_path(&dir))?.flatten())
@@ -174,11 +240,24 @@ pub(crate) fn hold_for_session<R: tauri::Runtime>(
         .unwrap_or_else(|e| e.into_inner())
         .insert(context.revision.clone());
     let dir = directory(app)?;
+    let existing = read::<Hold>(&hold_path(&dir, &context.revision))?;
+    if existing.as_ref().is_some_and(|hold| {
+        hold.context.user_id != context.user_id
+            || hold.context.session_id != context.session_id
+            || hold.context.occurrence != context.occurrence
+    }) {
+        return Err("Recording hold revision belongs to another context".into());
+    }
+    let generation = match existing.filter(|hold| hold.active) {
+        Some(hold) => hold.generation,
+        None => next_generation(&dir)?,
+    };
     save(
         &hold_path(&dir, &context.revision),
         &Hold {
             context: context.clone(),
             active: true,
+            generation,
         },
     )?;
     save(&control_path(&dir), &context)?;
@@ -214,6 +293,9 @@ fn set_context<R: tauri::Runtime>(
         return Err("Stop the current recording before clearing its control".into());
     }
     if let Some(context) = context.as_ref() {
+        if live_source(&state, current.as_ref(), Some(&context.session_id)) {
+            return Err("Another recording is still active".into());
+        }
         let active_other_context = current.as_ref().is_some_and(|active| {
             active.state == MeetingRecordingState::Recording
                 && (active.session_id != context.session_id || active.user_id != context.user_id)
@@ -269,12 +351,39 @@ fn set_context<R: tauri::Runtime>(
             .iter()
             .find(|held| held.revision == revision)
             .ok_or("This recording hold is no longer available")?;
-        if current.as_ref().is_none_or(|active| {
-            active.revision != revision
-                || active.session_id != held.session_id
-                || active.user_id != held.user_id
-        }) {
+        if live_source(&state, current.as_ref(), None)
+            || current
+                .as_ref()
+                .is_some_and(|active| active.state == MeetingRecordingState::Recording)
+        {
             return Err("Recording context changed. Resume the current meeting again.".into());
+        }
+        let dir = directory(app)?;
+        let expected_generation =
+            read::<Hold>(&hold_path(&dir, revision))?.map(|hold| hold.generation);
+        for other in holds
+            .iter()
+            .filter(|other| other.revision != revision && resumable(other, context))
+        {
+            let generation =
+                read::<Hold>(&hold_path(&dir, &other.revision))?.map(|hold| hold.generation);
+            let latest_is_unknown = match (expected_generation, generation) {
+                (Some(expected), Some(other)) => {
+                    other > expected
+                        || (expected == 0
+                            && other == 0
+                            && current
+                                .as_ref()
+                                .is_none_or(|active| active.revision != revision))
+                }
+                _ => true,
+            };
+            if latest_is_unknown {
+                return Err(
+                    "A newer recording hold may apply. Resume the latest excluded meeting again."
+                        .into(),
+                );
+            }
         }
 
         if held.user_id != context.user_id
@@ -317,6 +426,10 @@ fn set_context<R: tauri::Runtime>(
                 &Hold {
                     context: held.clone(),
                     active: false,
+                    generation: match read::<Hold>(&hold_path(&dir, &held.revision))? {
+                        Some(previous) => previous.generation,
+                        None => next_generation(&dir)?,
+                    },
                 },
             )?;
         }
@@ -629,8 +742,14 @@ mod tests {
         let latest = hold_for_session(app, "original", "user").unwrap();
         // Simulate a restarted process: the exclusion must still be imported from disk.
         app.state::<QueueState>().holds.lock().unwrap().clear();
-        assert_eq!(active_holds(app, "user").unwrap().len(), 2);
+        let holds = active_holds(app, "user").unwrap();
+        assert_eq!(holds.len(), 2);
+        assert_eq!(holds[0].revision, latest.revision);
         assert!(active_holds(app, "other-account").unwrap().is_empty());
+        let mut unrelated = fallback("unrelated-session", "user");
+        unrelated.occurrence.kind = OccurrenceKind::Calendar;
+        unrelated.occurrence.key = "different-calendar-occurrence".into();
+        set_context(app, Some(unrelated), None).unwrap();
         let mut next = context.clone();
         next.session_id = "fresh-session".into();
         next.revision = "new-revision".into();
@@ -648,6 +767,46 @@ mod tests {
         assert_eq!(current.session_id, "fresh-session");
         assert_eq!(current.state, MeetingRecordingState::Pending);
         assert!(ensure_allowed(app, "original").is_err());
+    }
+
+    #[tokio::test]
+    async fn held_meeting_resumes_after_a_same_room_recording_context_stops() {
+        for previous_user in ["user", "signed-out-account"] {
+            let fixture =
+                super::super::tests::Fixture::new("user", "http://localhost:8789".into(), false)
+                    .await;
+            let app = fixture.app.handle();
+            let mut original = fallback("held-session", "user");
+            original.occurrence.kind = OccurrenceKind::Calendar;
+            original.occurrence.key = "calendar-A".into();
+            original.occurrence.room = Some("https://meet.google.com/abc-defg-hij".into());
+            set_context(app, Some(original.clone()), None).unwrap();
+            exclude_gate(app, &original.session_id, "user").unwrap();
+            let held = hold_for_session(app, &original.session_id, "user").unwrap();
+            finish_stop(app, &held, false);
+
+            let mut unrelated = fallback("other-session", previous_user);
+            unrelated.occurrence.kind = OccurrenceKind::Calendar;
+            unrelated.occurrence.key = "calendar-B".into();
+            unrelated.occurrence.room = original.occurrence.room.clone();
+            set_context(app, Some(unrelated.clone()), None).unwrap();
+            prepare_capture(app, &unrelated.session_id, Some(previous_user)).unwrap();
+            unrelated.state = MeetingRecordingState::Recording;
+            set_context(app, Some(unrelated.clone()), None).unwrap();
+            let mut resumed = original.clone();
+            resumed.session_id = "fresh-A-session".into();
+            resumed.revision = "fresh-A-revision".into();
+            assert!(set_context(app, Some(resumed.clone()), Some(held.revision.clone())).is_err());
+            unrelated.state = MeetingRecordingState::Pending;
+            set_context(app, Some(unrelated.clone()), None).unwrap();
+            // Runtime fallback can leave only room identity after normal Stop, without a hold.
+            unrelated.occurrence.kind = OccurrenceKind::Room;
+            *app.state::<QueueState>().control.lock().unwrap() = Some(unrelated);
+            set_context(app, Some(resumed.clone()), Some(held.revision)).unwrap();
+            prepare_capture(app, &resumed.session_id, Some("user")).unwrap();
+            assert!(active_holds(app, "user").unwrap().is_empty());
+            assert!(ensure_allowed(app, &original.session_id).is_err());
+        }
     }
 
     #[tokio::test]

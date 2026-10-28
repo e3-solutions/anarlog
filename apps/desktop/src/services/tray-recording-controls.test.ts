@@ -2,13 +2,28 @@ import { beforeEach, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   replay: vi.fn(),
+  inspect: vi.fn(),
+  resolve: vi.fn(),
+  isExcluded: vi.fn(),
+  block: vi.fn(),
   resume: vi.fn(),
   stop: vi.fn(),
-  live: { sessionId: "current" },
+  live: { sessionId: "current", status: "active" },
+}));
+vi.mock("@anlg/plugin-detect", () => ({
+  commands: { inspectMeetingAccessibility: mocks.inspect },
+}));
+vi.mock("~/stt/automatic-meeting", () => ({
+  selectAutomaticMeeting: () => ({ key: "held-call" }),
+}));
+vi.mock("~/stt/recording-exclusions", () => ({
+  resolveRecordingOccurrence: mocks.resolve,
+  isRecordingExcluded: mocks.isExcluded,
 }));
 vi.mock("~/auth", () => ({ useOptionalAuth: () => null }));
 vi.mock("~/stt/meeting-recording-control", () => ({
   replayNativeRecordingExclusions: mocks.replay,
+  stopMeetingRecordingForExcludedOccurrence: mocks.block,
 }));
 vi.mock("~/stt/recording-exclusion-actions", () => ({
   resumeMeetingRecording: mocks.resume,
@@ -17,7 +32,10 @@ vi.mock("~/store/zustand/listener/instance", () => ({
   listenerStore: { getState: () => ({ live: mocks.live, stop: mocks.stop }) },
 }));
 
-import { handleMeetingRecordingControl } from "./tray-recording-controls";
+import {
+  handleMeetingRecordingControl,
+  enforceMeetingRecordingExclusions,
+} from "./tray-recording-controls";
 
 import type { NativeMeetingContext } from "~/stt/meeting-recording-control";
 
@@ -91,4 +109,18 @@ it("applies only a matching durable hold and passes its revision to intentional 
       occurrence: context.occurrence,
     }),
   );
+});
+
+it("stops a manually started recorder when it switches into a held call even without detector ownership", async () => {
+  mocks.inspect.mockResolvedValue({ status: "ok", data: [] });
+  mocks.resolve.mockResolvedValue(context.occurrence);
+  mocks.isExcluded.mockReturnValue(true);
+  mocks.block.mockResolvedValue(undefined);
+  await enforceMeetingRecordingExclusions("alice", () => true);
+  expect(mocks.block).toHaveBeenCalledWith(
+    "alice",
+    "current",
+    context.occurrence,
+  );
+  expect(mocks.stop).toHaveBeenCalled();
 });
