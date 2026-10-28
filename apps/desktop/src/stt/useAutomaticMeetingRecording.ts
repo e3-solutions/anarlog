@@ -275,22 +275,11 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
               microphones.data.some(
                 (app) => app.id === capture!.meeting.app.id,
               );
-            const recordingEvidence = (
-              inspection.data.find(
-                (row) =>
-                  row.app.id === capture!.meeting.app.id &&
-                  row.pid === capture!.meeting.pid &&
-                  row.platform === capture!.meeting.platform,
-              ) as
-                | {
-                    recordingEvidence?: {
-                      leaveControlPresent: boolean;
-                      leaveControlEnabled: boolean | null;
-                      leaveControlVisible: boolean;
-                      matchedBy: "context" | "toolbar" | "none";
-                    } | null;
-                  }
-                | undefined
+            const recordingEvidence = inspection.data.find(
+              (row) =>
+                row.app.id === capture!.meeting.app.id &&
+                row.pid === capture!.meeting.pid &&
+                row.platform === capture!.meeting.platform,
             )?.recordingEvidence;
             const evidence = {
               ...probeEvidence,

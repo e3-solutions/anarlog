@@ -1351,6 +1351,7 @@ export type Evidence = {
   leaveControlEnabled?: boolean | null;
   leaveControlVisible?: boolean | null;
   matchedBy?: string | null;
+  sourceActorPresent?: boolean | null;
 };
 export type FinalizedWord = {
   id: string;
