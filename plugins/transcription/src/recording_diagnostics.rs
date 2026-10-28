@@ -502,6 +502,15 @@ impl Collector {
             evidence,
         };
         input.validate()?;
+        if input
+            .evidence
+            .get("uploadState")
+            .and_then(serde_json::Value::as_str)
+            == Some("uploaded")
+            && !input.evidence.contains_key("uploadStage")
+        {
+            return Ok(());
+        }
         let key = (
             user.to_string(),
             input.evidence["jobId"].as_str().unwrap().to_string(),
@@ -906,6 +915,15 @@ mod tests {
         .unwrap();
         assert!(state.upload(&user, &session, evidence.clone()).is_err());
         state.configure(Some(user.clone()), true, false).unwrap();
+        let mut completed = evidence.clone();
+        completed.insert("uploadState".into(), serde_json::json!("uploaded"));
+        state.upload(&user, &session, completed.clone()).unwrap();
+        assert!(state.batch(&user).unwrap().events.is_empty());
+        completed.insert("uploadStage".into(), serde_json::json!("complete"));
+        state.upload(&user, &session, completed).unwrap();
+        let completion = state.batch(&user).unwrap().events;
+        assert_eq!(completion.len(), 1);
+        state.ack(&user, &[completion[0].id.clone()]).unwrap();
         state.upload(&user, &session, evidence.clone()).unwrap();
         state.upload(&user, &session, evidence.clone()).unwrap();
         assert_eq!(state.batch(&user).unwrap().events.len(), 1);
