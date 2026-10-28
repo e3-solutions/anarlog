@@ -561,6 +561,17 @@ impl Collector {
         self.native_event_with_evidence(session_id, kind, reason, Evidence::default())
     }
 
+    fn stopped(&mut self, session_id: &str, has_error: bool) -> Result<(), String> {
+        let error = if has_error {
+            self.native_event(session_id, "capture_error", "native_lifecycle")
+                .err()
+        } else {
+            None
+        };
+        let stopped = self.native_event(session_id, "capture_stopped", "native_lifecycle");
+        stopped.and(error.map_or(Ok(()), Err))
+    }
+
     fn native_event_with_evidence(
         &mut self,
         session_id: &str,
@@ -725,6 +736,15 @@ pub fn lifecycle(app: &tauri::AppHandle, session_id: &str, kind: &str, reason: &
         return;
     };
     if collector.native_event(session_id, kind, reason).is_err() {
+        tracing::warn!("recording_diagnostics_write_failed");
+    }
+}
+
+pub fn stopped(app: &tauri::AppHandle, session_id: &str, has_error: bool) {
+    if let Some(state) = app.try_state::<RecordingDiagnostics>()
+        && let Ok(mut collector) = state.0.lock()
+        && collector.stopped(session_id, has_error).is_err()
+    {
         tracing::warn!("recording_diagnostics_write_failed");
     }
 }
@@ -1039,6 +1059,36 @@ mod tests {
         state.configure(Some(a.clone()), true, false).unwrap();
         state.attach_startup_sessions(&verified).unwrap();
         assert!(state.batch(&a).unwrap().events.is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn terminal_outcomes_do_not_infer_save_success_or_failure() {
+        let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let account = uuid::Uuid::new_v4().to_string();
+        let session = uuid::Uuid::new_v4().to_string();
+        let mut state = collector(dir.clone());
+        state.configure(Some(account.clone()), true, false).unwrap();
+        state
+            .native_event(&session, "capture_started", "native_lifecycle")
+            .unwrap();
+        state.stopped(&session, true).unwrap();
+        let events = state.batch(&account).unwrap().events;
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[1].kind, "capture_error");
+        assert_eq!(events[1].reason, "native_lifecycle");
+        assert_eq!(events[2].kind, "capture_stopped");
+        assert_eq!(events[2].reason, "native_lifecycle");
+        assert!(!state.owners.contains_key(&session));
+        let successful = uuid::Uuid::new_v4().to_string();
+        state
+            .native_event(&successful, "capture_started", "native_lifecycle")
+            .unwrap();
+        state.stopped(&successful, false).unwrap();
+        assert_eq!(
+            state.batch(&account).unwrap().events.last().unwrap().reason,
+            "native_lifecycle"
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 

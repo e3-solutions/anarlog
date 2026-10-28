@@ -58,30 +58,27 @@ impl ListenerRuntime for TauriRuntime {
     }
     fn emit_lifecycle(&self, event: anlg_transcription_core::listener::SessionLifecycleEvent) {
         use anlg_transcription_core::listener::SessionLifecycleEvent;
-        let (session_id, kind, reason) = match &event {
+        match &event {
             SessionLifecycleEvent::Active { session_id, .. } => {
-                (session_id, "capture_started", "native_lifecycle")
+                crate::recording_diagnostics::lifecycle(
+                    &self.app,
+                    session_id,
+                    "capture_started",
+                    "native_lifecycle",
+                )
             }
             SessionLifecycleEvent::Finalizing { session_id } => {
-                (session_id, "capture_finalizing", "native_lifecycle")
+                crate::recording_diagnostics::lifecycle(
+                    &self.app,
+                    session_id,
+                    "capture_finalizing",
+                    "native_lifecycle",
+                )
             }
             SessionLifecycleEvent::Inactive {
-                session_id,
-                audio_path,
-                error,
-            } => (
-                session_id,
-                "capture_stopped",
-                if error.is_some() {
-                    "saving_failed"
-                } else if audio_path.is_some() {
-                    "saved_audio_ready"
-                } else {
-                    "native_lifecycle"
-                },
-            ),
-        };
-        crate::recording_diagnostics::lifecycle(&self.app, session_id, kind, reason);
+                session_id, error, ..
+            } => crate::recording_diagnostics::stopped(&self.app, session_id, error.is_some()),
+        }
         use tauri_plugin_tray::TrayPluginExt;
         match &event {
             anlg_transcription_core::listener::SessionLifecycleEvent::Active {
@@ -258,7 +255,16 @@ impl ListenerRuntime for TauriRuntime {
     fn emit_error(&self, event: anlg_transcription_core::listener::SessionErrorEvent) {
         use anlg_transcription_core::listener::SessionErrorEvent;
         let (session_id, reason) = match &event {
-            SessionErrorEvent::AudioError { session_id, .. } => (session_id, "audio_capture_error"),
+            SessionErrorEvent::AudioError {
+                session_id, error, ..
+            } => (
+                session_id,
+                if error.starts_with("audio_storage_") {
+                    "saving_failed"
+                } else {
+                    "audio_capture_error"
+                },
+            ),
             SessionErrorEvent::ConnectionError { session_id, .. } => {
                 (session_id, "transcription_error")
             }
