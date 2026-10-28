@@ -1,7 +1,10 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 
+import type { DiagnosticBatch as RecordingDiagnosticBatch } from "@anlg/plugin-transcription";
+
 import { env } from "~/env";
 
+export type { DiagnosticEvent as RecordingDiagnosticEvent } from "@anlg/plugin-transcription";
 export type RecordingDiagnosticEvidence = {
   observation?: "active" | "inactive" | "unknown";
   inspectionStatus?: "ok" | "error" | "timeout" | "pending" | "unavailable";
@@ -16,42 +19,9 @@ export type RecordingDiagnosticEvidence = {
   missingForMs?: number;
   networkHoldRemainingMs?: number;
   probeElapsedMs?: number;
-  queuedCount?: number;
   droppedCount?: number;
   retentionDropped?: boolean;
-  lastAckAgeMs?: number;
   platform?: "slack" | "googleMeet" | "unknown";
-  os?: "macos" | "linux" | "windows" | "unknown";
-  leaveControlPresent?: boolean;
-  leaveControlEnabled?: boolean;
-  leaveControlVisible?: boolean;
-  matchedBy?: "context" | "toolbar" | "none";
-  sourceActorPresent?: boolean;
-};
-
-export type RecordingDiagnosticEvent = {
-  id: string;
-  deviceId: string;
-  bootId: string;
-  sequence: number;
-  observedAtMs: number;
-  elapsedMs: number;
-  appVersion: string;
-  buildSha: string;
-  sessionId: string | null;
-  kind: string;
-  reason: string;
-  evidence: RecordingDiagnosticEvidence;
-};
-
-export type RecordingDiagnosticBatch = {
-  deviceId: string;
-  bootId: string;
-  events: RecordingDiagnosticEvent[];
-  droppedCount: number;
-  retentionDropped: boolean;
-  lastAckAtMs: number | null;
-  queuedCount: number;
 };
 
 let owner: string | null = null;
@@ -59,7 +29,7 @@ let desiredOwner: string | null = null;
 let generation = 0;
 let configureQueue = Promise.resolve();
 const pendingBatches = new Map<string, Promise<RecordingDiagnosticBatch>>();
-const recent = new Map<string, { signature: string; at: number }>();
+const recent = new Map<string, { signature: string }>();
 const command = (name: string) =>
   `plugin:transcription|recording_diagnostics_${name}`;
 
@@ -98,39 +68,27 @@ export function recordRecordingDiagnostic(
   kind: string,
   reason: string,
   evidence: RecordingDiagnosticEvidence = {},
+  expectedUserId?: string | null,
 ) {
   if (!owner || env.VITE_E3_SCRIBE !== "true" || !isTauri()) return;
+  if (expectedUserId !== undefined && expectedUserId !== owner) return;
   if (
     !sessionId &&
     reason !== "collector_started" &&
     reason !== "delivery_failed"
   )
     return;
-  const key = `${sessionId}:${kind}${kind === "detector_observation" || reason === "collector_started" ? `:${reason}` : ""}`;
-  const {
-    missingForMs,
-    networkHoldRemainingMs,
-    probeElapsedMs,
-    lastAckAgeMs,
-    queuedCount,
-    ...stable
-  } = evidence;
+  const key = `${sessionId}:${kind}:${reason === "collector_started" ? reason : ""}`;
+  const { missingForMs, networkHoldRemainingMs, probeElapsedMs, ...stable } =
+    evidence;
   const signature = JSON.stringify({ reason, evidence: stable });
-  const now = Date.now();
   const previous = recent.get(key);
-  const witnessInterval =
-    kind === "policy_decision"
-      ? Infinity
-      : reason === "probe_started"
-        ? 300_000
-        : 60_000;
-  if (previous?.signature === signature && now - previous.at < witnessInterval)
-    return;
+  if (previous?.signature === signature) return;
   if (recent.size >= 64 && !recent.has(key))
     recent.delete(recent.keys().next().value!);
-  recent.set(key, { signature, at: now });
-  const bounded = (value: number | undefined) =>
-    value === undefined
+  recent.set(key, { signature });
+  const bounded = (value: number | null | undefined) =>
+    value == null
       ? undefined
       : Math.min(86_400_000, Math.max(0, Math.round(value)));
   void invoke<void>(command("record"), {
@@ -144,8 +102,6 @@ export function recordRecordingDiagnostic(
         missingForMs: bounded(missingForMs),
         networkHoldRemainingMs: bounded(networkHoldRemainingMs),
         probeElapsedMs: bounded(probeElapsedMs),
-        lastAckAgeMs: bounded(lastAckAgeMs),
-        queuedCount,
       },
     },
   }).catch(() => {

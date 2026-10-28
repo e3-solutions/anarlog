@@ -285,7 +285,6 @@ mod tests {
             window_title: Some("Zoom Meeting".to_string()),
             call_identity: None,
             open_call_identities: None,
-            recording_evidence: None,
             remote_screen_share,
             warnings: Vec::new(),
         }

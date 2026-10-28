@@ -381,7 +381,9 @@ pub(crate) fn start_raw<R: tauri::Runtime>(
     shared
 }
 
-pub(crate) fn diagnostic_capture_owners(app: &tauri::AppHandle) -> HashMap<String, String> {
+pub(crate) fn diagnostic_capture_owners<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> HashMap<String, String> {
     app.state::<QueueState>()
         .raw
         .lock()

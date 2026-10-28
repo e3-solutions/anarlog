@@ -238,7 +238,6 @@ pub fn init() -> tauri::plugin::TauriPlugin<tauri::Wry> {
                     .map(|dir| dir.join("recording-diagnostics")),
                 app.package_info().version.to_string(),
             ));
-            recording_diagnostics::spawn_heartbeat(app_handle.clone());
             app.manage(shared_recording::QueueState::default());
             shared_recording::clear_legacy_playback(&app_handle);
             app.manage(live_journal::LiveJournalRegistry::default());

@@ -116,29 +116,13 @@ function ActiveApplicationHealth({ userId }: { userId: string }) {
         const batch = await recordingDiagnosticBatch(userId);
         signal.throwIfAborted();
         nativeDeviceId = batch.deviceId;
-        const stored = await getStoredSettingValues();
-        const live = listenerStore.getState().live;
         recordRecordingDiagnostic(
-          live.captureOwnerUserId === userId ? live.sessionId : null,
+          null,
           "policy_decision",
           "collector_started",
           {
-            autoStop: resolveConfigValue("auto_stop_meetings", stored),
-            autoStart: resolveConfigValue(
-              "auto_start_detected_meetings",
-              stored,
-            ),
-            queuedCount: batch.queuedCount,
             droppedCount: Math.min(batch.droppedCount, 1_000_000_000),
             retentionDropped: batch.retentionDropped,
-            ...(batch.lastAckAtMs === null
-              ? {}
-              : {
-                  lastAckAgeMs: Math.min(
-                    86_400_000,
-                    Math.max(0, Date.now() - batch.lastAckAtMs),
-                  ),
-                }),
           },
         );
         if (batch.events.length === 0) return;

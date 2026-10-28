@@ -688,7 +688,6 @@ fn inspection_from_nodes(
         window_title,
         call_identity: None,
         open_call_identities: None,
-        recording_evidence: None,
         remote_screen_share: active_call && super::nodes_show_remote_screen_share(&nodes),
         warnings,
     }

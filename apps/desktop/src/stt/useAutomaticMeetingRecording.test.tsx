@@ -452,8 +452,8 @@ describe("automatic local meeting recording", () => {
     await tick(20_000);
     expect(mocks.diagnostic).toHaveBeenCalledWith(
       "session-1",
-      "detector_observation",
-      "ax_probe_timeout",
+      "policy_decision",
+      "probe_timeout",
       expect.objectContaining({
         inspectionStatus: "pending",
         micStatus: "ok",
@@ -533,48 +533,17 @@ describe("automatic local meeting recording", () => {
   );
 
   it("retains the Slack fallback stop when call evidence and microphone ownership remain unavailable", async () => {
-    snapshot([
-      {
-        ...slack,
-        ...{
-          recordingEvidence: {
-            leaveControlPresent: true,
-            leaveControlEnabled: null,
-            leaveControlVisible: false,
-            matchedBy: "context",
-          },
-        },
-      },
-    ]);
+    snapshot([slack]);
     const { active, stop } = setup();
     await tick(0);
     active();
-    await tick();
-    expect(mocks.diagnostic).toHaveBeenCalledWith(
-      "session-1",
-      "detector_observation",
-      "observed",
-      expect.objectContaining({
-        platform: "slack",
-        leaveControlPresent: true,
-        leaveControlVisible: false,
-        matchedBy: "context",
-      }),
-    );
-    const contextualObservation = mocks.diagnostic.mock.calls.find(
-      ([, kind, , evidence]) =>
-        kind === "detector_observation" && evidence?.matchedBy === "context",
-    );
-    expect(contextualObservation?.[3]).not.toHaveProperty(
-      "leaveControlEnabled",
-    );
     snapshot([]);
     await tick(58_000);
     expect(stop).not.toHaveBeenCalled();
     expect(mocks.diagnostic).toHaveBeenCalledWith(
       "session-1",
-      "detector_observation",
-      "observed",
+      "policy_decision",
+      "ax_unknown",
       expect.objectContaining({
         observation: "unknown",
         inspectionStatus: "ok",
@@ -582,13 +551,8 @@ describe("automatic local meeting recording", () => {
         micActive: false,
         owned: true,
         autoStop: true,
+        speakerRecent: true,
       }),
-    );
-    expect(mocks.diagnostic).toHaveBeenCalledWith(
-      "session-1",
-      "policy_decision",
-      "ax_unknown",
-      expect.objectContaining({ observation: "unknown", speakerRecent: true }),
     );
     await tick(6_000);
     expect(stop).toHaveBeenCalledOnce();

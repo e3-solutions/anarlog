@@ -26,8 +26,6 @@ it("preserves recording decisions instead of filling the outbox with unchanged c
   await configureRecordingDiagnostics("account-a", true);
   for (let poll = 0; poll < 240; poll++) {
     recordRecordingDiagnostic(null, "policy_decision", "collector_started", {
-      queuedCount: poll,
-      lastAckAgeMs: poll * 15_000,
       droppedCount: 0,
     });
     recordRecordingDiagnostic(
@@ -57,5 +55,16 @@ it("preserves recording decisions instead of filling the outbox with unchanged c
   expect(state.events[state.events.length - 1]).toMatchObject({
     reason: "grace_pending",
   });
-  await configureRecordingDiagnostics("account-a", false);
+  const beforeSwitch = [...state.events];
+  await configureRecordingDiagnostics("account-b", true);
+  recordRecordingDiagnostic(
+    "recording-a",
+    "capture_error",
+    "frontend_start_failed",
+    {},
+    "account-a",
+  );
+  await Promise.resolve();
+  expect(state.events).toEqual(beforeSwitch);
+  await configureRecordingDiagnostics("account-b", false);
 });

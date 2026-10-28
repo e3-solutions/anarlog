@@ -1,5 +1,5 @@
 begin;
-select plan(30);
+select plan(31);
 select tests.create_supabase_user('diagnostics_owner','diagnostics-owner@example.com');
 select tests.create_supabase_user('diagnostics_member','diagnostics-member@example.com');
 select tests.create_supabase_user('diagnostics_outsider','diagnostics-outsider@example.com');
@@ -45,8 +45,12 @@ select throws_ok('select public.recording_diagnostics_ingest(jsonb_agg(value)) f
 select throws_ok($$select public.recording_diagnostics_ingest(jsonb_build_array(value || '{"id":"00000000-0000-4000-8000-00000000d008"}'::jsonb,value || '{"reason":"private"}'::jsonb)) from diagnostic_event$$,'22023','invalid recording diagnostics','Invalid batch rolls back earlier events');
 select is((select count(*) from public.recording_diagnostics),1::bigint,'Partial invalid batches leave no inserted rows');
 select ok(not has_table_privilege('authenticated','public.recording_diagnostics','INSERT'),'Clients cannot bypass the sanitized RPC');
-select throws_ok($$select public.recording_diagnostics_ingest(jsonb_agg(value || jsonb_build_object('id',md5('diagnostic-event-' || n)::uuid,'deviceId',md5('diagnostic-device-' || n)::uuid))) from diagnostic_event cross join generate_series(1,8) n$$,'22023','recording diagnostics device limit reached','Per-account device quota bounds persistent storage');
-select is((select count(*) from public.recording_diagnostics),1::bigint,'Rejected device batches leave no partial rows');
+select lives_ok($$select public.recording_diagnostics_ingest(jsonb_agg(value || jsonb_build_object('id',md5('diagnostic-event-' || n)::uuid,'deviceId',md5('diagnostic-device-' || n)::uuid,'reason',CASE n % 3 WHEN 0 THEN 'start_requested' WHEN 1 THEN 'start_failed' ELSE 'frontend_start_failed' END))) from diagnostic_event cross join generate_series(1,8) n$$,'Start attempts and preparation failures ingest across nine device profiles');
+select is((select count(DISTINCT device_id) from public.recording_diagnostics),9::bigint,'A ninth device does not block diagnostic delivery');
+select is((select count(DISTINCT reason) from public.recording_diagnostics where reason IN ('start_requested','start_failed','frontend_start_failed')),3::bigint,'All pre-active recording outcomes retain their distinct reason');
+select tests.clear_authentication();
+reset role;
+delete from public.recording_diagnostics where user_id = tests.get_supabase_uid('diagnostics_member') and id <> '00000000-0000-4000-8000-00000000d005';
 select tests.clear_authentication();
 select tests.authenticate_as('diagnostics_owner');
 select set_config('request.jwt.claims',jsonb_set(current_setting('request.jwt.claims')::jsonb,'{session_id}','"00000000-0000-4000-8000-00000000d002"')::text,true);

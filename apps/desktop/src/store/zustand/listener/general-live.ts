@@ -654,6 +654,7 @@ export const startLiveSession = <T extends LiveStore>(
   targetSessionId: string,
   params: CaptureParams,
 ): Promise<boolean> => {
+  const diagnosticOwner = get().live.captureOwnerUserId;
   clearLiveEventUnlisteners(
     get().live.eventUnlistenersBySession[targetSessionId],
   );
@@ -661,6 +662,13 @@ export const startLiveSession = <T extends LiveStore>(
     delete live.eventUnlistenersBySession[targetSessionId];
   });
 
+  recordRecordingDiagnostic(
+    targetSessionId,
+    "policy_decision",
+    "frontend_start_requested",
+    {},
+    diagnosticOwner,
+  );
   const handlers = createSessionEventHandlers(set, get, targetSessionId);
 
   const program = Effect.gen(function* () {
@@ -729,6 +737,13 @@ export const startLiveSession = <T extends LiveStore>(
   return Effect.runPromiseExit(program).then((exit) =>
     Exit.match(exit, {
       onFailure: (cause) => {
+        recordRecordingDiagnostic(
+          targetSessionId,
+          "capture_error",
+          "frontend_start_failed",
+          {},
+          diagnosticOwner,
+        );
         console.error(JSON.stringify(cause));
         const error = getCaptureStartErrorMessage(cause);
         const currentLive = get().live;

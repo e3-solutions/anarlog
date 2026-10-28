@@ -93,10 +93,8 @@ beforeEach(() => {
           deviceId: `fixture-device:${args.userId}`,
           bootId: "fixture-boot",
           events: [...state.events],
-          queuedCount: state.events.length,
           droppedCount: 0,
           retentionDropped: false,
-          lastAckAtMs: null,
         };
       if (command.endsWith("_ack"))
         state.events = state.events.filter(

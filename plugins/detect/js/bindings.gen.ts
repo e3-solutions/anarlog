@@ -225,7 +225,6 @@ export type InstalledApp = { id: string; name: string };
 export type InstalledApplicationIcon = { id: string; dataUrl: string };
 export type MeetingAccessibilityInspection = {
   activeCall: boolean;
-  recordingEvidence?: RecordingEvidence | null;
   app: MeetingApp;
   pid: number;
   platform: MeetingPlatform;
@@ -287,13 +286,6 @@ export type MeetingScreenShareCapture = {
   height: number;
 };
 export type MeetingSurface = "native" | "web" | "unknown";
-export type RecordingEvidence = {
-  leaveControlPresent: boolean;
-  leaveControlEnabled: boolean | null;
-  leaveControlVisible: boolean;
-  matchedBy: RecordingEvidenceMatch;
-};
-export type RecordingEvidenceMatch = "context" | "toolbar" | "none";
 
 /** tauri-specta globals **/
 

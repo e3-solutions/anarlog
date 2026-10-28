@@ -87,20 +87,6 @@ fn slack_recording_rejects_prejoin_disabled_hidden_and_cross_window_controls() {
         true
     ));
     assert_eq!(slack_huddle_recording_label(&nodes[..1]), None);
-    let mut stale_context = nodes.clone();
-    stale_context[0].title = Some("Huddle in test".to_string());
-    stale_context[3].enabled = None;
-    stale_context[3].bounds = None;
-    assert!(slack_huddle_recording_label(&stale_context).is_some());
-    assert_eq!(
-        slack_recording_evidence(&stale_context),
-        RecordingEvidence {
-            leave_control_present: true,
-            leave_control_enabled: None,
-            leave_control_visible: false,
-            matched_by: RecordingEvidenceMatch::Context,
-        }
-    );
 }
 
 #[test]
