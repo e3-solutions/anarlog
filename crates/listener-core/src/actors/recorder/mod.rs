@@ -143,18 +143,22 @@ impl Actor for RecorderActor {
         if sink.recovered_audio {
             args.runtime
                 .emit_error(crate::SessionErrorEvent::AudioError {
-                    session_id: args.session_id,
+                    session_id: args.session_id.clone(),
                     error: "recording_recovered".to_owned(),
                     device: None,
                     is_fatal: false,
                 });
         }
 
+        let write_runtime = args.runtime.clone();
+        let write_session = args.session_id.clone();
         let (writer_tx, writer_rx) = tokio::sync::mpsc::channel(WRITE_QUEUE_CAPACITY);
         let writer_task = tokio::task::spawn_blocking(move || {
             let _writer_permit = writer_permit;
             let _writer_path = writer_path;
-            run_writer(sink, writer_rx, myself, error_notifier)
+            run_writer(sink, writer_rx, myself, error_notifier, move || {
+                write_runtime.capture_allowed(&write_session)
+            })
         });
 
         Ok(RecState {
@@ -256,8 +260,12 @@ fn run_writer(
     mut writer_rx: tokio::sync::mpsc::Receiver<WriteRequest>,
     actor: ActorRef<RecMsg>,
     error_notifier: Arc<dyn Fn(String) + Send + Sync>,
+    allowed: impl Fn() -> bool,
 ) -> Result<(), String> {
     while let Some(request) = writer_rx.blocking_recv() {
+        if !allowed() {
+            continue;
+        }
         let result = match &request {
             WriteRequest::AudioSingle(samples) => sink.write(samples, samples),
             WriteRequest::AudioDual(mic, spk) => sink.write(mic, spk),

@@ -26,8 +26,8 @@ fn job_fixture() -> Job {
     }
 }
 
-struct Fixture {
-    app: tauri::App<tauri::test::MockRuntime>,
+pub(super) struct Fixture {
+    pub(super) app: tauri::App<tauri::test::MockRuntime>,
     root: std::path::PathBuf,
     session: String,
     audio: std::path::PathBuf,
@@ -35,7 +35,7 @@ struct Fixture {
 }
 
 impl Fixture {
-    async fn new(user: &str, api_base_url: String, connected: bool) -> Self {
+    pub(super) async fn new(user: &str, api_base_url: String, connected: bool) -> Self {
         let root =
             std::env::temp_dir().join(format!("shared-recording-test-{}", uuid::Uuid::new_v4()));
         let session = uuid::Uuid::new_v4().to_string();
@@ -62,6 +62,7 @@ impl Fixture {
             .manage(tauri_plugin_fs_sync::SessionAudioLocks::default())
             .manage(tauri_plugin_settings::StartupSnapshot::new(root.clone()))
             .manage(QueueState::default())
+            .manage(std::sync::Arc::new(crate::BatchSessionRegistry::default()))
             .build(context)
             .unwrap();
         let config = Configuration {
@@ -567,4 +568,113 @@ fn legacy_playback_cleanup_only_removes_known_cache_files_without_following_syml
         }
     }
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn opting_out_cancels_inflight_upload_and_stays_excluded_after_restart() {
+    use std::io::Write;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let fixture = Fixture::new(
+        "user",
+        format!("http://{}", listener.local_addr().unwrap()),
+        true,
+    )
+    .await;
+    let handle = fixture.app.handle().clone();
+    let dir = directory(&handle).unwrap();
+    let state = handle.state::<QueueState>();
+    assert!(start_raw(&handle, &fixture.session, Some("user")));
+    let binding = Binding {
+        session_id: fixture.session.clone(),
+        user_id: "user".into(),
+        organization_id: "org".into(),
+        api_base_url: fixture.config.api_base_url.clone(),
+        admission: json!({"occurrenceId":"occurrence"}),
+        observed_at_ms: 0,
+        platform: "slack".into(),
+        call_identity: None,
+        verification_pending: false,
+        connection_id: Some("connection".into()),
+        quarantine_reason: None,
+    };
+    save(
+        &dir.join(format!("binding-{}.json", key(&fixture.session))),
+        &binding,
+    )
+    .unwrap();
+    let job = fixture.enqueue("transcript").await.unwrap().unwrap();
+    let (received, arrived) = tokio::sync::oneshot::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        assert!(read_request(&mut stream).contains("/captures/"));
+        received.send(()).unwrap();
+        released
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        let _ = stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+        listener.set_nonblocking(true).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(
+            matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+        );
+    });
+    let exclude = async {
+        arrived.await.unwrap();
+        assert!(exclude_session(&dir, &state, &fixture.session, "other-account").is_err());
+        assert!(capture_allowed(&handle, &fixture.session));
+        exclude_session(&dir, &state, &fixture.session, "user").unwrap();
+        release.send(()).unwrap();
+    };
+    let (result, ()) = tokio::join!(upload(&dir, &job, "token", &state), exclude);
+    assert!(result.unwrap_err().contains("excluded"));
+    assert!(!capture_allowed(&handle, &fixture.session));
+    assert!(
+        read::<Binding>(&dir.join(format!("binding-{}.json", key(&fixture.session))))
+            .unwrap()
+            .unwrap()
+            .admission
+            .is_null()
+    );
+    assert!(fixture.enqueue("later-transcript").await.is_err());
+    // A fresh queue state still checks the persisted tombstone before any request.
+    assert!(verify_upload_binding(&dir, &job, &QueueState::default()).is_err());
+    state.excluded.lock().unwrap().clear();
+    assert!(ensure_allowed(&handle, &fixture.session).is_err());
+    assert!(!capture_allowed(&handle, &fixture.session));
+    assert!(ensure_allowed(&handle, "intentional-new-session").is_ok());
+    assert!(dir.join(&job.id).join("original.audio").exists());
+    server.join().unwrap();
+}
+
+#[tokio::test]
+async fn opt_out_stops_local_capture_without_shared_recording_configuration() {
+    let fixture = Fixture::new("user", "http://localhost:8789".into(), false).await;
+    let handle = fixture.app.handle().clone();
+    let dir = directory(&handle).unwrap();
+    std::fs::remove_file(dir.join("configuration.json")).unwrap();
+    assert!(!start_raw(&handle, &fixture.session, Some("user")));
+    let state = handle.state::<QueueState>();
+    assert!(exclude_session(&dir, &state, &fixture.session, "other").is_err());
+    for _ in 0..2 {
+        assert_eq!(
+            shared_recording_observe(
+                handle.clone(),
+                fixture.session.clone(),
+                "unverified".into(),
+                None,
+                0,
+                String::new(),
+                "user".into(),
+                Some("user_excluded".into()),
+                None,
+            )
+            .await
+            .unwrap(),
+            None
+        );
+    }
+    assert!(!capture_allowed(&handle, &fixture.session));
+    assert!(ensure_allowed(&handle, &fixture.session).is_err());
 }

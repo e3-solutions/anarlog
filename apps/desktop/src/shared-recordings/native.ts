@@ -54,3 +54,15 @@ export function observeSharedRecording(input: {
 }) {
   return invoke<string | null>(command("observe"), input);
 }
+
+export function excludeSharedRecording(sessionId: string, userId: string) {
+  return invoke<string | null>(command("observe"), {
+    sessionId,
+    userId,
+    platform: "unverified",
+    callIdentity: null,
+    observedAtMs: Date.now(),
+    accessToken: "",
+    quarantineReason: "user_excluded",
+  });
+}

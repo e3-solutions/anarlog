@@ -19,6 +19,39 @@ export const commands = {
       else return { status: "error", error: e as any };
     }
   },
+  async meetingRecordingControlSet(
+    context: MeetingRecordingContext | null,
+    resumeOf: string | null,
+  ): Promise<Result<MeetingRecordingContext | null, string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE(
+          "plugin:transcription|meeting_recording_control_set",
+          { context, resumeOf },
+        ),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async meetingRecordingExclusions(
+    userId: string,
+  ): Promise<Result<MeetingRecordingContext[], string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE(
+          "plugin:transcription|meeting_recording_exclusions",
+          { userId },
+        ),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
   async sharedRecordingConfigure(
     config: Configuration,
   ): Promise<Result<Configuration, string>> {
@@ -1288,6 +1321,20 @@ export type LiveTranscriptTarget = {
   provider: string | null;
   model: string | null;
 };
+export type MeetingOccurrence = {
+  key: string;
+  room: string | null;
+  kind: OccurrenceKind;
+  eventId?: string | null;
+};
+export type MeetingRecordingContext = {
+  sessionId: string;
+  userId: string;
+  occurrence: MeetingOccurrence;
+  revision: string;
+  state: MeetingRecordingState;
+};
+export type MeetingRecordingState = "recording" | "excluded" | "pending";
 export type ObservationSummary = {
   inspectionStatus: string;
   rowCount: number;
@@ -1295,6 +1342,7 @@ export type ObservationSummary = {
   trustedCount: number;
   warningCategories: string[];
 };
+export type OccurrenceKind = "calendar" | "room" | "session" | "ambiguous";
 export type PartialWord = {
   text: string;
   start_ms: number;

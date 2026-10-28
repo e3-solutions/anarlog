@@ -150,6 +150,7 @@ pub async fn retry_audio_capture<R: tauri::Runtime>(
     session_id: String,
     device: Option<String>,
 ) -> Result<(), String> {
+    crate::shared_recording::ensure_allowed(&app, &session_id)?;
     app.listener()
         .retry_audio_capture(session_id, device)
         .await
@@ -178,7 +179,14 @@ pub async fn start_capture<R: tauri::Runtime>(
         authenticated_user_id,
     } = params;
     let session_id = params.session_id.clone();
+    crate::shared_recording::ensure_allowed(&app, &session_id)?;
     let _audio_guard = app.fs_sync().lock_session_audio(&session_id).await;
+    crate::shared_recording::ensure_allowed(&app, &session_id)?;
+    crate::shared_recording::meeting_control::prepare_capture(
+        &app,
+        &session_id,
+        authenticated_user_id.as_deref(),
+    )?;
     if crate::shared_recording::start_raw(&app, &session_id, authenticated_user_id.as_deref()) {
         params.retain_audio = Some(true);
     }
@@ -199,6 +207,10 @@ pub async fn start_capture<R: tauri::Runtime>(
         (Err(error), None) => return Err(error.to_string()),
     }
 
+    if let Err(error) = crate::shared_recording::ensure_allowed(&app, &session_id) {
+        crate::stop_capture_for_session(&app, &session_id).await;
+        return Err(error);
+    }
     Ok(())
 }
 

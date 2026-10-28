@@ -1,7 +1,9 @@
 mod commands;
 mod ext;
 mod macos_position;
+mod meeting_control;
 mod menu_items;
+pub use meeting_control::*;
 mod schedule;
 mod tray_icon;
 

@@ -15,6 +15,18 @@ const mocks = vi.hoisted(() => ({
   open: vi.fn(),
   config: vi.fn(),
   platform: vi.fn(),
+  auth: vi.fn(),
+  resolve: vi.fn(),
+  excluded: vi.fn(),
+  bind: vi.fn(),
+  replay: vi.fn(),
+  block: vi.fn(),
+}));
+
+vi.mock("./meeting-recording-control", () => ({
+  replayNativeRecordingExclusions: mocks.replay,
+  stopMeetingRecordingForExcludedOccurrence: mocks.block,
+  prepareMeetingRecording: vi.fn(async () => ({})),
 }));
 
 vi.mock("@tauri-apps/plugin-os", () => ({ platform: mocks.platform }));
@@ -33,6 +45,12 @@ vi.mock("~/store/zustand/tabs", () => ({
   useTabs: { getState: () => ({ openNew: mocks.open }) },
 }));
 vi.mock("~/shared/config", () => ({ useConfigValue: mocks.config }));
+vi.mock("~/auth", () => ({ useOptionalAuth: mocks.auth }));
+vi.mock("./recording-exclusions", () => ({
+  resolveRecordingOccurrence: mocks.resolve,
+  isRecordingExcluded: mocks.excluded,
+  bindRecordingSession: mocks.bind,
+}));
 
 const meet: MeetingAccessibilityInspection = {
   activeCall: true,
@@ -52,6 +70,12 @@ const slack: MeetingAccessibilityInspection = {
   app: { id: "com.tinyspeck.slackmacgap", name: "Slack" },
   surface: "native",
   windowTitle: "Huddle",
+};
+
+const occurrence = {
+  key: "calendar:abc-defg-hij",
+  room: "https://meet.google.com/abc-defg-hij",
+  kind: "calendar" as const,
 };
 
 function Harness({ store }: { store: ReturnType<typeof createListenerStore> }) {
@@ -95,6 +119,8 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.resetAllMocks();
   mocks.platform.mockReturnValue("macos");
+  mocks.replay.mockResolvedValue([]);
+  mocks.block.mockResolvedValue(undefined);
   mocks.config.mockImplementation((key: string) => {
     if (key === "ignored_platforms") return [];
     return (
@@ -104,6 +130,11 @@ beforeEach(() => {
   mocks.microphones.mockResolvedValue({ status: "ok", data: [] });
   mocks.create.mockResolvedValue("session-1");
   mocks.remove.mockResolvedValue(undefined);
+  // Default to no signed-in account so the exclusion gate stays dormant and
+  // existing automatic-recording behavior is preserved; account tests override.
+  mocks.auth.mockReturnValue(null);
+  mocks.resolve.mockResolvedValue(occurrence);
+  mocks.excluded.mockReturnValue(false);
   snapshot([meet]);
 });
 
@@ -595,5 +626,92 @@ describe("automatic local meeting recording", () => {
     snapshot([slack]);
     await tick();
     expect(mocks.open).not.toHaveBeenCalled();
+  });
+
+  it("replays native exclusions before creating a detector recording", async () => {
+    mocks.auth.mockReturnValue({ session: { user: { id: "account-1" } } });
+    mocks.replay.mockImplementationOnce(async () => {
+      mocks.excluded.mockReturnValue(true);
+      return [];
+    });
+    setup();
+    await tick(0);
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.open).not.toHaveBeenCalled();
+  });
+
+  it("stops an owned capture immediately when the selected call switches to an excluded occurrence", async () => {
+    mocks.auth.mockReturnValue({ session: { user: { id: "account-1" } } });
+    const { active, stop } = setup();
+    await tick(0);
+    active();
+    const blocked = { ...occurrence, key: "calendar:excluded-call" };
+    mocks.resolve.mockResolvedValue(blocked);
+    mocks.excluded.mockReturnValue(true);
+    snapshot([
+      {
+        ...meet,
+        callIdentity: "https://meet.google.com/xyz-abcd-uvw:tab:99",
+      },
+    ]);
+    await tick();
+    expect(mocks.block).toHaveBeenCalledWith("account-1", "session-1", blocked);
+    expect(stop).toHaveBeenCalled();
+    expect(mocks.create).toHaveBeenCalledOnce();
+  });
+
+  it("never arms an excluded occurrence across polling, rejoin, and remount", async () => {
+    mocks.auth.mockReturnValue({ session: { user: { id: "account-1" } } });
+    mocks.excluded.mockReturnValue(true);
+    snapshot([meet]);
+    const { store, view } = setup();
+    await tick(0);
+    expect(mocks.excluded).toHaveBeenCalledWith("account-1", occurrence);
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.open).not.toHaveBeenCalled();
+    expect(store.getState().live.triggerAppIds).toBeNull();
+
+    // Keep polling: the opt-out must hold rather than decay into a start.
+    await tick(90_000);
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.open).not.toHaveBeenCalled();
+
+    // Leave and rejoin the same call: a fresh occurrence stays excluded.
+    snapshot([]);
+    await tick(4_000);
+    snapshot([meet]);
+    await tick(4_000);
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.open).not.toHaveBeenCalled();
+
+    // Remounting the hook (e.g. window reopen) must not re-arm it either.
+    view.unmount();
+    render(<Harness store={store} />);
+    await tick(4_000);
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.open).not.toHaveBeenCalled();
+    expect(store.getState().live.triggerAppIds).toBeNull();
+  });
+
+  it("drops a deferred session when the opt-out lands during createSession", async () => {
+    mocks.auth.mockReturnValue({ session: { user: { id: "account-1" } } });
+    mocks.excluded.mockReturnValue(false);
+    mocks.create.mockImplementationOnce(async () => {
+      // The user opts out while the session is still being created.
+      mocks.excluded.mockReturnValue(true);
+      return "session-1";
+    });
+    snapshot([meet]);
+    const { store } = setup();
+    await tick(0);
+    expect(mocks.create).toHaveBeenCalledOnce();
+    expect(mocks.bind).toHaveBeenCalledWith(
+      "account-1",
+      "session-1",
+      occurrence,
+    );
+    expect(mocks.remove).toHaveBeenCalledWith("session-1");
+    expect(mocks.open).not.toHaveBeenCalled();
+    expect(store.getState().live.triggerAppIds).toBeNull();
   });
 });

@@ -28,6 +28,10 @@ const mocks = vi.hoisted(() => ({
   meetingMicInUse: false,
 }));
 
+vi.mock("~/stt/recording-exclusion-control", () => ({
+  RecordingExclusionControl: () => null,
+}));
+
 vi.mock("../title-input", () => ({
   TitleInput: () => <input aria-label="Session title" placeholder="Untitled" />,
 }));

@@ -14,7 +14,9 @@ pub async fn start_transcription<R: tauri::Runtime>(
     params: TranscriptionParams,
 ) -> Result<(), String> {
     let audio_session_id = params.session_id.split(':').next().unwrap_or_default();
+    crate::shared_recording::ensure_allowed(&app, audio_session_id)?;
     let _audio_guard = app.fs_sync().lock_session_audio(audio_session_id).await;
+    crate::shared_recording::ensure_allowed(&app, audio_session_id)?;
     app.listener2()
         .start_transcription(params)
         .await

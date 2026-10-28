@@ -25,6 +25,22 @@ import {
 
 import { enqueueSessionAudioOperation } from "~/session/audio-operations";
 
+vi.mock("./meeting-recording-control", () => ({
+  replayNativeRecordingExclusions: vi.fn(async () => []),
+  prepareMeetingRecording: vi.fn(async () => ({})),
+}));
+
+vi.mock("./recording-exclusions", () => ({
+  resolveRecordingOccurrence: vi.fn(async () => ({
+    key: "session:session-1",
+    room: null,
+    kind: "session",
+  })),
+  isRecordingExcluded: vi.fn(() => false),
+  isRecordingSessionExcluded: vi.fn(() => false),
+  bindRecordingSession: vi.fn(),
+}));
+
 vi.mock("./capture-completion", () => ({
   completeCaptureTranscript: vi.fn().mockResolvedValue(undefined),
   loadCaptureStop: vi.fn().mockResolvedValue(null),
@@ -224,6 +240,10 @@ vi.mock("@anlg/plugin-permissions", () => ({
 
 vi.mock("@anlg/plugin-detect", () => ({
   commands: {
+    inspectMeetingAccessibility: vi.fn(async () => ({
+      status: "ok",
+      data: [],
+    })),
     listMicUsingApplications: listMicUsingApplicationsMock,
     sendMeetingChatMessage: sendMeetingChatMessageMock,
   },

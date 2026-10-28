@@ -12,6 +12,16 @@ The separate calendar/API-verified recording path is retained when **Record dete
 
 Review the final detection implementation for confirmation delays, transient-call handling, rejoin behavior, and stop rules. An ambiguous or unavailable Accessibility observation must not be treated as a confirmed departure. Exact consecutive-call separation depends on the available call identity and should be verified in the pilot.
 
+## Per-meeting recording opt-out
+
+Signed-in E3 Scribe users can open **E3 Recording** in the Mac menu bar and choose **Stop for this meeting**. The menu changes to **E3 Off** after capture stops and the choice is saved. The note header and calendar event popover provide the same control. No confirmation dialog is required.
+
+The choice applies to this account's recorder on this device and survives app restart and rejoining the meeting. A uniquely identified calendar occurrence is held individually. When the calendar occurrence cannot be identified, the room stays off until explicit Resume, including when the room is reused. An unidentified call keeps recording off conservatively for the account on this device until Resume. These broader holds are explained under the in-app information control.
+
+**Resume recording** starts a fresh session. It never reopens excluded audio or clears the exclusion on an older session. Already accepted remote audio or processing cannot be retracted, and this control does not stop another person's recorder or delete earlier notes.
+
+If stopping or saving cannot be confirmed, the menu shows **E3 Check recording** and offers **Retry stop for this meeting**. Keep recording off until the error is resolved. Native fixture tests and the synthetic [interaction demo](e3/recording-opt-out-demo.gif) are separate evidence; the demo does not establish real-call recording or installed-app behavior.
+
 ## First-run setup
 
 1. Use macOS 15 or later on Apple Silicon. Install the isolated pilot build described below. Do not substitute an upstream download: it does not contain these fork changes.

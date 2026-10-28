@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-meeting-recording-exclusions"
+description = "Enables the meeting_recording_exclusions command without any pre-configured scope."
+commands.allow = ["meeting_recording_exclusions"]
+
+[[permission]]
+identifier = "deny-meeting-recording-exclusions"
+description = "Denies the meeting_recording_exclusions command without any pre-configured scope."
+commands.deny = ["meeting_recording_exclusions"]

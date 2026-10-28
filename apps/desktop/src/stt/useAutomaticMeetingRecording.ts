@@ -14,13 +14,29 @@ import {
   sameAutomaticMeeting,
   type AutomaticMeeting,
 } from "./automatic-meeting";
+import {
+  replayNativeRecordingExclusions,
+  stopMeetingRecordingForExcludedOccurrence,
+} from "./meeting-recording-control";
+import {
+  bindRecordingSession,
+  isRecordingExcluded,
+  resolveRecordingOccurrence,
+} from "./recording-exclusions";
 
+import { useOptionalAuth } from "~/auth";
 import { createSession, softDeleteSession } from "~/session/queries";
 import { useConfigValue } from "~/shared/config";
 import type { ListenerStore } from "~/store/zustand/listener";
 import { useTabs } from "~/store/zustand/tabs";
 
 export function useAutomaticMeetingRecording(store: ListenerStore) {
+  const auth = useOptionalAuth();
+  const userId = auth?.session?.user.id;
+  const identityReady = useRef(!auth || Boolean(userId));
+  identityReady.current = !auth || Boolean(userId);
+  const account = useRef(userId);
+  account.current = userId;
   const enabled = useConfigValue("auto_start_detected_meetings");
   const ignored = useConfigValue("ignored_platforms");
   const autoStop = useConfigValue("auto_stop_meetings");
@@ -73,7 +89,7 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
     });
 
     async function reconcile() {
-      if (cancelled || checking) return;
+      if (cancelled || checking || !identityReady.current) return;
       if (!policy.current.enabled) {
         reset.current();
         return;
@@ -109,6 +125,41 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
             suppressed.delete(key);
         }
 
+        const owner = account.current;
+        if (owner) await replayNativeRecordingExclusions(owner);
+        if (cancelled || !identityReady.current || account.current !== owner)
+          return;
+        const occurrence =
+          owner && selected
+            ? await resolveRecordingOccurrence(owner, { meeting: selected })
+            : null;
+        if (cancelled || !identityReady.current || account.current !== owner)
+          return;
+        if (owner && occurrence && isRecordingExcluded(owner, occurrence)) {
+          const live = store.getState().live;
+          const blockedSession =
+            capture && live.sessionId === capture.sessionId
+              ? capture.sessionId
+              : null;
+          if (blockedSession) {
+            capture = null;
+            ownedSession.current = null;
+            try {
+              await stopMeetingRecordingForExcludedOccurrence(
+                owner,
+                blockedSession,
+                occurrence,
+              );
+            } finally {
+              if (
+                account.current === owner &&
+                store.getState().live.sessionId === blockedSession
+              )
+                store.getState().stop();
+            }
+          }
+          return;
+        }
         const live = store.getState().live;
         if (capture) {
           if (
@@ -247,11 +298,16 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
         if (live.loading || now < retryAfter) return;
 
         const sessionId = await createSession(selected.title);
+        if (owner && occurrence)
+          bindRecordingSession(owner, sessionId, occurrence);
         let opened = false;
         try {
           const refreshed = await detectCommands.inspectMeetingAccessibility();
           if (
             cancelled ||
+            !identityReady.current ||
+            account.current !== owner ||
+            (owner && occurrence && isRecordingExcluded(owner, occurrence)) ||
             !policy.current.enabled ||
             refreshed.status !== "ok" ||
             selectAutomaticMeeting(
