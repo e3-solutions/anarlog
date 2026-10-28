@@ -21,6 +21,11 @@ const mocks = vi.hoisted(() => ({
   bind: vi.fn(),
   replay: vi.fn(),
   block: vi.fn(),
+  diagnostic: vi.fn(),
+}));
+
+vi.mock("~/application-health/recording-diagnostics", () => ({
+  recordRecordingDiagnostic: mocks.diagnostic,
 }));
 
 vi.mock("./meeting-recording-control", () => ({
@@ -439,6 +444,26 @@ describe("automatic local meeting recording", () => {
     expect(stop).not.toHaveBeenCalled();
   });
 
+  it("reports a stalled AX probe without claiming that recording stopped", async () => {
+    const { active, stop } = setup();
+    await tick(0);
+    active();
+    mocks.inspect.mockImplementation(() => new Promise(() => {}));
+    await tick(20_000);
+    expect(mocks.diagnostic).toHaveBeenCalledWith(
+      "session-1",
+      "detector_observation",
+      "ax_probe_timeout",
+      expect.objectContaining({
+        inspectionStatus: "pending",
+        micStatus: "ok",
+        owned: true,
+        probeElapsedMs: expect.any(Number),
+      }),
+    );
+    expect(stop).not.toHaveBeenCalled();
+  });
+
   it("preserves a muted listening call while far-end speech continues despite unreadable Accessibility", async () => {
     snapshot([slack]);
     const { store, active, stop } = setup();
@@ -508,15 +533,72 @@ describe("automatic local meeting recording", () => {
   );
 
   it("retains the Slack fallback stop when call evidence and microphone ownership remain unavailable", async () => {
-    snapshot([slack]);
+    snapshot([
+      {
+        ...slack,
+        ...{
+          recordingEvidence: {
+            leaveControlPresent: true,
+            leaveControlEnabled: null,
+            leaveControlVisible: false,
+            matchedBy: "context",
+          },
+        },
+      },
+    ]);
     const { active, stop } = setup();
     await tick(0);
     active();
+    await tick();
+    expect(mocks.diagnostic).toHaveBeenCalledWith(
+      "session-1",
+      "detector_observation",
+      "observed",
+      expect.objectContaining({
+        platform: "slack",
+        os: "macos",
+        leaveControlPresent: true,
+        leaveControlVisible: false,
+        matchedBy: "context",
+      }),
+    );
+    const contextualObservation = mocks.diagnostic.mock.calls.find(
+      ([, kind, , evidence]) =>
+        kind === "detector_observation" && evidence?.matchedBy === "context",
+    );
+    expect(contextualObservation?.[3]).not.toHaveProperty(
+      "leaveControlEnabled",
+    );
     snapshot([]);
     await tick(58_000);
     expect(stop).not.toHaveBeenCalled();
+    expect(mocks.diagnostic).toHaveBeenCalledWith(
+      "session-1",
+      "detector_observation",
+      "observed",
+      expect.objectContaining({
+        observation: "unknown",
+        inspectionStatus: "ok",
+        micStatus: "ok",
+        micActive: false,
+        owned: true,
+        autoStop: true,
+      }),
+    );
+    expect(mocks.diagnostic).toHaveBeenCalledWith(
+      "session-1",
+      "policy_decision",
+      "ax_unknown",
+      expect.objectContaining({ observation: "unknown", speakerRecent: true }),
+    );
     await tick(6_000);
     expect(stop).toHaveBeenCalledOnce();
+    expect(mocks.diagnostic).toHaveBeenCalledWith(
+      "session-1",
+      "stop_requested",
+      "grace_elapsed",
+      expect.objectContaining({ observation: "unknown", owned: true }),
+    );
   });
 
   it("holds unknown call evidence during a network interruption and stops on reliable leave after reconnect", async () => {

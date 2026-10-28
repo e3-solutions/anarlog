@@ -5,6 +5,14 @@ import { commands as analytics } from "@anlg/plugin-analytics";
 import { commands as permissions } from "@anlg/plugin-permissions";
 import { useMountEffect } from "@anlg/ui/hooks/use-mount-effect";
 
+import {
+  acknowledgeRecordingDiagnostics,
+  configureRecordingDiagnostics,
+  recordRecordingDiagnostic,
+  recordingDiagnosticBatch,
+  untilDiagnosticDeadline,
+} from "./recording-diagnostics";
+
 import { useAuth } from "~/auth";
 import { env } from "~/env";
 import {
@@ -19,6 +27,20 @@ import { listenerStore } from "~/store/zustand/listener/instance";
 export function ApplicationHealthLifecycle() {
   const { session, supabase } = useAuth();
   const settings = useStoredSettingValuesQuery();
+  if (
+    env.VITE_E3_SCRIBE === "true" &&
+    isTauri() &&
+    session &&
+    settings.data &&
+    !settings.error &&
+    !resolveConfigValue("telemetry_consent", settings.data)
+  )
+    return (
+      <DisabledRecordingDiagnostics
+        key={session.user.id}
+        userId={session.user.id}
+      />
+    );
   if (
     env.VITE_E3_SCRIBE !== "true" ||
     !isTauri() ||
@@ -35,9 +57,22 @@ export function ApplicationHealthLifecycle() {
   );
 }
 
+function DisabledRecordingDiagnostics({ userId }: { userId: string }) {
+  useMountEffect(() => {
+    void configureRecordingDiagnostics(userId, false, true).catch(() => {});
+  });
+  return null;
+}
+
 function ActiveApplicationHealth({ userId }: { userId: string }) {
   const auth = useLatestRef(useAuth());
   useMountEffect(() => {
+    let disposed = false;
+    let diagnosticsReady = false;
+    let flushing = false;
+    let warned = false;
+    let healthWarned = false;
+    let nativeDeviceId: string | null = null;
     const allowed = async (signal: AbortSignal) => {
       const stored = await getStoredSettingValues();
       const disabled = await analytics.isDisabled();
@@ -50,6 +85,104 @@ function ActiveApplicationHealth({ userId }: { userId: string }) {
       );
     };
     let request: AbortController | undefined;
+    let diagnosticsRequest: AbortController | undefined;
+    const flushDiagnostics = async () => {
+      if (disposed || flushing) return;
+      flushing = true;
+      const current = new AbortController();
+      diagnosticsRequest = current;
+      const { signal } = current;
+      const timeout = setTimeout(() => current.abort(), 10_000);
+      const work = async () => {
+        if (!(await allowed(signal))) {
+          const stored = await getStoredSettingValues();
+          const disabled = await analytics.isDisabled();
+          if (!disposed)
+            await configureRecordingDiagnostics(
+              userId,
+              false,
+              !resolveConfigValue("telemetry_consent", stored) ||
+                (disabled.status === "ok" && disabled.data),
+            );
+          diagnosticsReady = false;
+          return;
+        }
+        if (disposed) return;
+        if (!diagnosticsReady) {
+          await configureRecordingDiagnostics(userId, true);
+          diagnosticsReady = true;
+        }
+        if (disposed) return;
+        const batch = await recordingDiagnosticBatch(userId);
+        signal.throwIfAborted();
+        nativeDeviceId = batch.deviceId;
+        const stored = await getStoredSettingValues();
+        const live = listenerStore.getState().live;
+        recordRecordingDiagnostic(
+          live.captureOwnerUserId === userId ? live.sessionId : null,
+          "policy_decision",
+          "collector_started",
+          {
+            autoStop: resolveConfigValue("auto_stop_meetings", stored),
+            autoStart: resolveConfigValue(
+              "auto_start_detected_meetings",
+              stored,
+            ),
+            queuedCount: batch.queuedCount,
+            droppedCount: Math.min(batch.droppedCount, 1_000_000_000),
+            retentionDropped: batch.retentionDropped,
+            ...(batch.lastAckAtMs === null
+              ? {}
+              : {
+                  lastAckAgeMs: Math.min(
+                    86_400_000,
+                    Math.max(0, Date.now() - batch.lastAckAtMs),
+                  ),
+                }),
+          },
+        );
+        if (batch.events.length === 0) return;
+        const session = await auth.current.getSessionForRequest();
+        if (
+          !session ||
+          session.user.id !== userId ||
+          disposed ||
+          !(await allowed(signal))
+        )
+          return;
+        signal.throwIfAborted();
+        const { data, error } = await auth.current
+          .supabase!.rpc("recording_diagnostics_ingest", {
+            p_events: batch.events,
+          })
+          .setHeader("Authorization", `Bearer ${session.access_token}`)
+          .abortSignal(signal);
+        if (error) throw error;
+        const sent = new Set(batch.events.map((event) => event.id));
+        if (
+          !Array.isArray(data) ||
+          data.some((id) => typeof id !== "string" || !sent.has(id))
+        )
+          throw new Error("Invalid diagnostic acknowledgement");
+        if (disposed || !(await allowed(signal))) return;
+        await acknowledgeRecordingDiagnostics(userId, data);
+        warned = false;
+      };
+      try {
+        await untilDiagnosticDeadline(work(), signal);
+      } catch {
+        if (!disposed && !warned) {
+          warned = true;
+          console.warn(
+            "Recording diagnostics delivery failed; queued events will retry.",
+          );
+          recordRecordingDiagnostic(null, "policy_decision", "delivery_failed");
+        }
+      } finally {
+        clearTimeout(timeout);
+        flushing = false;
+      }
+    };
     const report = async () => {
       request = new AbortController();
       const current = request;
@@ -68,7 +201,8 @@ function ActiveApplicationHealth({ userId }: { userId: string }) {
           ]);
         signal.throwIfAborted();
         const key = `e3-application-health-device:${userId}`;
-        const deviceId = localStorage.getItem(key) || crypto.randomUUID();
+        const deviceId =
+          nativeDeviceId || localStorage.getItem(key) || crypto.randomUUID();
         localStorage.setItem(key, deviceId);
         const live = listenerStore.getState().live;
         const owned = live.captureOwnerUserId === userId;
@@ -120,17 +254,36 @@ function ActiveApplicationHealth({ userId }: { userId: string }) {
           .setHeader("Authorization", `Bearer ${session.access_token}`)
           .abortSignal(signal);
         if (error) throw error;
+        healthWarned = false;
       } catch {
-        // Reporting is best effort; the next heartbeat sends current state.
+        if (!disposed && !healthWarned) {
+          healthWarned = true;
+          console.warn(
+            "Application health report failed; the next heartbeat will retry.",
+          );
+        }
       } finally {
         clearTimeout(timeout);
       }
     };
-    void report();
+    void flushDiagnostics().finally(() => {
+      if (!disposed) void report();
+    });
     const timer = setInterval(() => void report(), 60_000);
+    const diagnosticsTimer = setInterval(() => void flushDiagnostics(), 15_000);
     return () => {
+      disposed = true;
       clearInterval(timer);
+      clearInterval(diagnosticsTimer);
       request?.abort();
+      diagnosticsRequest?.abort();
+      void configureRecordingDiagnostics(userId, false).catch(() => {});
+      void getStoredSettingValues()
+        .then((stored) => {
+          if (!resolveConfigValue("telemetry_consent", stored))
+            return configureRecordingDiagnostics(userId, false, true);
+        })
+        .catch(() => {});
     };
   });
   return null;

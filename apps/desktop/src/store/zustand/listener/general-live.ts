@@ -46,6 +46,7 @@ import {
   type TranscriptState,
 } from "./transcript";
 
+import { recordRecordingDiagnostic } from "~/application-health/recording-diagnostics";
 import { prepareSessionPeaks } from "~/audio-player/waveform";
 import { runMeetingCompletedAutomations } from "~/automations/engine";
 import { syncCloudApiSnapshotBestEffort } from "~/cloud-api/client";
@@ -1038,6 +1039,7 @@ export const stopLiveSession = <T extends GeneralState>(
   get: StoreApi<T>["getState"],
 ) => {
   const sessionId = get().live.sessionId;
+  recordRecordingDiagnostic(sessionId, "stop_requested", "observed");
 
   if (sessionId) {
     setLiveState(set, (live) => {
@@ -1057,6 +1059,7 @@ export const stopLiveSession = <T extends GeneralState>(
   void Effect.runPromiseExit(program).then((exit) => {
     Exit.match(exit, {
       onFailure: (cause) => {
+        recordRecordingDiagnostic(sessionId, "capture_error", "stop_failed");
         console.error("Failed to stop session:", cause);
         setLiveState(set, (live) => {
           if (sessionId && live.sessionId === sessionId) {

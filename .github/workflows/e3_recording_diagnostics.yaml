@@ -1,0 +1,61 @@
+name: E3 Recording Diagnostics
+
+on:
+  pull_request:
+    paths:
+      - apps/desktop/src/application-health/**
+      - apps/desktop/src/stt/**
+      - crates/detect/**
+      - crates/listener-core/**
+      - plugins/detect/**
+      - plugins/transcription/**
+      - .github/workflows/e3_recording_diagnostics.yaml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e3-recording-diagnostics-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    if: github.repository == 'e3-solutions/anarlog'
+    runs-on: macos-26
+    timeout-minutes: 90
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          submodules: recursive
+          lfs: true
+          persist-credentials: false
+      - uses: ./.github/actions/pnpm_install # zizmor: ignore[self-repository] -- Match the reviewed branch lockfile.
+      - uses: ./.github/actions/install_desktop_deps # zizmor: ignore[self-repository] -- Match native desktop setup.
+        with:
+          target: macos
+      - uses: ./.github/actions/rust_install # zizmor: ignore[self-repository] -- Match the checked-in toolchain.
+        with:
+          platform: macos
+          cache-on-failure: "true"
+      - run: echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
+      - run: |
+          cargo test --locked -p tauri-plugin-transcription --lib test::export_types -- --exact
+          cargo test --locked -p tauri-plugin-detect --lib test::export_types -- --exact
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: recording-diagnostics-bindings
+          path: |
+            plugins/transcription/js/bindings.gen.ts
+            plugins/detect/js/bindings.gen.ts
+            plugins/transcription/permissions/
+          if-no-files-found: error
+          retention-days: 7
+      - run: |
+          cargo test --locked -p tauri-plugin-transcription --lib recording_diagnostics::tests
+          cargo test --locked -p detect --lib --features screen slack
+          cargo test --locked -p listener-core --lib -- --test-threads=1

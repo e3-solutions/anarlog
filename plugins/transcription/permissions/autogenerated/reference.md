@@ -4,6 +4,10 @@ Default permissions for the plugin
 
 #### This default permission set includes the following:
 
+- `allow-recording-diagnostics-configure`
+- `allow-recording-diagnostics-record`
+- `allow-recording-diagnostics-batch`
+- `allow-recording-diagnostics-ack`
 - `allow-shared-recording-configuration`
 - `allow-meeting-recording-control-set`
 - `allow-meeting-recording-exclusions`
@@ -1006,6 +1010,110 @@ Enables the reconcile_refined_speaker_clusters command without any pre-configure
 <td>
 
 Denies the reconcile_refined_speaker_clusters command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:allow-recording-diagnostics-ack`
+
+</td>
+<td>
+
+Enables the recording_diagnostics_ack command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:deny-recording-diagnostics-ack`
+
+</td>
+<td>
+
+Denies the recording_diagnostics_ack command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:allow-recording-diagnostics-batch`
+
+</td>
+<td>
+
+Enables the recording_diagnostics_batch command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:deny-recording-diagnostics-batch`
+
+</td>
+<td>
+
+Denies the recording_diagnostics_batch command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:allow-recording-diagnostics-configure`
+
+</td>
+<td>
+
+Enables the recording_diagnostics_configure command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:deny-recording-diagnostics-configure`
+
+</td>
+<td>
+
+Denies the recording_diagnostics_configure command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:allow-recording-diagnostics-record`
+
+</td>
+<td>
+
+Enables the recording_diagnostics_record command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:deny-recording-diagnostics-record`
+
+</td>
+<td>
+
+Denies the recording_diagnostics_record command without any pre-configured scope.
 
 </td>
 </tr>

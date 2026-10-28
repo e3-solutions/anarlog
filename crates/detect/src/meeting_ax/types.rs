@@ -55,10 +55,29 @@ pub(super) struct MeetingChatTarget {
     pub(super) signals: Vec<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum RecordingEvidenceMatch {
+    Context,
+    Toolbar,
+    None,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingEvidence {
+    pub leave_control_present: bool,
+    pub leave_control_enabled: Option<bool>,
+    pub leave_control_visible: bool,
+    pub matched_by: RecordingEvidenceMatch,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct MeetingAccessibilityInspection {
     pub active_call: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recording_evidence: Option<RecordingEvidence>,
     pub app: MeetingApp,
     pub pid: i32,
     pub platform: MeetingPlatform,

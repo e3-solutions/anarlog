@@ -24,6 +24,7 @@ import {
   resolveRecordingOccurrence,
 } from "./recording-exclusions";
 
+import { recordRecordingDiagnostic } from "~/application-health/recording-diagnostics";
 import { useOptionalAuth } from "~/auth";
 import { createSession, softDeleteSession } from "~/session/queries";
 import { useConfigValue } from "~/shared/config";
@@ -60,6 +61,30 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
     } | null = null;
     const suppressed = new Map<string, AutomaticMeeting>();
     let retryAfter = 0;
+    let probeStartedAt = 0;
+    let phase: "probe" | "sharing" | "recording" = "probe";
+    let probeEvidence: NonNullable<
+      Parameters<typeof recordRecordingDiagnostic>[3]
+    > = {};
+    const diagnose = (
+      kind: string,
+      reason: string,
+      evidence: Parameters<typeof recordRecordingDiagnostic>[3] = {},
+      sessionId = capture?.sessionId ?? store.getState().live.sessionId,
+    ) => {
+      const os = platform();
+      recordRecordingDiagnostic(sessionId, kind, reason, {
+        platform: capture?.meeting.platform ?? "unknown",
+        os:
+          os === "macos" || os === "linux" || os === "windows" ? os : "unknown",
+        autoStart: Boolean(policy.current.enabled),
+        autoStop: policy.current.autoStop !== false,
+        identityReady: identityReady.current,
+        online: navigator.onLine,
+        owned: Boolean(capture && capture.sessionId === sessionId),
+        ...evidence,
+      });
+    };
 
     reset.current = () => {
       capture = null;
@@ -82,6 +107,7 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
         previous.live.sessionId === capture.sessionId
       ) {
         // A manual stop must stand down until this call has actually ended.
+        diagnose("policy_decision", "observed", { owned: false });
         suppressed.set(capture.meeting.key, capture.meeting);
         capture = null;
         ownedSession.current = null;
@@ -89,19 +115,57 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
     });
 
     async function reconcile() {
-      if (cancelled || checking || !identityReady.current) return;
+      if (cancelled || checking) return;
+      if (!identityReady.current) {
+        diagnose("policy_decision", "identity_unavailable");
+        return;
+      }
       if (!policy.current.enabled) {
+        diagnose("policy_decision", "auto_start_disabled");
         reset.current();
         return;
       }
       checking = true;
+      probeStartedAt = Date.now();
+      phase = "probe";
+      const currentProbe: typeof probeEvidence = {
+        inspectionStatus: "pending",
+        micStatus: "pending",
+      };
+      probeEvidence = currentProbe;
+      diagnose("detector_observation", "probe_started", probeEvidence);
       try {
         const [inspection, microphones] = await Promise.all([
-          detectCommands.inspectMeetingAccessibility(),
-          detectCommands.listMicUsingApplications(),
+          detectCommands.inspectMeetingAccessibility().then(
+            (result) => {
+              currentProbe.inspectionStatus = result.status;
+              return result;
+            },
+            (error) => {
+              currentProbe.inspectionStatus = "error";
+              throw error;
+            },
+          ),
+          detectCommands.listMicUsingApplications().then(
+            (result) => {
+              currentProbe.micStatus = result.status;
+              return result;
+            },
+            (error) => {
+              currentProbe.micStatus = "error";
+              throw error;
+            },
+          ),
         ]);
-        if (cancelled || !policy.current.enabled || inspection.status !== "ok")
+        if (cancelled) return;
+        if (!policy.current.enabled) {
+          diagnose("policy_decision", "auto_start_disabled", probeEvidence);
           return;
+        }
+        if (inspection.status !== "ok") {
+          diagnose("detector_observation", "ax_error", probeEvidence);
+          return;
+        }
         const selected = selectAutomaticMeeting(
           inspection.data.filter(
             (entry) => !policy.current.ignored?.includes(entry.app.id),
@@ -111,6 +175,13 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
             slack: policy.current.enabled,
           },
         );
+        if (!capture)
+          diagnose("detector_observation", "observed", {
+            ...probeEvidence,
+            observation: selected ? "active" : "unknown",
+            platform: selected?.platform ?? "unknown",
+            probeElapsedMs: Date.now() - probeStartedAt,
+          });
         const now = Date.now();
         for (const [key, meeting] of suppressed) {
           if (
@@ -126,15 +197,23 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
         }
 
         const owner = account.current;
+        phase = "sharing";
         if (owner) await replayNativeRecordingExclusions(owner);
-        if (cancelled || !identityReady.current || account.current !== owner)
+        if (cancelled) return;
+        if (!identityReady.current || account.current !== owner) {
+          diagnose("policy_decision", "account_changed", probeEvidence);
           return;
+        }
         const occurrence =
           owner && selected
             ? await resolveRecordingOccurrence(owner, { meeting: selected })
             : null;
-        if (cancelled || !identityReady.current || account.current !== owner)
+        if (cancelled) return;
+        if (!identityReady.current || account.current !== owner) {
+          diagnose("policy_decision", "account_changed", probeEvidence);
           return;
+        }
+        phase = "recording";
         if (owner && occurrence && isRecordingExcluded(owner, occurrence)) {
           const live = store.getState().live;
           const blockedSession =
@@ -142,6 +221,7 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
               ? capture.sessionId
               : null;
           if (blockedSession) {
+            diagnose("stop_requested", "recording_excluded", probeEvidence);
             capture = null;
             ownedSession.current = null;
             try {
@@ -198,6 +278,47 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
               microphones.data.some(
                 (app) => app.id === capture!.meeting.app.id,
               );
+            const recordingEvidence = (
+              inspection.data.find(
+                (row) =>
+                  row.app.id === capture!.meeting.app.id &&
+                  row.pid === capture!.meeting.pid &&
+                  row.platform === capture!.meeting.platform,
+              ) as
+                | {
+                    recordingEvidence?: {
+                      leaveControlPresent: boolean;
+                      leaveControlEnabled: boolean | null;
+                      leaveControlVisible: boolean;
+                      matchedBy: "context" | "toolbar" | "none";
+                    } | null;
+                  }
+                | undefined
+            )?.recordingEvidence;
+            const evidence = {
+              ...probeEvidence,
+              ...(recordingEvidence && {
+                leaveControlPresent: recordingEvidence.leaveControlPresent,
+                leaveControlVisible: recordingEvidence.leaveControlVisible,
+                matchedBy: recordingEvidence.matchedBy,
+                ...(typeof recordingEvidence.leaveControlEnabled ===
+                  "boolean" && {
+                  leaveControlEnabled: recordingEvidence.leaveControlEnabled,
+                }),
+              }),
+              observation,
+              micActive,
+              speakerRecent:
+                now - capture.lastAudibleAt <
+                AUTOMATIC_MEETING_UNKNOWN_GRACE_MS,
+              missingForMs:
+                capture.missingSince === null ? 0 : now - capture.missingSince,
+              networkHoldRemainingMs: Math.max(
+                0,
+                (capture.networkHoldUntil ?? now) - now,
+              ),
+            };
+            diagnose("detector_observation", "observed", evidence);
             if (observation === "unknown" && !navigator.onLine)
               capture.networkHoldUntil ??= now + AUTO_STOP_NETWORK_HOLD_MS;
             if (
@@ -215,6 +336,17 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
                 capture.missingObservation = null;
               }
               if (observation === "active") capture.networkHoldUntil = null;
+              diagnose(
+                "policy_decision",
+                policy.current.autoStop === false
+                  ? "auto_stop_disabled"
+                  : observation === "active"
+                    ? "meeting_active"
+                    : macMeet
+                      ? "ax_unknown"
+                      : "mic_still_active",
+                evidence,
+              );
               return;
             }
             if (capture.missingObservation !== observation) {
@@ -226,14 +358,21 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
               if (
                 capture.networkHoldUntil !== null &&
                 now < capture.networkHoldUntil
-              )
+              ) {
+                diagnose("policy_decision", "network_recovery_hold", {
+                  ...evidence,
+                  networkHoldRemainingMs: capture.networkHoldUntil - now,
+                });
                 return;
+              }
             }
             if (
               observation === "unknown" &&
               now - capture.lastAudibleAt < AUTOMATIC_MEETING_UNKNOWN_GRACE_MS
-            )
+            ) {
+              diagnose("policy_decision", "ax_unknown", evidence);
               return;
+            }
             if (
               policy.current.autoStop !== false &&
               now - capture.missingSince >=
@@ -241,14 +380,32 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
                   ? AUTOMATIC_MEETING_UNKNOWN_GRACE_MS
                   : AUTOMATIC_MEETING_STOP_GRACE_MS)
             ) {
+              diagnose("stop_requested", "grace_elapsed", {
+                ...evidence,
+                missingForMs: now - capture.missingSince,
+              });
               capture = null;
               ownedSession.current = null;
               store.getState().stop();
+            } else {
+              diagnose(
+                "policy_decision",
+                policy.current.autoStop === false
+                  ? "auto_stop_disabled"
+                  : "grace_pending",
+                { ...evidence, missingForMs: now - capture.missingSince },
+              );
             }
             return;
           }
-          if (capture.seenActive) return;
-          if (now - capture.startedAt < 35_000) return;
+          if (capture.seenActive) {
+            diagnose("policy_decision", "owner_mismatch", probeEvidence);
+            return;
+          }
+          if (now - capture.startedAt < 35_000) {
+            diagnose("policy_decision", "grace_pending", probeEvidence);
+            return;
+          }
           const unusedSessionId = capture.sessionId;
           const tabsState = useTabs.getState();
           const pendingTab = tabsState.tabs?.find(
@@ -262,7 +419,10 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
             });
           }
           if (live.loading) {
-            if (live.sessionId === unusedSessionId) store.getState().stop();
+            if (live.sessionId === unusedSessionId) {
+              diagnose("stop_requested", "probe_timeout", probeEvidence);
+              store.getState().stop();
+            }
             retryAfter = now + 5_000;
             return;
           }
@@ -272,6 +432,11 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
           retryAfter = now + 5_000;
           return;
         }
+        if (live.status === "active" && !capture)
+          diagnose("policy_decision", "owner_mismatch", {
+            ...probeEvidence,
+            owned: false,
+          });
         if (
           !selected ||
           [...suppressed.values()].some((meeting) =>
@@ -292,6 +457,10 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
               networkHoldUntil: null,
             };
             ownedSession.current = live.sessionId;
+            diagnose("policy_decision", "observed", {
+              ...probeEvidence,
+              owned: true,
+            });
           }
           return;
         }
@@ -333,6 +502,10 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
             networkHoldUntil: null,
           };
           ownedSession.current = sessionId;
+          diagnose("policy_decision", "observed", {
+            ...probeEvidence,
+            owned: true,
+          });
           store.getState().setTriggerAppIds([selected.app.id]);
           useTabs.getState().openNew({
             type: "sessions",
@@ -349,6 +522,11 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
           }
         }
       } catch (error) {
+        diagnose(
+          "detector_observation",
+          phase === "sharing" ? "sharing_lookup_failed" : "probe_error",
+          { ...probeEvidence, probeElapsedMs: Date.now() - probeStartedAt },
+        );
         retryAfter = Date.now() + 5_000;
         console.warn(
           "[listener] automatic meeting detection unavailable",
@@ -359,6 +537,20 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
       }
     }
 
+    const watchdog = setInterval(() => {
+      if (!checking || cancelled) return;
+      const elapsed = Date.now() - probeStartedAt;
+      if (elapsed < 10_000) return;
+      diagnose(
+        "detector_observation",
+        phase === "sharing"
+          ? "sharing_lookup_pending"
+          : probeEvidence.inspectionStatus === "pending"
+            ? "ax_probe_timeout"
+            : "probe_timeout",
+        { ...probeEvidence, probeElapsedMs: elapsed },
+      );
+    }, 10_000);
     void reconcile();
     const interval = setInterval(
       () => void reconcile(),
@@ -367,6 +559,7 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
     return () => {
       cancelled = true;
       clearInterval(interval);
+      clearInterval(watchdog);
       unsubscribe();
     };
   });

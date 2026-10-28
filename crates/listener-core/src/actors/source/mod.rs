@@ -580,10 +580,12 @@ impl Actor for SourceActor {
         st.capture_frames.take();
         st.capture_retry.take();
         st.capture_output.take();
-        st.pipeline.flush_recorder().await;
         if let Some(task) = st.run_task.take() {
             task.abort();
+            let _ = task.await;
         }
+        st.runtime.capture_source_ended(&st.session_id);
+        st.pipeline.flush_recorder().await;
 
         Ok(())
     }

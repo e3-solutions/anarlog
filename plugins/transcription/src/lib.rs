@@ -16,6 +16,7 @@ mod error;
 mod listener;
 mod listener2;
 mod live_journal;
+mod recording_diagnostics;
 mod session_transcript;
 mod shared_recording;
 mod stopped_captures;
@@ -142,6 +143,10 @@ fn make_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .plugin_name(PLUGIN_NAME)
         .typ::<CaptureParams>()
         .commands(tauri_specta::collect_commands![
+            recording_diagnostics::recording_diagnostics_configure,
+            recording_diagnostics::recording_diagnostics_record,
+            recording_diagnostics::recording_diagnostics_batch,
+            recording_diagnostics::recording_diagnostics_ack,
             shared_recording::shared_recording_configuration::<tauri::Wry>,
             shared_recording::meeting_control::meeting_recording_control_set,
             shared_recording::meeting_control::meeting_recording_exclusions,
@@ -226,6 +231,13 @@ pub fn init() -> tauri::plugin::TauriPlugin<tauri::Wry> {
                 app: app_handle.clone(),
             }));
             app.manage(state);
+            app.manage(recording_diagnostics::RecordingDiagnostics::new(
+                app.path()
+                    .app_data_dir()
+                    .ok()
+                    .map(|dir| dir.join("recording-diagnostics")),
+                app.package_info().version.to_string(),
+            ));
             app.manage(shared_recording::QueueState::default());
             shared_recording::clear_legacy_playback(&app_handle);
             app.manage(live_journal::LiveJournalRegistry::default());

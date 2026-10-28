@@ -10,6 +10,10 @@ const state = vi.hoisted(() => ({
   requestSession: vi.fn(),
   queue: vi.fn(),
   rpc: vi.fn(),
+  invoke: vi.fn(),
+  events: [] as Array<Record<string, unknown>>,
+  received: [] as Array<Record<string, unknown>>,
+  offline: false,
 }));
 const stored = () => ({
   values: {
@@ -23,7 +27,10 @@ const stored = () => ({
     "auto_start_scheduled_meetings",
   ]),
 });
-vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => state.native }));
+vi.mock("@tauri-apps/api/core", () => ({
+  isTauri: () => state.native,
+  invoke: state.invoke,
+}));
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: state.version }));
 vi.mock("@anlg/plugin-analytics", () => ({
   commands: {
@@ -68,6 +75,36 @@ beforeEach(() => {
   state.native = true;
   state.userId = "account-a";
   state.consent = true;
+  state.offline = false;
+  state.events = [];
+  state.received = [];
+  state.invoke.mockImplementation(
+    async (
+      command: string,
+      args: {
+        eventIds?: string[];
+        enabled?: boolean;
+        purge?: boolean;
+        userId?: string;
+      },
+    ) => {
+      if (command.endsWith("_batch"))
+        return {
+          deviceId: `fixture-device:${args.userId}`,
+          bootId: "fixture-boot",
+          events: [...state.events],
+          queuedCount: state.events.length,
+          droppedCount: 0,
+          retentionDropped: false,
+          lastAckAtMs: null,
+        };
+      if (command.endsWith("_ack"))
+        state.events = state.events.filter(
+          (event) => !args.eventIds?.includes(event.id as string),
+        );
+      if (command.endsWith("_configure") && args.purge) state.events = [];
+    },
+  );
   state.queue.mockResolvedValue([]);
   state.version.mockResolvedValue("0.1.21");
   state.permission.mockResolvedValue({ status: "ok", data: "authorized" });
@@ -75,9 +112,21 @@ beforeEach(() => {
     user: { id: state.userId },
     access_token: "fixture-token",
   }));
-  state.rpc.mockImplementation(() => ({
-    setHeader: () => ({ abortSignal: async () => ({ error: null }) }),
-  }));
+  state.rpc.mockImplementation(
+    (name: string, args: { p_events?: Array<Record<string, unknown>> }) => ({
+      setHeader: () => ({
+        abortSignal: async () => {
+          if (name !== "recording_diagnostics_ingest") return { error: null };
+          if (state.offline) return { data: null, error: new Error("offline") };
+          state.received.push(...(args.p_events ?? []));
+          return {
+            data: args.p_events?.map((event) => event.id) ?? [],
+            error: null,
+          };
+        },
+      }),
+    }),
+  );
   localStorage.clear();
 });
 afterEach(() => {
@@ -158,4 +207,63 @@ it("drops in-flight observations after consent revocation or account changes and
     await vi.advanceTimersByTimeAsync(60_000);
   });
   expect(state.rpc.mock.calls[1][1].p_snapshot.deviceId).not.toBe(firstId);
+});
+
+it("retains offline diagnostic evidence until server acknowledgement and purges it on consent revocation", async () => {
+  state.events = [
+    {
+      id: "event-1",
+      kind: "policy_decision",
+      reason: "mic_still_active",
+      sessionId: "session-1",
+    },
+  ];
+  state.offline = true;
+  const view = render(<ApplicationHealthLifecycle />);
+  await tick();
+  expect(state.events).toHaveLength(1);
+  expect(state.received).toEqual([]);
+  state.offline = false;
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(15_000);
+  });
+  expect(state.received).toEqual([
+    expect.objectContaining({ reason: "mic_still_active" }),
+  ]);
+  expect(state.events).toEqual([]);
+  state.events = [
+    { id: "event-2", kind: "stop_requested", reason: "manual_stop" },
+  ];
+  state.consent = false;
+  view.rerender(<ApplicationHealthLifecycle />);
+  await tick();
+  expect(state.events).toEqual([]);
+  expect(state.received).toHaveLength(1);
+});
+
+it("recovers diagnostic delivery after a native batch exceeds its deadline without sending the stale attempt", async () => {
+  state.events = [
+    { id: "event-1", kind: "policy_decision", reason: "mic_still_active" },
+  ];
+  const native = state.invoke.getMockImplementation()!;
+  let finishBatch: ((value: unknown) => void) | undefined;
+  state.invoke.mockImplementation((command: string, args: never) => {
+    if (command.endsWith("_batch") && !finishBatch)
+      return new Promise((resolve) => {
+        finishBatch = resolve;
+      });
+    return native(command, args);
+  });
+  render(<ApplicationHealthLifecycle />);
+  await tick();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(10_001);
+  });
+  expect(state.received).toEqual([]);
+  await act(async () => {
+    finishBatch?.(await native("recording_diagnostics_batch", {}));
+    await vi.advanceTimersByTimeAsync(5_000);
+  });
+  expect(state.received).toEqual([expect.objectContaining({ id: "event-1" })]);
+  expect(state.events).toEqual([]);
 });

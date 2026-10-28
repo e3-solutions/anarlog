@@ -199,7 +199,7 @@ use types::{AxChatElement, SlackHuddleRoot};
 pub use types::{
     AxRect, MeetingAccessibilityInspection, MeetingApp, MeetingCapturedChatMessage,
     MeetingChatCaptureResult, MeetingChatDirection, MeetingChatSendResult, MeetingPlatform,
-    MeetingSurface,
+    MeetingSurface, RecordingEvidence, RecordingEvidenceMatch,
 };
 
 #[cfg(any(test, target_os = "macos", target_os = "linux", target_os = "windows"))]
@@ -343,6 +343,7 @@ fn browser_inspections_from_roots(
                 window_title: root.window_title,
                 call_identity,
                 open_call_identities: None,
+                recording_evidence: None,
                 remote_screen_share: active_call && nodes_show_remote_screen_share(&root.nodes),
                 warnings: row_warnings,
             }
@@ -363,6 +364,7 @@ fn browser_inspections_from_roots(
             window_title: None,
             call_identity: None,
             open_call_identities: None,
+            recording_evidence: None,
             remote_screen_share: false,
             warnings,
         });
@@ -2214,6 +2216,8 @@ fn inspect_app(
     let surface = classify_surface(&app.id, &platform);
     let active_call =
         accessibility_trusted && scoped_meeting_is_active(&platform, &nodes, native_scope);
+    let recording_evidence = (native_scope && platform == MeetingPlatform::Slack)
+        .then(|| slack_recording_evidence(&nodes));
     MeetingAccessibilityInspection {
         active_call,
         app,
@@ -2224,6 +2228,7 @@ fn inspect_app(
         window_title,
         call_identity: None,
         open_call_identities: None,
+        recording_evidence,
         remote_screen_share: active_call && nodes_show_remote_screen_share(&nodes),
         warnings,
     }
@@ -2532,6 +2537,37 @@ fn slack_huddle_context(nodes: &[AxNode]) -> Option<(String, String)> {
     }
 
     None
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn slack_recording_evidence(nodes: &[AxNode]) -> RecordingEvidence {
+    let matched_by = if slack_huddle_context(nodes).is_some() {
+        RecordingEvidenceMatch::Context
+    } else if slack_huddle_recording_label(nodes).is_some() {
+        RecordingEvidenceMatch::Toolbar
+    } else {
+        RecordingEvidenceMatch::None
+    };
+    let leave_control = |node: &&AxNode| {
+        matches!(node.role.as_deref(), Some("AXButton") | Some("AXMenuItem"))
+            && node_labels(node).any(|label| label.trim().eq_ignore_ascii_case("leave huddle"))
+    };
+    let selected = nodes
+        .iter()
+        .filter(leave_control)
+        .find(|node| match matched_by {
+            RecordingEvidenceMatch::Context => is_enabled_slack_leave_control(node),
+            RecordingEvidenceMatch::Toolbar => {
+                node.enabled == Some(true) && node_has_positive_bounds(node)
+            }
+            RecordingEvidenceMatch::None => true,
+        });
+    RecordingEvidence {
+        leave_control_present: selected.is_some(),
+        leave_control_enabled: selected.and_then(|node| node.enabled),
+        leave_control_visible: selected.is_some_and(node_has_positive_bounds),
+        matched_by,
+    }
 }
 
 #[cfg(any(test, target_os = "macos"))]
