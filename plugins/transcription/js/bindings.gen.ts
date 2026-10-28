@@ -1310,8 +1310,6 @@ export type DiagnosticBatch = {
   events: DiagnosticEvent[];
   droppedCount: number;
   retentionDropped: boolean;
-  lastAckAtMs: number | null;
-  queuedCount: number;
 };
 export type DiagnosticEvent = {
   id: string;
@@ -1325,33 +1323,7 @@ export type DiagnosticEvent = {
   sessionId: string | null;
   kind: string;
   reason: string;
-  evidence: Evidence;
-};
-export type Evidence = {
-  observation?: string | null;
-  inspectionStatus?: string | null;
-  micStatus?: string | null;
-  micActive?: boolean | null;
-  autoStop?: boolean | null;
-  autoStart?: boolean | null;
-  identityReady?: boolean | null;
-  online?: boolean | null;
-  owned?: boolean | null;
-  speakerRecent?: boolean | null;
-  missingForMs?: number | null;
-  networkHoldRemainingMs?: number | null;
-  probeElapsedMs?: number | null;
-  queuedCount?: number | null;
-  droppedCount?: number | null;
-  retentionDropped?: boolean | null;
-  lastAckAgeMs?: number | null;
-  platform?: string | null;
-  os?: string | null;
-  leaveControlPresent?: boolean | null;
-  leaveControlEnabled?: boolean | null;
-  leaveControlVisible?: boolean | null;
-  matchedBy?: string | null;
-  sourceActorPresent?: boolean | null;
+  evidence: Partial<{ [key in string]: JsonValue }>;
 };
 export type FinalizedWord = {
   id: string;
@@ -1382,7 +1354,7 @@ export type Input = {
   sessionId: string | null;
   kind: string;
   reason: string;
-  evidence?: Evidence;
+  evidence?: Partial<{ [key in string]: JsonValue }>;
 };
 export type Job = {
   id: string;

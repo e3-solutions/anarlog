@@ -1,5 +1,6 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { isTauri } from "@tauri-apps/api/core";
+import { version as osVersion } from "@tauri-apps/plugin-os";
 
 import { commands as analytics } from "@anlg/plugin-analytics";
 import { commands as permissions } from "@anlg/plugin-permissions";
@@ -123,6 +124,7 @@ function ActiveApplicationHealth({ userId }: { userId: string }) {
           {
             droppedCount: Math.min(batch.droppedCount, 1_000_000_000),
             retentionDropped: batch.retentionDropped,
+            osVersion: osVersion().match(/^\d+(?:\.\d+)*/)?.[0],
           },
         );
         if (batch.events.length === 0) return;
@@ -142,14 +144,25 @@ function ActiveApplicationHealth({ userId }: { userId: string }) {
           .setHeader("Authorization", `Bearer ${session.access_token}`)
           .abortSignal(signal);
         if (error) throw error;
+        const accepted = Array.isArray(data) ? data : data?.accepted;
+        const rejected = Array.isArray(data) ? [] : data?.rejected;
         const sent = new Set(batch.events.map((event) => event.id));
-        if (
-          !Array.isArray(data) ||
-          data.some((id) => typeof id !== "string" || !sent.has(id))
-        )
+        if (!Array.isArray(accepted) || !Array.isArray(rejected))
+          throw new Error("Invalid diagnostic acknowledgement");
+        const acknowledged = [...accepted, ...rejected];
+        if (acknowledged.some((id) => typeof id !== "string" || !sent.has(id)))
           throw new Error("Invalid diagnostic acknowledgement");
         if (disposed || !(await allowed(signal))) return;
-        await acknowledgeRecordingDiagnostics(userId, data);
+        await acknowledgeRecordingDiagnostics(userId, acknowledged);
+        if (rejected.length)
+          recordRecordingDiagnostic(
+            null,
+            "policy_decision",
+            "delivery_failed",
+            {
+              droppedCount: rejected.length,
+            },
+          );
         warned = false;
       };
       try {

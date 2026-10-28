@@ -67,14 +67,7 @@ impl ListenerRuntime for TauriRuntime {
                     "native_lifecycle",
                 )
             }
-            SessionLifecycleEvent::Finalizing { session_id } => {
-                crate::recording_diagnostics::lifecycle(
-                    &self.app,
-                    session_id,
-                    "capture_finalizing",
-                    "native_lifecycle",
-                )
-            }
+            SessionLifecycleEvent::Finalizing { .. } => {}
             SessionLifecycleEvent::Inactive {
                 session_id, error, ..
             } => crate::recording_diagnostics::stopped(&self.app, session_id, error.is_some()),

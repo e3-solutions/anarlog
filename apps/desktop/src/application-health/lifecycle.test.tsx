@@ -32,6 +32,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: state.invoke,
 }));
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: state.version }));
+vi.mock("@tauri-apps/plugin-os", () => ({ version: () => "26.0.1" }));
 vi.mock("@anlg/plugin-analytics", () => ({
   commands: {
     isDisabled: async () => ({ status: "ok", data: false }),
@@ -263,5 +264,25 @@ it("recovers diagnostic delivery after a native batch exceeds its deadline witho
     await vi.advanceTimersByTimeAsync(5_000);
   });
   expect(state.received).toEqual([expect.objectContaining({ id: "event-1" })]);
+  expect(state.events).toEqual([]);
+});
+
+it("removes permanently rejected events while delivering valid recording events", async () => {
+  state.events = [{ id: "valid" }, { id: "rejected" }];
+  const rpc = state.rpc.getMockImplementation()!;
+  state.rpc.mockImplementation((name: string, args: never) =>
+    name === "recording_diagnostics_ingest"
+      ? {
+          setHeader: () => ({
+            abortSignal: async () => ({
+              data: { accepted: ["valid"], rejected: ["rejected"] },
+              error: null,
+            }),
+          }),
+        }
+      : rpc(name, args),
+  );
+  render(<ApplicationHealthLifecycle />);
+  await tick();
   expect(state.events).toEqual([]);
 });

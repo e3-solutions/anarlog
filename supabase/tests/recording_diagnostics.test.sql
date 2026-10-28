@@ -1,5 +1,5 @@
 begin;
-select plan(31);
+select plan(34);
 select tests.create_supabase_user('diagnostics_owner','diagnostics-owner@example.com');
 select tests.create_supabase_user('diagnostics_member','diagnostics-member@example.com');
 select tests.create_supabase_user('diagnostics_outsider','diagnostics-outsider@example.com');
@@ -17,18 +17,18 @@ insert into diagnostic_event values(jsonb_build_object(
 'id','00000000-0000-4000-8000-00000000d005','deviceId','00000000-0000-4000-8000-00000000d006',
 'bootId','00000000-0000-4000-8000-00000000d007','sequence',1,'observedAtMs',floor(extract(epoch from now() - interval '6 days') * 1000),
 'elapsedMs',200,'appVersion','0.1.22','buildSha','1234567','sessionId',null,'kind','policy_decision','reason','ax_unknown',
-'evidence',jsonb_build_object('observation','unknown','inspectionStatus','timeout','autoStop',true,'micActive',false,'missingForMs',12000,'queuedCount',64,'droppedCount',2,'retentionDropped',true,'lastAckAgeMs',60000,'platform','slack','os','macos')));
+'evidence',jsonb_build_object('observation','unknown','inspectionStatus','timeout','autoStop',true,'micActive',false,'missingForMs',12000,'queuedCount',64,'droppedCount',2,'retentionDropped',true,'lastAckAgeMs',60000,'platform','slack','os','macos','osVersion','26.0.1')));
 grant select on diagnostic_event to authenticated;
 select tests.authenticate_as('diagnostics_member');
 select set_config('request.jwt.claims',jsonb_set(current_setting('request.jwt.claims')::jsonb,'{session_id}','"00000000-0000-4000-8000-00000000d003"')::text,true);
-select is((select public.recording_diagnostics_ingest(jsonb_build_array(value)) from diagnostic_event),'["00000000-0000-4000-8000-00000000d005"]'::jsonb,'Offline events collected six days ago are acknowledged');
+select is((select public.recording_diagnostics_ingest(jsonb_build_array(value)) from diagnostic_event),'{"accepted":["00000000-0000-4000-8000-00000000d005"],"rejected":[]}'::jsonb,'Offline events collected six days ago are acknowledged');
 select lives_ok('select public.recording_diagnostics_ingest(jsonb_build_array(value)) from diagnostic_event','Retry after lost response is idempotent');
 select is((select count(*) from public.recording_diagnostics),1::bigint,'Member reads their own single deduplicated event');
 select lives_ok($$select public.recording_diagnostics_ingest(jsonb_build_array(value || '{"reason":"meeting_ended"}'::jsonb)) from diagnostic_event$$,'Replayed identifiers cannot mutate the stored evidence');
 select is((select reason from public.recording_diagnostics),'ax_unknown','First accepted event remains immutable');
-select throws_ok(
-  format('select public.recording_diagnostics_ingest(jsonb_build_array(value || %L::jsonb)) from diagnostic_event',invalid.patch),
-  '22023','invalid recording diagnostics',invalid.description
+select is(
+  (select public.recording_diagnostics_ingest(jsonb_build_array(value || invalid.patch::jsonb || '{"id":"00000000-0000-4000-8000-00000000d020"}'::jsonb)) from diagnostic_event),
+  '{"accepted":[],"rejected":["00000000-0000-4000-8000-00000000d020"]}'::jsonb,invalid.description
 ) from (values
 ('{"transcript":"private"}','Reject arbitrary content fields'),
 ('{"evidence":{"windowTitle":"private"}}','Reject content hidden inside evidence'),
@@ -37,13 +37,15 @@ select throws_ok(
 ('{"evidence":{"missingForMs":86400001}}','Reject unbounded numeric evidence'),
 ('{"reason":"arbitrary-content"}','Reject unbounded reason strings'),
 ('{"observedAtMs":1}','Reject expired offline events'),
-('{"deviceId":"invalid"}','Malformed UUIDs return a bounded error'),
+('{"deviceId":"invalid"}','Malformed device UUID rejects the identifiable record'),
 ('{"sequence":1.5}','Reject fractional sequence numbers'),
 ('{"sessionId":42}','Reject mistyped optional UUIDs')
 ) invalid(patch,description);
+select is((select public.recording_diagnostics_ingest(jsonb_build_array(value || jsonb_build_object('buildSha',repeat('a',2100)))) from diagnostic_event),'{"accepted":[],"rejected":["00000000-0000-4000-8000-00000000d005"]}'::jsonb,'Oversized identifiable records reject without storing their payload');
 select throws_ok('select public.recording_diagnostics_ingest(jsonb_agg(value)) from diagnostic_event cross join generate_series(1,65)','22023','invalid recording diagnostics','Batch limit bounds processing and payload size');
-select throws_ok($$select public.recording_diagnostics_ingest(jsonb_build_array(value || '{"id":"00000000-0000-4000-8000-00000000d008"}'::jsonb,value || '{"reason":"private"}'::jsonb)) from diagnostic_event$$,'22023','invalid recording diagnostics','Invalid batch rolls back earlier events');
-select is((select count(*) from public.recording_diagnostics),1::bigint,'Partial invalid batches leave no inserted rows');
+select throws_ok($$select public.recording_diagnostics_ingest(jsonb_build_array(value || '{"id":"invalid"}'::jsonb)) from diagnostic_event$$,'22023','invalid recording diagnostics','An unidentifiable malformed event rejects the request');
+select is((select public.recording_diagnostics_ingest(jsonb_build_array(value || '{"id":"00000000-0000-4000-8000-00000000d008"}'::jsonb,value || '{"id":"00000000-0000-4000-8000-00000000d009","reason":"private"}'::jsonb)) from diagnostic_event),'{"accepted":["00000000-0000-4000-8000-00000000d008"],"rejected":["00000000-0000-4000-8000-00000000d009"]}'::jsonb,'A malformed record cannot stall a valid recording diagnostic');
+select is((select count(*) from public.recording_diagnostics),2::bigint,'Only valid records are persisted from a mixed batch');
 select ok(not has_table_privilege('authenticated','public.recording_diagnostics','INSERT'),'Clients cannot bypass the sanitized RPC');
 select lives_ok($$select public.recording_diagnostics_ingest(jsonb_agg(value || jsonb_build_object('id',md5('diagnostic-event-' || n)::uuid,'deviceId',md5('diagnostic-device-' || n)::uuid,'reason',CASE n % 3 WHEN 0 THEN 'start_requested' WHEN 1 THEN 'start_failed' ELSE 'frontend_start_failed' END))) from diagnostic_event cross join generate_series(1,8) n$$,'Start attempts and preparation failures ingest across nine device profiles');
 select is((select count(DISTINCT device_id) from public.recording_diagnostics),9::bigint,'A ninth device does not block diagnostic delivery');
@@ -61,7 +63,8 @@ select tests.clear_authentication();
 select tests.authenticate_as('diagnostics_outsider');
 select set_config('request.jwt.claims',jsonb_set(current_setting('request.jwt.claims')::jsonb,'{session_id}','"00000000-0000-4000-8000-00000000d004"')::text,true);
 select is((select count(*) from public.recording_diagnostics),0::bigint,'Unrelated accounts cannot read diagnostic evidence');
-select throws_ok('select public.recording_diagnostics_ingest(jsonb_build_array(value)) from diagnostic_event','42501','active organization session required','Confirmed users without shared membership cannot ingest');
+select lives_ok('select public.recording_diagnostics_ingest(jsonb_build_array(value)) from diagnostic_event','Confirmed users without shared membership can ingest their own diagnostics');
+select is((select count(*) from public.recording_diagnostics),1::bigint,'Users without shared membership can read only their own newly ingested event');
 select tests.clear_authentication();
 reset role;
 insert into public.recording_diagnostics(user_id,id,device_id,boot_id,sequence,observed_at,elapsed_ms,app_version,build_sha,kind,reason)

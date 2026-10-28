@@ -8,25 +8,19 @@ const BATCH: usize = 64;
 const RETENTION_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const KINDS: &[&str] = &[
-    "detector_observation",
     "policy_decision",
     "stop_requested",
     "capture_started",
-    "capture_finalizing",
     "capture_source_ended",
     "capture_stopped",
-    "recovery_interrupted",
     "capture_error",
 ];
 const REASONS: &[&str] = &[
     "observed",
     "meeting_active",
-    "meeting_ended",
     "ax_unknown",
     "ax_error",
-    "ax_probe_timeout",
     "mic_still_active",
-    "mic_inactive",
     "network_recovery_hold",
     "user_kept_recording",
     "auto_stop_disabled",
@@ -41,12 +35,11 @@ const REASONS: &[&str] = &[
     "grace_elapsed",
     "native_lifecycle",
     "native_capture_ended",
-    "process_interrupted",
     "probe_error",
     "probe_timeout",
-    "probe_started",
     "stop_failed",
-    "saved_audio_ready",
+    "stop_prompt_pending",
+    "stop_prompt_disabled",
     "saving_failed",
     "collector_started",
     "start_requested",
@@ -72,9 +65,11 @@ fn evidence_valid(evidence: &Evidence) -> bool {
         "inspectionStatus" | "micStatus" => value.as_str().is_some_and(|value| {
             ["ok", "error", "timeout", "pending", "unavailable"].contains(&value)
         }),
-        "platform" => value
-            .as_str()
-            .is_some_and(|value| ["slack", "googleMeet", "unknown"].contains(&value)),
+        "osVersion" => value.as_str().is_some_and(|version| {
+            !version.is_empty()
+                && version.len() <= 32
+                && version.bytes().all(|c| c.is_ascii_digit() || c == b'.')
+        }),
         "os" => value
             .as_str()
             .is_some_and(|value| ["macos", "linux", "windows", "unknown"].contains(&value)),
@@ -206,6 +201,8 @@ struct Collector {
     owners: HashMap<String, String>,
     boot_id: String,
     started: Instant,
+    // Timestamp observation before queued disk work can delay it.
+    observed: (i64, Instant),
     app_version: String,
 }
 
@@ -258,12 +255,14 @@ impl RecordingDiagnostics {
         if cleanup(directory.as_deref(), Some(cutoff)).is_err() {
             tracing::warn!("recording_diagnostics_cleanup_failed");
         }
+        let started = Instant::now();
         Self(Mutex::new(Collector {
             directory,
             user_id: None,
             owners: HashMap::new(),
             boot_id: uuid::Uuid::new_v4().to_string(),
-            started: Instant::now(),
+            started,
+            observed: (now_ms(), started),
             app_version,
         }))
     }
@@ -353,8 +352,13 @@ impl Collector {
             device_id: journal.device_id.clone(),
             boot_id: self.boot_id.clone(),
             sequence: journal.sequence,
-            observed_at_ms: now_ms(),
-            elapsed_ms: self.started.elapsed().as_millis().min(i64::MAX as u128) as u64,
+            observed_at_ms: self.observed.0,
+            elapsed_ms: self
+                .observed
+                .1
+                .saturating_duration_since(self.started)
+                .as_millis()
+                .min(i64::MAX as u128) as u64,
             app_version: self.app_version.clone(),
             build_sha: env!("ANLG_DIAGNOSTICS_BUILD_SHA").into(),
             session_id: input.session_id,
@@ -375,7 +379,8 @@ impl Collector {
         if enabled {
             self.user_id = None;
             let user = user.ok_or("Diagnostic account required")?;
-            self.path(&user)?;
+            let journal = self.load(&user)?;
+            self.save(&user, &journal)?;
             self.user_id = Some(user);
         } else {
             if user.is_none() || self.user_id == user {
@@ -455,7 +460,6 @@ impl Collector {
     fn batch(&self, user: &str) -> Result<DiagnosticBatch, String> {
         self.require_user(user)?;
         let journal = self.load(user)?;
-        self.save(user, &journal)?;
         Ok(DiagnosticBatch {
             device_id: journal.device_id,
             boot_id: self.boot_id.clone(),
@@ -480,11 +484,14 @@ fn with_collector<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     action: impl FnOnce(&mut Collector) -> Result<(), String>,
 ) {
+    let observed = (now_ms(), Instant::now());
     if let Some(state) = app.try_state::<RecordingDiagnostics>()
         && let Ok(mut collector) = state.0.lock()
-        && action(&mut collector).is_err()
     {
-        tracing::warn!("recording_diagnostics_write_failed");
+        collector.observed = observed;
+        if action(&mut collector).is_err() {
+            tracing::warn!("recording_diagnostics_write_failed");
+        }
     }
 }
 
@@ -538,69 +545,79 @@ pub fn stopped(app: &tauri::AppHandle, session: &str, has_error: bool) {
     });
 }
 
+async fn run_command<T: Send + 'static>(
+    app: tauri::AppHandle,
+    action: impl FnOnce(&mut Collector) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    let observed = (now_ms(), Instant::now());
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<RecordingDiagnostics>();
+        let mut collector = state.0.lock().map_err(|_| "Diagnostics unavailable")?;
+        collector.observed = observed;
+        action(&mut collector)
+    })
+    .await
+    .map_err(|_| "Diagnostics unavailable".to_string())?
+}
+
 #[tauri::command]
 #[specta::specta]
-pub fn recording_diagnostics_configure(
+pub async fn recording_diagnostics_configure(
     app: tauri::AppHandle,
     user_id: Option<String>,
     enabled: bool,
     purge: Option<bool>,
 ) -> Result<(), String> {
-    let state = app.state::<RecordingDiagnostics>();
-    let mut collector = state.0.lock().map_err(|_| "Diagnostics unavailable")?;
-    collector.configure(user_id, enabled, purge.unwrap_or(false))?;
-    if enabled {
-        for (session, owner) in crate::shared_recording::diagnostic_capture_owners(&app) {
-            if ractor::registry::where_is(
-                anlg_transcription_core::listener::actors::SourceActor::name(&session),
-            )
-            .is_some()
-            {
-                collector.begin(&session, Some(&owner), "collector_attached_late")?;
+    let handle = app.clone();
+    run_command(app, move |collector| {
+        collector.configure(user_id, enabled, purge.unwrap_or(false))?;
+        if enabled {
+            for (session, owner) in crate::shared_recording::diagnostic_capture_owners(&handle) {
+                if ractor::registry::where_is(
+                    anlg_transcription_core::listener::actors::SourceActor::name(&session),
+                )
+                .is_some()
+                {
+                    collector.begin(&session, Some(&owner), "collector_attached_late")?;
+                }
             }
         }
-    }
-    Ok(())
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn recording_diagnostics_record(
+pub async fn recording_diagnostics_record(
     app: tauri::AppHandle,
     user_id: String,
     input: Input,
 ) -> Result<(), String> {
-    let state = app.state::<RecordingDiagnostics>();
-    let collector = state.0.lock().map_err(|_| "Diagnostics unavailable")?;
-    collector.require_user(&user_id)?;
-    collector.append(&user_id, input)
+    run_command(app, move |collector| {
+        collector.require_user(&user_id)?;
+        collector.append(&user_id, input)
+    })
+    .await
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn recording_diagnostics_batch(
+pub async fn recording_diagnostics_batch(
     app: tauri::AppHandle,
     user_id: String,
 ) -> Result<DiagnosticBatch, String> {
-    app.state::<RecordingDiagnostics>()
-        .0
-        .lock()
-        .map_err(|_| "Diagnostics unavailable")?
-        .batch(&user_id)
+    run_command(app, move |collector| collector.batch(&user_id)).await
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn recording_diagnostics_ack(
+pub async fn recording_diagnostics_ack(
     app: tauri::AppHandle,
     user_id: String,
     event_ids: Vec<String>,
 ) -> Result<(), String> {
-    app.state::<RecordingDiagnostics>()
-        .0
-        .lock()
-        .map_err(|_| "Diagnostics unavailable")?
-        .ack(&user_id, &event_ids)
+    run_command(app, move |collector| collector.ack(&user_id, &event_ids)).await
 }
 
 #[cfg(test)]
@@ -620,6 +637,9 @@ mod tests {
         let user = uuid::Uuid::new_v4().to_string();
         let session = uuid::Uuid::new_v4().to_string();
         let mut state = collector(dir.clone());
+        let clock = Instant::now();
+        state.started = clock - std::time::Duration::from_secs(3);
+        state.observed = (now_ms() - 2000, clock - std::time::Duration::from_secs(2));
         state.configure(Some(user.clone()), true, false).unwrap();
         state
             .begin(&session, Some(&user), "start_requested")
@@ -628,6 +648,8 @@ mod tests {
             .native(&session, "capture_stopped", "native_lifecycle")
             .unwrap();
         let first = state.batch(&user).unwrap();
+        assert_eq!(first.events[0].observed_at_ms, state.observed.0);
+        assert_eq!(first.events[0].elapsed_ms, 1000);
         let mut restored = collector(dir.clone());
         restored.configure(Some(user.clone()), true, false).unwrap();
         assert_eq!(restored.batch(&user).unwrap().device_id, first.device_id);

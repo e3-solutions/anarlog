@@ -4,8 +4,8 @@ import type { DiagnosticBatch as RecordingDiagnosticBatch } from "@anlg/plugin-t
 
 import { env } from "~/env";
 
-export type { DiagnosticEvent as RecordingDiagnosticEvent } from "@anlg/plugin-transcription";
 export type RecordingDiagnosticEvidence = {
+  osVersion?: string;
   observation?: "active" | "inactive" | "unknown";
   inspectionStatus?: "ok" | "error" | "timeout" | "pending" | "unavailable";
   micStatus?: "ok" | "error" | "timeout" | "pending" | "unavailable";
@@ -21,7 +21,6 @@ export type RecordingDiagnosticEvidence = {
   probeElapsedMs?: number;
   droppedCount?: number;
   retentionDropped?: boolean;
-  platform?: "slack" | "googleMeet" | "unknown";
 };
 
 let owner: string | null = null;

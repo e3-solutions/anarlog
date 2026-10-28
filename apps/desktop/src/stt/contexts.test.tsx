@@ -31,6 +31,7 @@ const {
   createSessionMock,
   softDeleteSessionMock,
   openNewMock,
+  recordingDiagnosticMock,
 } = vi.hoisted(() => ({
   listMicUsingApplicationsMock: vi.fn(),
   inspectMeetingAccessibilityMock: vi.fn(),
@@ -44,6 +45,11 @@ const {
   createSessionMock: vi.fn(),
   softDeleteSessionMock: vi.fn(),
   openNewMock: vi.fn(),
+  recordingDiagnosticMock: vi.fn(),
+}));
+
+vi.mock("~/application-health/recording-diagnostics", () => ({
+  recordRecordingDiagnostic: recordingDiagnosticMock,
 }));
 
 vi.mock("@anlg/plugin-detect", () => ({
@@ -995,6 +1001,16 @@ describe("ListenerProvider detect events", () => {
 
     expect(listMicUsingApplicationsMock).toHaveBeenCalledTimes(1);
     expect(stopSpy).toHaveBeenCalledTimes(1);
+    expect(recordingDiagnosticMock).toHaveBeenCalledWith(
+      "session-1",
+      "stop_requested",
+      "grace_elapsed",
+      expect.objectContaining({
+        autoStop: true,
+        micStatus: "ok",
+        micActive: false,
+      }),
+    );
   });
 
   test("auto-stops when MicStopped omits the trigger app and no trigger app remains active (regression: #5436)", async () => {
