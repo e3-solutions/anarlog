@@ -5,8 +5,6 @@ import { commands as analytics } from "@anlg/plugin-analytics";
 import { commands as permissions } from "@anlg/plugin-permissions";
 import { useMountEffect } from "@anlg/ui/hooks/use-mount-effect";
 
-import { startHealthReporter } from "./reporter";
-
 import { useAuth } from "~/auth";
 import { env } from "~/env";
 import {
@@ -19,12 +17,13 @@ import { useLatestRef } from "~/shared/hooks/useLatestRef";
 import { listenerStore } from "~/store/zustand/listener/instance";
 
 export function ApplicationHealthLifecycle() {
-  const { session } = useAuth();
+  const { session, supabase } = useAuth();
   const settings = useStoredSettingValuesQuery();
   if (
     env.VITE_E3_SCRIBE !== "true" ||
     !isTauri() ||
     !session ||
+    !supabase ||
     session.user.is_anonymous === true ||
     !settings.data ||
     settings.error ||
@@ -50,11 +49,13 @@ function ActiveApplicationHealth({ userId }: { userId: string }) {
         auth.current.session?.user.id === userId
       );
     };
-    return startHealthReporter({
-      userId,
-      readLive: () => listenerStore.getState().live,
-      subscribe: (changed) => listenerStore.subscribe(changed),
-      collect: async (signal) => {
+    let request: AbortController | undefined;
+    const report = async () => {
+      request = new AbortController();
+      const current = request;
+      const { signal } = current;
+      const timeout = setTimeout(() => current.abort(), 10_000);
+      try {
         if (!(await allowed(signal))) return null;
         const stored = await getStoredSettingValues();
         const [appVersion, microphone, systemAudio, accessibility, upload] =
@@ -67,17 +68,29 @@ function ActiveApplicationHealth({ userId }: { userId: string }) {
           ]);
         signal.throwIfAborted();
         const key = `e3-application-health-device:${userId}`;
-        let deviceId = localStorage.getItem(key);
-        if (
-          !deviceId ||
-          !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-            deviceId,
-          )
-        ) {
-          deviceId = crypto.randomUUID();
-          localStorage.setItem(key, deviceId);
-        }
-        return {
+        const deviceId = localStorage.getItem(key) || crypto.randomUUID();
+        localStorage.setItem(key, deviceId);
+        const live = listenerStore.getState().live;
+        const owned = live.captureOwnerUserId === userId;
+        const ownedActive =
+          owned && live.captureOwnerSessionId === live.sessionId;
+        const snapshot = {
+          observedAt: new Date().toISOString(),
+          recording:
+            live.status === "active" ? (ownedActive ? true : null) : false,
+          // Recording history comes from existing uploaded capture metadata.
+          lastRecordingStartedAt: null,
+          lastRecordingStoppedAt: null,
+          lastRecordingDurationSeconds: null,
+          errorCategory:
+            owned &&
+            live.captureOwnerSessionId === live.lastErrorSessionId &&
+            live.lastErrorIsAudioRelated &&
+            live.lastError
+              ? "audio_capture"
+              : ownedActive && live.transcriptionStalled
+                ? "transcription"
+                : null,
           deviceId,
           appVersion,
           ...upload,
@@ -98,28 +111,27 @@ function ActiveApplicationHealth({ userId }: { userId: string }) {
             stored,
           ),
         };
-      },
-      send: async (snapshot, signal) => {
         const session = await auth.current.getSessionForRequest();
         if (!session || session.user.id !== userId || !(await allowed(signal)))
           return;
         signal.throwIfAborted();
-        const response = await fetch(
-          `${env.VITE_API_URL.replace(/\/$/, "")}/v1/application-health`,
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${session.access_token}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify(snapshot),
-            redirect: "error",
-            signal,
-          },
-        );
-        if (!response.ok) throw new Error("Health report failed");
-      },
-    });
+        const { error } = await auth.current
+          .supabase!.rpc("application_health_observe", { p_snapshot: snapshot })
+          .setHeader("Authorization", `Bearer ${session.access_token}`)
+          .abortSignal(signal);
+        if (error) throw error;
+      } catch {
+        // Reporting is best effort; the next heartbeat sends current state.
+      } finally {
+        clearTimeout(timeout);
+      }
+    };
+    void report();
+    const timer = setInterval(() => void report(), 60_000);
+    return () => {
+      clearInterval(timer);
+      request?.abort();
+    };
   });
   return null;
 }

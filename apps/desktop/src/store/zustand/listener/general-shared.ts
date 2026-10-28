@@ -204,7 +204,6 @@ export const markLiveStartRequested = (
   live.sessionId = sessionId;
   live.captureOwnerUserId = ownerUserId;
   live.captureOwnerSessionId = ownerUserId ? sessionId : null;
-  live.seconds = 0;
   live.lastError = null;
   live.lastErrorSessionId = null;
   live.lastErrorIsAudioRelated = false;

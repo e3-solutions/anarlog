@@ -4,15 +4,12 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const state = vi.hoisted(() => ({
   native: true,
   userId: "account-a" as string | null,
-  anonymous: false,
   consent: true,
-  disabled: false,
-  settingsReady: true,
   permission: vi.fn(),
   version: vi.fn(),
   requestSession: vi.fn(),
   queue: vi.fn(),
-  fetch: vi.fn(),
+  rpc: vi.fn(),
 }));
 const stored = () => ({
   values: {
@@ -30,26 +27,27 @@ vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => state.native }));
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: state.version }));
 vi.mock("@anlg/plugin-analytics", () => ({
   commands: {
-    isDisabled: async () => ({ status: "ok", data: state.disabled }),
+    isDisabled: async () => ({ status: "ok", data: false }),
   },
 }));
 vi.mock("@anlg/plugin-permissions", () => ({
   commands: { checkPermission: state.permission },
 }));
 vi.mock("~/env", () => ({
-  env: { VITE_E3_SCRIBE: "true", VITE_API_URL: "https://fixture.invalid/" },
+  env: { VITE_E3_SCRIBE: "true" },
 }));
 vi.mock("~/auth", () => ({
   useAuth: () => ({
     session: state.userId
-      ? { user: { id: state.userId, is_anonymous: state.anonymous } }
+      ? { user: { id: state.userId, is_anonymous: false } }
       : null,
     getSessionForRequest: state.requestSession,
+    supabase: { rpc: state.rpc },
   }),
 }));
 vi.mock("~/settings/queries", () => ({
   useStoredSettingValuesQuery: () => ({
-    data: state.settingsReady ? stored() : undefined,
+    data: stored(),
     error: null,
   }),
   getStoredSettingValues: async () => stored(),
@@ -57,24 +55,11 @@ vi.mock("~/settings/queries", () => ({
 vi.mock("~/shared-recordings/native", () => ({
   sharedRecordingQueue: state.queue,
 }));
-vi.mock("~/store/zustand/listener/instance", () => ({
-  listenerStore: {
-    getState: () => ({
-      live: {
-        status: "inactive",
-        sessionId: null,
-        captureOwnerUserId: null,
-        captureOwnerSessionId: null,
-        seconds: 0,
-        lastError: "secret raw message",
-        lastErrorSessionId: null,
-        lastErrorIsAudioRelated: true,
-        transcriptionStalled: false,
-      },
-    }),
-    subscribe: () => () => {},
-  },
-}));
+vi.mock("~/store/zustand/listener/instance", async () => {
+  const { initialGeneralState } =
+    await import("~/store/zustand/listener/general-shared");
+  return { listenerStore: { getState: () => initialGeneralState } };
+});
 
 import { ApplicationHealthLifecycle } from "./lifecycle";
 
@@ -82,10 +67,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   state.native = true;
   state.userId = "account-a";
-  state.anonymous = false;
   state.consent = true;
-  state.disabled = false;
-  state.settingsReady = true;
   state.queue.mockResolvedValue([]);
   state.version.mockResolvedValue("0.1.21");
   state.permission.mockResolvedValue({ status: "ok", data: "authorized" });
@@ -93,14 +75,14 @@ beforeEach(() => {
     user: { id: state.userId },
     access_token: "fixture-token",
   }));
-  state.fetch.mockResolvedValue({ ok: true });
-  vi.stubGlobal("fetch", state.fetch);
+  state.rpc.mockImplementation(() => ({
+    setHeader: () => ({ abortSignal: async () => ({ error: null }) }),
+  }));
   localStorage.clear();
 });
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
-  vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 const tick = async () => {
@@ -109,121 +91,42 @@ const tick = async () => {
   });
 };
 
-it("reports authenticated native launches with bounded operational metadata and partial permission readiness", async () => {
-  state.permission.mockImplementation(async (permission: string) => {
-    if (permission === "accessibility")
-      throw new Error("private native exception");
-    return {
-      status: "ok",
-      data: permission === "microphone" ? "authorized" : "denied",
-    };
-  });
-  const first = render(<ApplicationHealthLifecycle />);
+it("sends only operational fields with unknown permissions on native failure", async () => {
+  state.permission.mockRejectedValue(new Error("private native exception"));
+  state.queue.mockResolvedValue([
+    { state: "uploaded", title: "private title" },
+    { state: "error", lastError: "private error" },
+    { state: "blocked_unverified", meetingUrl: "private url" },
+  ]);
+  const view = render(<ApplicationHealthLifecycle />);
   await tick();
-  const [url, request] = state.fetch.mock.calls[0];
-  expect(url).toBe("https://fixture.invalid/v1/application-health");
-  expect(request.headers.Authorization).toBe("Bearer fixture-token");
-  const body = JSON.parse(request.body);
-  expect(body).toEqual({
-    deviceId: expect.any(String),
+  const [name, { p_snapshot: snapshot }] = state.rpc.mock.calls[0];
+  expect(name).toBe("application_health_observe");
+  expect(snapshot).toMatchObject({
     appVersion: "0.1.21",
-    observedAt: expect.any(String),
     permissions: {
-      microphone: "authorized",
-      systemAudio: "denied",
+      microphone: "unknown",
+      systemAudio: "unknown",
       accessibility: "unknown",
     },
     autoRecordDetected: true,
     autoRecordScheduled: false,
-    recording: false,
-    lastRecordingStartedAt: null,
-    lastRecordingStoppedAt: null,
-    lastRecordingDurationSeconds: null,
+    uploadPendingCount: 1,
+    uploadBlockedCount: 1,
+    uploadError: true,
     errorCategory: null,
-    uploadPendingCount: 0,
-    uploadBlockedCount: 0,
-    uploadError: false,
   });
-  first.unmount();
-  render(<ApplicationHealthLifecycle />);
-  await tick();
-  expect(JSON.parse(state.fetch.mock.calls[1][1].body).deviceId).toBe(
-    body.deviceId,
-  );
-});
-
-it("reports account-scoped upload failures and blocked jobs without exposing source data, and keeps unavailable queues unknown", async () => {
-  for (const [read, expected] of [
-    [
-      async () => [
-        { state: "uploaded", title: "private uploaded title" },
-        { state: "pending", path: "/private/source.wav" },
-        { state: "error", lastError: "private raw upload error" },
-        { state: "blocked_unverified", meetingUrl: "https://private.invalid" },
-      ],
-      { uploadPendingCount: 2, uploadBlockedCount: 1, uploadError: true },
-    ],
-    [
-      async () => {
-        throw new Error("private native exception");
-      },
-      { uploadPendingCount: null, uploadBlockedCount: null, uploadError: null },
-    ],
-    [
-      () => new Promise(() => {}),
-      { uploadPendingCount: null, uploadBlockedCount: null, uploadError: null },
-    ],
-  ] as const) {
-    state.queue.mockImplementation(read);
-    state.fetch.mockClear();
-    const view = render(<ApplicationHealthLifecycle />);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1_001);
-    });
-    const payload = state.fetch.mock.calls[0][1].body;
-    expect(JSON.parse(payload)).toMatchObject(expected);
-    expect(payload).not.toContain("private");
-    expect(state.queue).toHaveBeenLastCalledWith("account-a");
-    view.unmount();
-  }
-});
-
-it("does not confuse browser signup, anonymous sessions, unavailable settings, or opted-out installs with native launches", async () => {
-  for (const change of [
-    () => {
-      state.native = false;
-    },
-    () => {
-      state.userId = null;
-    },
-    () => {
-      state.anonymous = true;
-    },
-    () => {
-      state.settingsReady = false;
-    },
-    () => {
-      state.consent = false;
-    },
-    () => {
-      state.disabled = true;
-    },
-  ]) {
-    state.native = true;
-    state.userId = "account-a";
-    state.anonymous = false;
-    state.settingsReady = true;
-    state.consent = true;
-    state.disabled = false;
-    change();
-    const view = render(<ApplicationHealthLifecycle />);
-    await tick();
-    expect(state.fetch.mock.calls).toHaveLength(0);
-    view.unmount();
-  }
+  expect(JSON.stringify(snapshot)).not.toContain("private");
+  view.unmount();
 });
 
 it("drops in-flight observations after consent revocation or account changes and isolates device identities", async () => {
+  state.native = false;
+  const browser = render(<ApplicationHealthLifecycle />);
+  await tick();
+  expect(state.rpc).not.toHaveBeenCalled();
+  browser.unmount();
+  state.native = true;
   let finishVersion: (version: string) => void = () => {};
   state.version.mockImplementationOnce(
     () =>
@@ -236,13 +139,13 @@ it("drops in-flight observations after consent revocation or account changes and
   state.consent = false;
   finishVersion("0.1.21");
   await tick();
-  expect(state.fetch.mock.calls).toHaveLength(0);
+  expect(state.rpc.mock.calls).toHaveLength(0);
   state.consent = true;
   view.rerender(<ApplicationHealthLifecycle />);
   await act(async () => {
     await vi.advanceTimersByTimeAsync(60_000);
   });
-  const firstId = JSON.parse(state.fetch.mock.calls[0][1].body).deviceId;
+  const firstId = state.rpc.mock.calls[0][1].p_snapshot.deviceId;
   state.requestSession.mockResolvedValueOnce({
     user: { id: "account-a" },
     access_token: "old-token",
@@ -250,11 +153,9 @@ it("drops in-flight observations after consent revocation or account changes and
   state.userId = "account-b";
   view.rerender(<ApplicationHealthLifecycle />);
   await tick();
-  expect(state.fetch.mock.calls).toHaveLength(1);
+  expect(state.rpc.mock.calls).toHaveLength(1);
   await act(async () => {
     await vi.advanceTimersByTimeAsync(60_000);
   });
-  expect(JSON.parse(state.fetch.mock.calls[1][1].body).deviceId).not.toBe(
-    firstId,
-  );
+  expect(state.rpc.mock.calls[1][1].p_snapshot.deviceId).not.toBe(firstId);
 });
