@@ -16,7 +16,7 @@ You need:
 - Node.js 22 or later
 - pnpm 11.1.1
 - Rust 1.94.0
-- [process-compose](https://f1bonacc1.github.io/process-compose/installation/) 1.122.0 or later (`brew install process-compose` on macOS)
+- [process-compose](https://f1bonacc1.github.io/process-compose/installation/) 1.122.0 or later (`brew install f1bonacc1/tap/process-compose` on macOS)
 - The [Tauri v2 system dependencies](https://v2.tauri.app/start/prerequisites/)
 - On Apple Silicon Macs, Xcode with its Metal Toolchain component. The Command Line Tools alone cannot compile the MLX shader library used by Soniqo local transcription. Xcode 26 and later install the component separately with `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -downloadComponent MetalToolchain`; Xcode does not need to be selected with `xcode-select`.
 
@@ -79,6 +79,96 @@ pnpm dev:web -t=false
 process-compose -p 18082 process restart web
 process-compose -p 18082 down
 ```
+
+### Iterate on desktop without rebuilding the native app
+
+Use local development for everyday testing. GitHub's versioned app builds are
+for release verification and distribution; they are not required to test edits.
+Run `pnpm dev:desktop:doctor` after installing the prerequisites. The launcher
+also runs this check before compiling the native shell and uses Xcode from
+`/Applications/Xcode.app` when no `DEVELOPER_DIR` override is supplied. On Macs,
+the launcher limits parallel Rust jobs based on total RAM (four jobs on a 16 GiB
+Mac) to leave room for the app and other tools. Set `CARGO_BUILD_JOBS` to override
+this limit.
+
+Keep `pnpm dev:desktop` running while editing React, TypeScript, or CSS. Vite
+updates the frontend in the running app; these edits do not invoke Cargo or
+restart the native shell. Process Compose runs `desktop-frontend` (Vite) and
+`desktop` (the native shell) separately.
+
+After changing Rust, Swift, native permissions, or Tauri configuration, restart
+only the native process:
+
+```bash
+process-compose -p 18081 process restart desktop
+```
+
+This keeps Vite running and lets Cargo reuse unchanged dependencies and
+incremental compilation results. For `pnpm dev`, use control port `18080`.
+Use `pnpm dev:desktop:check` for a quicker Rust typecheck before restarting;
+it uses the same features and output directory as the local native app.
+Native watching stays disabled so generated files and frontend edits cannot
+trigger unexpected native rebuilds. The standalone
+`pnpm -F @anlg/desktop tauri:dev` command still starts both parts together.
+
+For frontend work against an already running native app, start only Vite:
+
+```bash
+pnpm dev:desktop:frontend
+# Open http://localhost:1424 to use an already running Dev shell's relay.
+
+# Or reuse an installed, running Staging app (no local Rust build required):
+RELAY_PORT=1423 pnpm dev:desktop:frontend
+# Open http://localhost:1423.
+```
+
+Use one desktop Vite server at a time: the frontend-only command shares port
+1422 and control port 18081 with `pnpm dev:desktop`. It does not launch a native
+app. Browser relay work uses the running app's backend and data; native window
+behavior still needs verification inside the Mac app. Restarting
+`desktop-frontend` in an existing full session also leaves its native shell
+running.
+
+For native builds, keep the same checkout, feature set, and `CARGO_TARGET_DIR`
+between runs; cleaning or switching these inputs can discard useful cached
+work. The desktop builds only its Rust library and executable, avoiding an
+unused static archive of all dependencies. For less debug output during local
+iteration, you can opt in to line tables (file and line information in Rust
+backtraces, without debugger variable inspection):
+
+```bash
+CARGO_PROFILE_DEV_DEBUG=line-tables-only pnpm dev:desktop
+```
+
+Changing this setting rebuilds affected crates once. Omit it for full native
+debugging. To compare native build times, keep the setting fixed, forward
+`--timings` with `pnpm -F @anlg/desktop tauri:dev -- --timings`, and compare an
+unchanged restart with a restart after one Rust edit. The Cargo timing report
+is written under the target directory's `cargo-timings/`; measure cold builds
+separately. During a React edit, check that `desktop-frontend` serves the update
+and the `desktop` log contains no new Cargo invocation.
+
+To compare build tools locally, install `sccache`, `ccache`, or `lld` with
+Homebrew and run the benchmark with a fresh output directory:
+
+```bash
+pnpm dev:desktop:benchmark --variant baseline --output /tmp/anlg-baseline
+pnpm dev:desktop:benchmark --variant sccache --output /tmp/anlg-sccache
+BENCHMARK_LLD="$(brew --prefix lld)/bin/ld64.lld" pnpm dev:desktop:benchmark --variant lld --output /tmp/anlg-lld
+```
+
+The benchmark records the initial build, an unchanged build, and three small
+Rust plugin edits in a disposable copy of the tracked working files. Your checkout
+is never modified. Logs, results, and Cargo timing reports are preserved; the
+benchmark removes its temporary source, build files, and compiler caches afterward. Additional variants are
+`baseline-original` (with the old static archive), `sccache-no-incremental`,
+`ccache`, `line-tables`, and `swift-cache` (reported unsupported when the
+installed Swift toolchain lacks compilation caching). Use `--replay-cache` to
+also measure a rebuild after removing only that benchmark's target directory.
+Each output directory contains JSON results, logs, and Cargo timing reports.
+Stop local native builds before benchmarking; do not compare runs on a machine
+doing other heavy work. These commands build locally and do not run the app,
+sign or package a release, or trigger GitHub Actions.
 
 ### Develop the Google Drive automation
 

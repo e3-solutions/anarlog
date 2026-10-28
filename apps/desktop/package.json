@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:frontend": "dotenvx run --ignore MISSING_ENV_FILE -f ../../.env.supabase -f .env -- vite",
     "dev:relay": "echo 'Make sure Anarlog Staging app is running, then open http://localhost:1423' && vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
@@ -15,6 +16,8 @@
     "i18n:compile": "lingui compile",
     "i18n:check": "lingui extract --clean --workers 1 && lingui compile --strict --workers 1 && git diff --exit-code -- src/i18n/locales",
     "tauri:dev": "dotenvx run --ignore MISSING_ENV_FILE --env RELAY_PORT=1424 -f ../../.env.supabase -f .env -- tauri dev --no-watch --features dev",
+    "tauri:dev:native": "pnpm tauri:dev --config src-tauri/tauri.conf.dev-native.json",
+    "rust:check": "dotenvx run --ignore MISSING_ENV_FILE -f ../../.env.supabase -f .env -- node ../../scripts/desktop-check.mjs",
     "tauri:build": "tauri build"
   },
   "dependencies": {

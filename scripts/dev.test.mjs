@@ -31,6 +31,7 @@ function fixture(
 for (const [target, port] of Object.entries({
   stack: "18080",
   desktop: "18081",
+  "desktop-frontend": "18081",
   web: "18082",
   api: "18083",
 })) {
@@ -63,6 +64,7 @@ test("preserves overrides and forwards flags without shell interpolation", (t) =
   env.PC_PORT_NUM = "19000";
   env.PC_DISABLE_TUI = "0";
   env.VITE_API_URL = "http://localhost:39001";
+  env.CARGO_BUILD_JOBS = "2";
   const flags = ["--dry-run", "-f", "config with spaces and $(literal).yaml"];
   const result = spawnSync(
     process.execPath,
@@ -77,6 +79,7 @@ test("preserves overrides and forwards flags without shell interpolation", (t) =
     "PC_DISABLE_TUI",
     "PC_LOG_DIR",
     "VITE_API_URL",
+    "CARGO_BUILD_JOBS",
   ]) {
     assert.equal(invocation.env[key], env[key]);
   }
@@ -139,3 +142,27 @@ test(
     assert.equal(code, 42);
   },
 );
+
+test("doctor rejects an installed Metal stub before native compilation", (t) => {
+  const { directory, env } = fixture(t);
+  for (const name of ["rustc", "cargo", "xcodebuild", "xcrun"]) {
+    const body =
+      name === "xcrun"
+        ? 'if (process.argv.includes("--find")) console.log("/usr/bin/metal"); else process.exit(1);'
+        : 'console.log("fixture");';
+    writeFileSync(join(directory, name), `#!${process.execPath}\n${body}\n`, {
+      mode: 0o755,
+    });
+  }
+  const doctor = new URL("desktop-doctor.mjs", import.meta.url).href;
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `Object.defineProperty(process, "platform", { value: "darwin" }); await import(${JSON.stringify(doctor)});`,
+    ],
+    { env, encoding: "utf8" },
+  );
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+});

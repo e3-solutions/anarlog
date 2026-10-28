@@ -25,6 +25,7 @@ jobs:
       - run: >-
           node --test
           scripts/dev.test.mjs
+          scripts/benchmark-desktop-build.test.mjs
           scripts/pr-description.test.mjs
           scripts/release-version.test.mjs
           scripts/notarize-dmg.test.mjs

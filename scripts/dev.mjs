@@ -2,12 +2,20 @@ import { spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+import { desktopEnv } from "./desktop-env.mjs";
+
 const [target, ...args] = process.argv.slice(2);
-const ports = { stack: "18080", desktop: "18081", web: "18082", api: "18083" };
+const ports = {
+  stack: "18080",
+  desktop: "18081",
+  "desktop-frontend": "18081",
+  web: "18082",
+  api: "18083",
+};
 
 if (!Object.hasOwn(ports, target)) {
   console.error(
-    "Usage: node scripts/dev.mjs <stack|desktop|web|api> [process-compose flags]",
+    "Usage: node scripts/dev.mjs <stack|desktop|desktop-frontend|web|api> [process-compose flags]",
   );
   process.exit(1);
 }
@@ -16,7 +24,7 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 process.chdir(root);
 
 const env = {
-  ...process.env,
+  ...desktopEnv(),
   PC_PORT_NUM: process.env.PC_PORT_NUM || ports[target],
   PC_LOG_DIR: process.env.PC_LOG_DIR || `.process-compose/${target}`,
 };
@@ -55,7 +63,7 @@ for (const signal of Object.keys(signalExitCodes)) {
 child.on("error", (error) => {
   console.error(
     error.code === "ENOENT"
-      ? "Install process-compose first (macOS: brew install process-compose). See CONTRIBUTING.md."
+      ? "Install process-compose first (macOS: brew install f1bonacc1/tap/process-compose). See CONTRIBUTING.md."
       : error.message,
   );
   process.exit(1);
