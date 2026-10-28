@@ -1,4 +1,9 @@
-use std::{collections::HashMap, path::PathBuf, sync::Mutex, time::Instant};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    sync::Mutex,
+    time::Instant,
+};
 
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
@@ -49,6 +54,7 @@ const REASONS: &[&str] = &[
     "saved_audio_ready",
     "saving_failed",
     "collector_started",
+    "collector_attached_late",
     "audio_capture_error",
     "transcription_error",
     "sharing_lookup_pending",
@@ -264,6 +270,8 @@ struct Collector {
     user_id: Option<String>,
     journal: Journal,
     owners: HashMap<String, Option<String>>,
+    startup_pending: HashSet<String>,
+    initializing: bool,
     boot_id: String,
     started: Instant,
     app_version: String,
@@ -312,6 +320,8 @@ impl RecordingDiagnostics {
             user_id: None,
             journal: Journal::default(),
             owners: HashMap::new(),
+            startup_pending: HashSet::new(),
+            initializing: true,
             boot_id: uuid::Uuid::new_v4().to_string(),
             started: Instant::now(),
             app_version,
@@ -422,7 +432,9 @@ impl Collector {
         enabled: bool,
         purge: bool,
     ) -> Result<(), String> {
+        self.initializing = false;
         if !enabled || user_id.is_none() {
+            self.startup_pending.clear();
             if purge {
                 self.owners
                     .retain(|_, owner| user_id.is_some() && owner != &user_id);
@@ -557,6 +569,10 @@ impl Collector {
         evidence: Evidence,
     ) -> Result<(), String> {
         if kind == "capture_started" {
+            if self.initializing && self.user_id.is_none() && !self.owners.contains_key(session_id)
+            {
+                self.startup_pending.insert(session_id.into());
+            }
             self.owners
                 .entry(session_id.into())
                 .or_insert_with(|| self.user_id.clone());
@@ -564,6 +580,7 @@ impl Collector {
         let Some(owner) = self.owners.get(session_id).cloned().flatten() else {
             if kind == "capture_stopped" {
                 self.owners.remove(session_id);
+                self.startup_pending.remove(session_id);
             }
             return Ok(());
         };
@@ -576,6 +593,8 @@ impl Collector {
                 user_id: None,
                 journal: Journal::default(),
                 owners: HashMap::new(),
+                startup_pending: HashSet::new(),
+                initializing: false,
                 boot_id: self.boot_id.clone(),
                 started: self.started,
                 app_version: self.app_version.clone(),
@@ -586,8 +605,43 @@ impl Collector {
         };
         if kind == "capture_stopped" {
             self.owners.remove(session_id);
+            self.startup_pending.remove(session_id);
         }
         result
+    }
+
+    fn attach_startup_sessions(
+        &mut self,
+        capture_owners: &HashMap<String, String>,
+    ) -> Result<(), String> {
+        let Some(user) = self.user_id.clone() else {
+            return Ok(());
+        };
+        let sessions = self
+            .startup_pending
+            .iter()
+            .filter(|id| {
+                self.owners.get(*id) == Some(&None) && capture_owners.get(*id) == Some(&user)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for id in sessions {
+            self.owners.insert(id.clone(), Some(user.clone()));
+            self.startup_pending.remove(&id);
+            self.journal
+                .active_sessions
+                .insert(id.clone(), self.boot_id.clone());
+            self.append(Input {
+                session_id: Some(id),
+                kind: "policy_decision".into(),
+                reason: "collector_attached_late".into(),
+                evidence: Evidence {
+                    owned: Some(true),
+                    ..Default::default()
+                },
+            })?;
+        }
+        Ok(())
     }
 
     fn append_native(
@@ -683,11 +737,18 @@ pub fn recording_diagnostics_configure(
     enabled: bool,
     purge: Option<bool>,
 ) -> Result<(), String> {
-    app.state::<RecordingDiagnostics>()
-        .0
-        .lock()
-        .map_err(|_| "Diagnostics unavailable")?
-        .configure(user_id, enabled, purge.unwrap_or(false))
+    let state = app.state::<RecordingDiagnostics>();
+    let mut collector = state.0.lock().map_err(|_| "Diagnostics unavailable")?;
+    let capture_owners = if enabled {
+        crate::shared_recording::diagnostic_capture_owners(&app)
+    } else {
+        HashMap::new()
+    };
+    collector.configure(user_id, enabled, purge.unwrap_or(false))?;
+    if enabled {
+        collector.attach_startup_sessions(&capture_owners)?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -942,6 +1003,42 @@ mod tests {
         state.heartbeat(|_| panic!("Opted-out sessions must not be inspected"));
         state.configure(Some(account.clone()), true, false).unwrap();
         assert!(state.batch(&account).unwrap().events.is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn late_configuration_attaches_only_verified_startup_owner_and_cannot_undo_opt_out() {
+        let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let a = uuid::Uuid::new_v4().to_string();
+        let b = uuid::Uuid::new_v4().to_string();
+        let owned = uuid::Uuid::new_v4().to_string();
+        let other = uuid::Uuid::new_v4().to_string();
+        let unowned = uuid::Uuid::new_v4().to_string();
+        let mut state = collector(dir.clone());
+        for id in [&owned, &other, &unowned] {
+            state
+                .native_event(id, "capture_started", "native_lifecycle")
+                .unwrap();
+        }
+        let verified = HashMap::from([(owned.clone(), a.clone()), (other.clone(), b)]);
+        state.configure(Some(a.clone()), true, false).unwrap();
+        state.attach_startup_sessions(&verified).unwrap();
+        let events = state.batch(&a).unwrap().events;
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].reason, "collector_attached_late");
+        assert_eq!(events[0].session_id.as_ref(), Some(&owned));
+        assert_eq!(state.owners.get(&other), Some(&None));
+        assert_eq!(state.owners.get(&unowned), Some(&None));
+        state
+            .native_event(&owned, "capture_source_ended", "native_capture_ended")
+            .unwrap();
+        state.configure(Some(a.clone()), false, true).unwrap();
+        state
+            .native_event(&owned, "capture_started", "native_lifecycle")
+            .unwrap();
+        state.configure(Some(a.clone()), true, false).unwrap();
+        state.attach_startup_sessions(&verified).unwrap();
+        assert!(state.batch(&a).unwrap().events.is_empty());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
