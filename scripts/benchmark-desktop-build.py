@@ -102,7 +102,7 @@ def benchmark(root, output, variant, samples, replay):
             "rustc": capture(["rustc", "-Vv"], root, env),
             "swift": capture(["swift", "--version"], root, env),
             "xcode": capture(["xcodebuild", "-version"], root, env),
-            "metal": capture(["xcrun", "--find", "metal"], root, env),
+            "metal": capture(["xcrun", "metal", "--version"], root, env),
             "memory": capture(["sysctl", "-n", "hw.memsize"], root, env),
         },
     }

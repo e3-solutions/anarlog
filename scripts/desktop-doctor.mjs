@@ -45,7 +45,7 @@ if (process.platform === "darwin") {
   check(
     "Metal compiler",
     "xcrun",
-    ["--find", "metal"],
+    ["metal", "--version"],
     "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -downloadComponent MetalToolchain",
   );
 }

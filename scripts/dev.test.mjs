@@ -140,3 +140,27 @@ test(
     assert.equal(code, 42);
   },
 );
+
+test("doctor rejects an installed Metal stub before native compilation", (t) => {
+  const { directory, env } = fixture(t);
+  for (const name of ["rustc", "cargo", "xcodebuild", "xcrun"]) {
+    const body =
+      name === "xcrun"
+        ? 'if (process.argv.includes("--find")) console.log("/usr/bin/metal"); else process.exit(1);'
+        : 'console.log("fixture");';
+    writeFileSync(join(directory, name), `#!${process.execPath}\n${body}\n`, {
+      mode: 0o755,
+    });
+  }
+  const doctor = new URL("desktop-doctor.mjs", import.meta.url).href;
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `Object.defineProperty(process, "platform", { value: "darwin" }); await import(${JSON.stringify(doctor)});`,
+    ],
+    { env, encoding: "utf8" },
+  );
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+});
