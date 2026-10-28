@@ -380,6 +380,24 @@ pub(crate) fn start_raw<R: tauri::Runtime>(
         );
     shared
 }
+
+pub(crate) fn diagnostic_capture_owners<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> HashMap<String, String> {
+    app.state::<QueueState>()
+        .raw
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .filter(|(_, timeline)| timeline.stopped_at_ms.is_none())
+        .filter_map(|(id, timeline)| {
+            timeline
+                .capture_user_id
+                .as_ref()
+                .map(|owner| (id.clone(), owner.clone()))
+        })
+        .collect()
+}
 pub(crate) fn observe_raw<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     session_id: &str,

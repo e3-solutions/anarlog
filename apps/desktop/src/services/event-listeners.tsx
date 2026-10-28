@@ -13,6 +13,7 @@ import {
 import { getCurrentWebviewWindowLabel } from "@anlg/plugin-windows";
 import { useMountEffect } from "@anlg/ui/hooks/use-mount-effect";
 
+import { recordRecordingDiagnostic } from "~/application-health/recording-diagnostics";
 import {
   getCalendarEventMeetingLink,
   getCalendarEventStartedAt,
@@ -197,6 +198,13 @@ function handleAutoStopEndedNotification(
   }
 
   if (type === "notification_confirm") {
+    const live = listenerStore.getState().live;
+    if (live.status === "active" && live.sessionId === parsedSessionId)
+      recordRecordingDiagnostic(
+        parsedSessionId,
+        "policy_decision",
+        "user_kept_recording",
+      );
     return true;
   }
 
@@ -210,6 +218,11 @@ function handleAutoStopEndedNotification(
     listenerState.live.status === "active" &&
     listenerState.live.sessionId === sessionId
   ) {
+    recordRecordingDiagnostic(
+      sessionId,
+      "stop_requested",
+      type === "notification_timeout" ? "grace_elapsed" : "manual_stop",
+    );
     listenerState.stop();
   }
 

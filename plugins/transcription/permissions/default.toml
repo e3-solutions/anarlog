@@ -1,6 +1,10 @@
 [default]
 description = "Default permissions for the plugin"
 permissions = [
+    "allow-recording-diagnostics-configure",
+    "allow-recording-diagnostics-record",
+    "allow-recording-diagnostics-batch",
+    "allow-recording-diagnostics-ack",
     "allow-shared-recording-configuration",
     "allow-meeting-recording-control-set",
     "allow-meeting-recording-exclusions",

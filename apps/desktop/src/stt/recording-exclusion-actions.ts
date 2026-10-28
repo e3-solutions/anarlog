@@ -13,6 +13,7 @@ import {
   type RecordingOccurrence,
 } from "./recording-exclusions";
 
+import { recordRecordingDiagnostic } from "~/application-health/recording-diagnostics";
 import { createSession } from "~/session/queries";
 import { excludeSharedRecording } from "~/shared-recordings/native";
 import { listenerStore } from "~/store/zustand/listener/instance";
@@ -48,6 +49,8 @@ export async function excludeMeetingRecording({
           current.room === occurrence.room &&
           current.kind !== "calendar"))),
   );
+  if (affectsLive && live.sessionId)
+    recordRecordingDiagnostic(live.sessionId, "stop_requested", "manual_stop");
   let bound: string[] = [];
   try {
     bound = getRecordingOccurrenceSessionIds(userId, occurrence);

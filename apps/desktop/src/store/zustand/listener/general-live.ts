@@ -46,6 +46,7 @@ import {
   type TranscriptState,
 } from "./transcript";
 
+import { recordRecordingDiagnostic } from "~/application-health/recording-diagnostics";
 import { prepareSessionPeaks } from "~/audio-player/waveform";
 import { runMeetingCompletedAutomations } from "~/automations/engine";
 import { syncCloudApiSnapshotBestEffort } from "~/cloud-api/client";
@@ -653,6 +654,7 @@ export const startLiveSession = <T extends LiveStore>(
   targetSessionId: string,
   params: CaptureParams,
 ): Promise<boolean> => {
+  const diagnosticOwner = get().live.captureOwnerUserId;
   clearLiveEventUnlisteners(
     get().live.eventUnlistenersBySession[targetSessionId],
   );
@@ -660,6 +662,13 @@ export const startLiveSession = <T extends LiveStore>(
     delete live.eventUnlistenersBySession[targetSessionId];
   });
 
+  recordRecordingDiagnostic(
+    targetSessionId,
+    "policy_decision",
+    "frontend_start_requested",
+    {},
+    diagnosticOwner,
+  );
   const handlers = createSessionEventHandlers(set, get, targetSessionId);
 
   const program = Effect.gen(function* () {
@@ -728,6 +737,13 @@ export const startLiveSession = <T extends LiveStore>(
   return Effect.runPromiseExit(program).then((exit) =>
     Exit.match(exit, {
       onFailure: (cause) => {
+        recordRecordingDiagnostic(
+          targetSessionId,
+          "capture_error",
+          "frontend_start_failed",
+          {},
+          diagnosticOwner,
+        );
         console.error(JSON.stringify(cause));
         const error = getCaptureStartErrorMessage(cause);
         const currentLive = get().live;
@@ -1038,6 +1054,7 @@ export const stopLiveSession = <T extends GeneralState>(
   get: StoreApi<T>["getState"],
 ) => {
   const sessionId = get().live.sessionId;
+  recordRecordingDiagnostic(sessionId, "stop_requested", "observed");
 
   if (sessionId) {
     setLiveState(set, (live) => {
@@ -1057,6 +1074,7 @@ export const stopLiveSession = <T extends GeneralState>(
   void Effect.runPromiseExit(program).then((exit) => {
     Exit.match(exit, {
       onFailure: (cause) => {
+        recordRecordingDiagnostic(sessionId, "capture_error", "stop_failed");
         console.error("Failed to stop session:", cause);
         setLiveState(set, (live) => {
           if (sessionId && live.sessionId === sessionId) {

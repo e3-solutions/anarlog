@@ -35,6 +35,10 @@ import { recordDetectedMeetingApps } from "./meeting-source-apps";
 import { useAutomaticMeetingRecording } from "./useAutomaticMeetingRecording";
 
 import {
+  recordRecordingDiagnostic,
+  type RecordingDiagnosticEvidence,
+} from "~/application-health/recording-diagnostics";
+import {
   getNearbyCalendarEvents,
   type NearbyCalendarEvent,
 } from "~/calendar/queries";
@@ -93,6 +97,25 @@ export const useHandleDetectEvents = (store: ListenerStore) => {
     let unlistenDetect: (() => void) | undefined;
     let cancelled = false;
     isOnlineRef.current = navigator.onLine;
+    const report = (
+      reason: string,
+      evidence: RecordingDiagnosticEvidence = {},
+      sessionId = store.getState().live.sessionId,
+    ) => {
+      if (!sessionId || cancelled) return;
+      recordRecordingDiagnostic(
+        sessionId,
+        reason === "grace_elapsed" || reason === "sleep"
+          ? "stop_requested"
+          : "policy_decision",
+        reason,
+        {
+          autoStop: autoStopMeetingsRef.current !== false,
+          online: isOnlineRef.current,
+          ...evidence,
+        },
+      );
+    };
     const clearNotificationsIfActive = () => {
       const live = store.getState().live;
       if (live.status === "active") {
@@ -138,6 +161,7 @@ export const useHandleDetectEvents = (store: ListenerStore) => {
       const currentLive = store.getState().live;
       const currentTrigger = currentLive.triggerAppIds ?? [];
       if (appIds.some((id) => currentTrigger.includes(id))) {
+        report("mic_still_active", { micActive: true });
         clearPendingAutoStop();
         if (
           currentLive.sessionId &&
@@ -179,13 +203,17 @@ export const useHandleDetectEvents = (store: ListenerStore) => {
       };
       pending.timeout = setTimeout(
         () => {
-          void confirmAutoStop(candidateAppIds, stoppedApps, pending).finally(
-            () => {
+          void confirmAutoStop(candidateAppIds, stoppedApps, pending)
+            .catch((error) => {
+              if (pendingAutoStopRef.current === pending)
+                report("probe_error", {}, sessionId);
+              throw error;
+            })
+            .finally(() => {
               if (pendingAutoStopRef.current === pending) {
                 pendingAutoStopRef.current = null;
               }
-            },
-          );
+            });
         },
         Math.min(Math.max(delayMs, 0), MAX_TIMEOUT_DELAY_MS),
       );
@@ -197,6 +225,13 @@ export const useHandleDetectEvents = (store: ListenerStore) => {
       stoppedApps: { id: string; name: string }[],
       pending: PendingAutoStop,
     ) {
+      const record = (
+        reason: string,
+        evidence: RecordingDiagnosticEvidence = {},
+      ) => {
+        if (pendingAutoStopRef.current === pending)
+          report(reason, evidence, pending.sessionId);
+      };
       const live = store.getState().live;
       if (
         pendingAutoStopRef.current !== pending ||
@@ -211,6 +246,7 @@ export const useHandleDetectEvents = (store: ListenerStore) => {
         !currentTrigger ||
         !candidateAppIds.some((id) => currentTrigger.includes(id))
       ) {
+        record("owner_mismatch");
         return;
       }
 
@@ -222,9 +258,13 @@ export const useHandleDetectEvents = (store: ListenerStore) => {
         (id) => !candidateAppIds.includes(id),
       );
       const result = await detectCommands.listMicUsingApplications();
+      const evidence: RecordingDiagnosticEvidence = {
+        micStatus: result.status,
+      };
       if (result.status === "ok") {
         const activeAppIds = new Set(result.data.map((app) => app.id));
         if (activeCheckAppIds.some((id) => activeAppIds.has(id))) {
+          record("mic_still_active", { ...evidence, micActive: true });
           return;
         }
 
@@ -256,13 +296,16 @@ export const useHandleDetectEvents = (store: ListenerStore) => {
           ) {
             void notificationCommands.clearNotifications();
           }
+          record("mic_still_active", { ...evidence, micActive: true });
           // Track them so the recording stops when the call itself ends.
           captureTriggerApps(meetingAppsStillOnCall);
           return;
         }
       } else if (pending.requireMicSnapshot || hasUnreliableActiveCheckApp) {
+        record("probe_error", evidence);
         return;
       }
+      if (result.status === "ok") evidence.micActive = false;
 
       if (pendingAutoStopRef.current !== pending) {
         return;
@@ -270,6 +313,7 @@ export const useHandleDetectEvents = (store: ListenerStore) => {
 
       const accessibilityResult =
         await detectCommands.inspectMeetingAccessibility();
+      evidence.inspectionStatus = accessibilityResult.status;
       if (
         accessibilityResult.status === "ok" &&
         inspectionsShowActiveMeetingForApps(
@@ -280,6 +324,7 @@ export const useHandleDetectEvents = (store: ListenerStore) => {
         if (pendingAutoStopRef.current !== pending) {
           return;
         }
+        record("meeting_active", { ...evidence, observation: "active" });
         scheduleAutoStop(
           AUTO_STOP_CONFIRM_DELAY_MS,
           candidateAppIds,
@@ -311,6 +356,10 @@ export const useHandleDetectEvents = (store: ListenerStore) => {
           return;
         }
         if (holdUntilMs > Date.now()) {
+          record("network_recovery_hold", {
+            ...evidence,
+            networkHoldRemainingMs: holdUntilMs - Date.now(),
+          });
           scheduleAutoStop(
             holdUntilMs - Date.now(),
             candidateAppIds,
@@ -323,6 +372,12 @@ export const useHandleDetectEvents = (store: ListenerStore) => {
           return;
         }
 
+        record(
+          notificationRecordingRef.current
+            ? "stop_prompt_pending"
+            : "stop_prompt_disabled",
+          evidence,
+        );
         if (pending.sessionId) {
           await showMeetingEndedPrompt({
             sessionId: pending.sessionId,
@@ -342,6 +397,12 @@ export const useHandleDetectEvents = (store: ListenerStore) => {
         return;
       }
       if (shouldPrompt) {
+        record(
+          notificationRecordingRef.current
+            ? "stop_prompt_pending"
+            : "stop_prompt_disabled",
+          evidence,
+        );
         if (pending.sessionId) {
           await showMeetingEndedPrompt({
             sessionId: pending.sessionId,
@@ -362,6 +423,7 @@ export const useHandleDetectEvents = (store: ListenerStore) => {
         return;
       }
 
+      record("grace_elapsed", evidence);
       stop();
     }
 
@@ -478,6 +540,7 @@ export const useHandleDetectEvents = (store: ListenerStore) => {
             return;
           const autoStopEnabled = autoStopMeetingsRef.current !== false;
           if (!autoStopEnabled) {
+            report("auto_stop_disabled");
             return;
           }
 
@@ -500,6 +563,7 @@ export const useHandleDetectEvents = (store: ListenerStore) => {
               return;
             }
 
+            report("grace_pending", { micStatus: "pending" });
             scheduleAutoStop(
               AUTO_STOP_CONFIRM_DELAY_MS,
               candidateAppIds,
@@ -509,9 +573,10 @@ export const useHandleDetectEvents = (store: ListenerStore) => {
               !isOnlineRef.current ||
                 isRecentNetworkDrop(lastReconnectAtMsRef.current, Date.now()),
             );
-          }
+          } else report("owner_mismatch");
         } else if (payload.type === "sleepStateChanged") {
           if (payload.value) {
+            report("sleep");
             clearPendingAutoStop();
             automaticMeetings.reset.current();
             stop();

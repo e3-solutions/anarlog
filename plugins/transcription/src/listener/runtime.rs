@@ -42,6 +42,14 @@ impl anlg_storage::StorageRuntime for TauriRuntime {
 }
 
 impl ListenerRuntime for TauriRuntime {
+    fn capture_source_ended(&self, session_id: &str) {
+        crate::recording_diagnostics::lifecycle(
+            &self.app,
+            session_id,
+            "capture_source_ended",
+            "native_capture_ended",
+        );
+    }
     fn capture_allowed(&self, session_id: &str) -> bool {
         crate::shared_recording::capture_allowed(&self.app, session_id)
     }
@@ -49,6 +57,21 @@ impl ListenerRuntime for TauriRuntime {
         crate::shared_recording::observe_raw(&self.app, session_id, frames, captured);
     }
     fn emit_lifecycle(&self, event: anlg_transcription_core::listener::SessionLifecycleEvent) {
+        use anlg_transcription_core::listener::SessionLifecycleEvent;
+        match &event {
+            SessionLifecycleEvent::Active { session_id, .. } => {
+                crate::recording_diagnostics::lifecycle(
+                    &self.app,
+                    session_id,
+                    "capture_started",
+                    "native_lifecycle",
+                )
+            }
+            SessionLifecycleEvent::Finalizing { .. } => {}
+            SessionLifecycleEvent::Inactive {
+                session_id, error, ..
+            } => crate::recording_diagnostics::stopped(&self.app, session_id, error.is_some()),
+        }
         use tauri_plugin_tray::TrayPluginExt;
         match &event {
             anlg_transcription_core::listener::SessionLifecycleEvent::Active {
@@ -223,6 +246,23 @@ impl ListenerRuntime for TauriRuntime {
     }
 
     fn emit_error(&self, event: anlg_transcription_core::listener::SessionErrorEvent) {
+        use anlg_transcription_core::listener::SessionErrorEvent;
+        let (session_id, reason) = match &event {
+            SessionErrorEvent::AudioError {
+                session_id, error, ..
+            } => (
+                session_id,
+                if error.starts_with("audio_storage_") {
+                    "saving_failed"
+                } else {
+                    "audio_capture_error"
+                },
+            ),
+            SessionErrorEvent::ConnectionError { session_id, .. } => {
+                (session_id, "transcription_error")
+            }
+        };
+        crate::recording_diagnostics::lifecycle(&self.app, session_id, "capture_error", reason);
         match &event {
             anlg_transcription_core::listener::SessionErrorEvent::ConnectionError {
                 session_id,

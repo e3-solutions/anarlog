@@ -674,6 +674,12 @@ pub(crate) fn setup(app: &tauri::AppHandle) {
                 );
                 return;
             }
+            crate::recording_diagnostics::lifecycle(
+                &app,
+                &expected.session_id,
+                "stop_requested",
+                "manual_stop",
+            );
             // Gate synchronously in the native menu handler before any frontend event.
             let result = exclude_gate(&app, &expected.session_id, &expected.user_id);
             let held = if !capture_allowed(&app, &expected.session_id) {
@@ -685,6 +691,14 @@ pub(crate) fn setup(app: &tauri::AppHandle) {
             tauri::async_runtime::spawn(async move {
                 let stopped = stop_verified(&app, &expected.session_id).await;
                 let stop_error = stopped.err();
+                if stop_error.is_some() {
+                    crate::recording_diagnostics::lifecycle(
+                        &app,
+                        &expected.session_id,
+                        "stop_requested",
+                        "stop_failed",
+                    );
+                }
                 let error = stop_error
                     .clone()
                     .or_else(|| result.err())

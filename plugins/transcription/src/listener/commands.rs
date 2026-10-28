@@ -179,39 +179,47 @@ pub async fn start_capture<R: tauri::Runtime>(
         authenticated_user_id,
     } = params;
     let session_id = params.session_id.clone();
-    crate::shared_recording::ensure_allowed(&app, &session_id)?;
-    let _audio_guard = app.fs_sync().lock_session_audio(&session_id).await;
-    crate::shared_recording::ensure_allowed(&app, &session_id)?;
-    crate::shared_recording::meeting_control::prepare_capture(
-        &app,
-        &session_id,
-        authenticated_user_id.as_deref(),
-    )?;
-    if crate::shared_recording::start_raw(&app, &session_id, authenticated_user_id.as_deref()) {
-        params.retain_audio = Some(true);
-    }
-    let live_transcript = params.live_transcript.clone();
-    let registry = app.state::<LiveJournalRegistry>();
-    let registration = live_transcript
-        .map(|target| register_app_journal(&registry, app.clone(), session_id.clone(), target))
-        .transpose()?;
-
-    match (app.listener().start_capture(params).await, registration) {
-        (Ok(()), Some((_, Some(previous)))) => previous.release(),
-        (Ok(()), Some((_, None))) => {}
-        (Ok(()), None) => registry.release_session(&session_id)?,
-        (Err(error), Some((registered, previous))) => {
-            let _ = registry.rollback_registration(&session_id, &registered, previous);
-            return Err(error.to_string());
+    crate::recording_diagnostics::begin(&app, &session_id, authenticated_user_id.as_deref());
+    let result = async {
+        crate::shared_recording::ensure_allowed(&app, &session_id)?;
+        let _audio_guard = app.fs_sync().lock_session_audio(&session_id).await;
+        crate::shared_recording::ensure_allowed(&app, &session_id)?;
+        crate::shared_recording::meeting_control::prepare_capture(
+            &app,
+            &session_id,
+            authenticated_user_id.as_deref(),
+        )?;
+        if crate::shared_recording::start_raw(&app, &session_id, authenticated_user_id.as_deref()) {
+            params.retain_audio = Some(true);
         }
-        (Err(error), None) => return Err(error.to_string()),
-    }
+        let live_transcript = params.live_transcript.clone();
+        let registry = app.state::<LiveJournalRegistry>();
+        let registration = live_transcript
+            .map(|target| register_app_journal(&registry, app.clone(), session_id.clone(), target))
+            .transpose()?;
 
-    if let Err(error) = crate::shared_recording::ensure_allowed(&app, &session_id) {
-        crate::stop_capture_for_session(&app, &session_id).await;
-        return Err(error);
+        match (app.listener().start_capture(params).await, registration) {
+            (Ok(()), Some((_, Some(previous)))) => previous.release(),
+            (Ok(()), Some((_, None))) => {}
+            (Ok(()), None) => registry.release_session(&session_id)?,
+            (Err(error), Some((registered, previous))) => {
+                let _ = registry.rollback_registration(&session_id, &registered, previous);
+                return Err(error.to_string());
+            }
+            (Err(error), None) => return Err(error.to_string()),
+        }
+
+        if let Err(error) = crate::shared_recording::ensure_allowed(&app, &session_id) {
+            crate::stop_capture_for_session(&app, &session_id).await;
+            return Err(error);
+        }
+        Ok(())
     }
-    Ok(())
+    .await;
+    if result.is_err() {
+        crate::recording_diagnostics::start_failed(&app, &session_id);
+    }
+    result
 }
 
 #[tauri::command]
