@@ -461,7 +461,7 @@ describe("automatic local meeting recording", () => {
   });
 
   it.each([slack, meet])(
-    "keeps muted $platform on its application output session and ignores unrelated audio after confirmed leave",
+    "keeps muted $platform on ongoing application audio and ignores unrelated audio after confirmed leave",
     async (inspection) => {
       snapshot([inspection]);
       const audio = {
@@ -483,7 +483,13 @@ describe("automatic local meeting recording", () => {
       ]);
       mocks.audioProcesses.mockResolvedValue({
         status: "ok",
-        data: [{ ...audio, inputActive: false, outputActive: true }],
+        data: [
+          {
+            ...audio,
+            inputActive: inspection.platform === "googleMeet",
+            outputActive: true,
+          },
+        ],
       });
       await tick(90_000);
       expect(stop).not.toHaveBeenCalled();
@@ -496,6 +502,78 @@ describe("automatic local meeting recording", () => {
       expect(stop).toHaveBeenCalledOnce();
     },
   );
+
+  it("keeps the first browser release deadline when stale AX later confirms departure and blocks restart until input returns", async () => {
+    const audio = {
+      app: meet.app,
+      pid: 456,
+      inputActive: true,
+      outputActive: true,
+    };
+    mocks.audioProcesses.mockResolvedValue({ status: "ok", data: [audio] });
+    const { active, stop } = setup();
+    await tick(0);
+    active();
+    await tick(75_000);
+    expect(stop).not.toHaveBeenCalled();
+    mocks.audioProcesses.mockResolvedValue({
+      status: "ok",
+      data: [{ ...audio, inputActive: false }],
+    });
+    await tick(10_000);
+    snapshot([{ ...meet, activeCall: false }]);
+    await tick(4_000);
+    expect(stop).not.toHaveBeenCalled();
+    await tick(4_000);
+    expect(stop).toHaveBeenCalledOnce();
+    snapshot([meet]);
+    await tick(20_000);
+    expect(mocks.open).toHaveBeenCalledOnce();
+    mocks.audioProcesses.mockResolvedValue({ status: "ok", data: [audio] });
+    await tick();
+    expect(mocks.open).toHaveBeenCalledTimes(2);
+    active();
+    stop();
+    mocks.audioProcesses.mockResolvedValue({ status: "ok", data: [] });
+    await tick(20_000);
+    mocks.audioProcesses.mockResolvedValue({ status: "ok", data: [audio] });
+    await tick(20_000);
+    expect(mocks.open).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancels browser release grace on input return and never stops from an unknown audio reading", async () => {
+    const audio = {
+      app: meet.app,
+      pid: 456,
+      inputActive: true,
+      outputActive: false,
+    };
+    mocks.audioProcesses.mockResolvedValue({ status: "ok", data: [audio] });
+    const { active, stop } = setup();
+    await tick(0);
+    active();
+    snapshot([
+      {
+        ...meet,
+        activeCall: false,
+        warnings: ["no uniquely scoped meeting AXWindow"],
+      },
+    ]);
+    mocks.audioProcesses.mockResolvedValue({ status: "ok", data: [] });
+    await tick(10_000);
+    mocks.audioProcesses.mockResolvedValue({ status: "ok", data: [audio] });
+    await tick(20_000);
+    expect(stop).not.toHaveBeenCalled();
+    mocks.audioProcesses.mockResolvedValue({ status: "ok", data: [] });
+    await tick(10_000);
+    mocks.audioProcesses.mockRejectedValue(new Error("audio unavailable"));
+    mocks.inspect.mockRejectedValue(new Error("AX unavailable"));
+    await tick(20_000);
+    expect(stop).not.toHaveBeenCalled();
+    mocks.audioProcesses.mockResolvedValue({ status: "ok", data: [] });
+    await tick();
+    expect(stop).toHaveBeenCalledOnce();
+  });
 
   it("preserves Teams recording and manual Stop when the bound tab changes its SPA route", async () => {
     const identity = "https://teams.cloud.microsoft/v2/#/meet/123:tab:42";
@@ -685,38 +763,56 @@ describe("automatic local meeting recording", () => {
     );
   });
 
-  it("holds unknown call evidence during a network interruption and stops on reliable leave after reconnect", async () => {
-    const online = vi
-      .spyOn(window.navigator, "onLine", "get")
-      .mockReturnValue(true);
-    try {
-      snapshot([slack]);
-      const { active, stop } = setup();
-      await tick(0);
-      active();
-      online.mockReturnValue(false);
-      window.dispatchEvent(new Event("offline"));
-      snapshot([]);
-      mocks.microphones.mockResolvedValue({ status: "ok", data: [slack.app] });
-      await tick(90_000);
-      expect(stop).not.toHaveBeenCalled();
+  it.each([slack, meet])(
+    "holds $platform input release during a network interruption and stops on reliable leave after reconnect",
+    async (inspection) => {
+      const online = vi
+        .spyOn(window.navigator, "onLine", "get")
+        .mockReturnValue(true);
+      try {
+        snapshot([inspection]);
+        mocks.microphones.mockResolvedValue({
+          status: "ok",
+          data: [inspection.app],
+        });
+        const { active, stop } = setup();
+        await tick(0);
+        active();
+        online.mockReturnValue(false);
+        window.dispatchEvent(new Event("offline"));
+        snapshot([
+          {
+            ...inspection,
+            activeCall: false,
+            warnings: ["no uniquely scoped meeting AXWindow"],
+          },
+        ]);
+        mocks.microphones.mockResolvedValue({
+          status: "ok",
+          data: [inspection.app],
+        });
+        await tick(90_000);
+        expect(stop).not.toHaveBeenCalled();
 
-      online.mockReturnValue(true);
-      window.dispatchEvent(new Event("online"));
-      mocks.microphones.mockResolvedValue({ status: "ok", data: [] });
-      // Reconnection alone must not discard the interruption hold.
-      await tick(70_000);
-      expect(stop).not.toHaveBeenCalled();
+        online.mockReturnValue(true);
+        window.dispatchEvent(new Event("online"));
+        mocks.microphones.mockResolvedValue({ status: "ok", data: [] });
+        // Reconnection alone must not discard the interruption hold.
+        await tick(70_000);
+        expect(stop).not.toHaveBeenCalled();
 
-      snapshot([{ ...slack, activeCall: false }]);
-      await tick(14_000);
-      expect(stop).not.toHaveBeenCalled();
-      await tick(4_000);
-      expect(stop).toHaveBeenCalledOnce();
-    } finally {
-      online.mockRestore();
-    }
-  });
+        snapshot([{ ...inspection, activeCall: false }]);
+        await tick(14_000);
+        if (inspection.platform === "slack")
+          expect(stop).not.toHaveBeenCalled();
+        else expect(stop).toHaveBeenCalledOnce();
+        await tick(4_000);
+        expect(stop).toHaveBeenCalledOnce();
+      } finally {
+        online.mockRestore();
+      }
+    },
+  );
 
   it("does not restart a manually stopped call after unreadable local evidence", async () => {
     const { active, stop } = setup();
