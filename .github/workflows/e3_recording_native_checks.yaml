@@ -76,6 +76,7 @@ jobs:
         run: |
           cargo test --locked --release --target aarch64-apple-darwin -p tauri-plugin-transcription -p tauri-plugin-analytics --features tauri-plugin-analytics/disable-analytics --lib shared_recording -- --test-threads=1
           cargo test --locked --release --target aarch64-apple-darwin -p tauri-plugin-transcription -p tauri-plugin-analytics --features tauri-plugin-analytics/disable-analytics --lib recording_diagnostics::tests -- --test-threads=1
+      - run: cargo test --locked --release --target aarch64-apple-darwin -p tauri-plugin-updater2 --lib automatic::tests
       - name: Test native tray controls
         if: ${{ !cancelled() && steps.pnpm.outcome == 'success' }}
         run: pnpm exec cargo test --locked --release --target aarch64-apple-darwin -p tauri-plugin-anlg-tray -p tauri-plugin-analytics --features tauri-plugin-analytics/disable-analytics --lib -- --test-threads=1
