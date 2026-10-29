@@ -71,6 +71,51 @@ fn browser_inspection_reports_join_and_departure_beside_home_without_ambiguity()
 }
 
 #[test]
+fn teams_browser_lifecycle_preserves_fragment_identity_and_confirms_departure() {
+    let url = "https://teams.microsoft.com/v2/#/meet/123";
+    let mut root = meet_window("abc-defg-hij", 0x1000, true);
+    root.platform = MeetingPlatform::MicrosoftTeams;
+    root.web_area_url = Some(url.to_string());
+    root.window_title = Some("Microsoft Teams".to_string());
+    root.nodes[1].title = Some("Leave".to_string());
+    root.nodes
+        .push(fixture_node(2, "AXToolbar", "Meeting controls", &[1]));
+    let joined = browser_rows(vec![BrowserMeetingRoot {
+        platform: root.platform.clone(),
+        window_title: root.window_title.clone(),
+        web_area_url: root.web_area_url.clone(),
+        nodes: root.nodes.clone(),
+    }]);
+    assert!(joined[0].active_call);
+    assert_eq!(
+        joined[0].call_identity.as_deref(),
+        Some("https://teams.microsoft.com/v2/#/meet/123:window:1000")
+    );
+    root.nodes[1].title = Some("Rejoin".to_string());
+    let left = browser_rows(vec![root]);
+    assert!(!left[0].active_call);
+    assert_eq!(left[0].call_identity, joined[0].call_identity);
+    assert!(left[0].warnings.is_empty());
+    let inventory =
+        chrome_tabs::parse_inventory(&format!("E3_MEET_TABS_V1\n42\t{url}\nE3_MEET_TABS_END"))
+            .unwrap();
+    assert_eq!(
+        chrome_tabs::unique_identity(url, &inventory).as_deref(),
+        Some("https://teams.microsoft.com/v2/#/meet/123:tab:42")
+    );
+}
+
+#[test]
+fn teams_leave_team_dialog_is_not_an_active_browser_meeting() {
+    let mut root = meet_window("abc-defg-hij", 0x1000, true);
+    root.platform = MeetingPlatform::MicrosoftTeams;
+    root.web_area_url = Some("https://teams.cloud.microsoft/v2/".to_string());
+    root.window_title = Some("Microsoft Teams".to_string());
+    root.nodes[1].title = Some("Leave".to_string());
+    assert!(!browser_rows(vec![root])[0].active_call);
+}
+
+#[test]
 fn browser_inspection_recognizes_prefixed_meet_routes_and_binds_the_same_chrome_tab() {
     for url in [
         "https://meet.google.com/abc-defg-hij",
@@ -132,7 +177,10 @@ fn browser_inspection_blocks_competing_calls_including_browser_specific_teams_co
         platform: MeetingPlatform::MicrosoftTeams,
         window_title: Some("Microsoft Teams".to_string()),
         web_area_url: Some("https://teams.microsoft.com/meet/123".to_string()),
-        nodes: vec![fixture_node(0, "AXButton", "Leave", &[0])],
+        nodes: vec![
+            fixture_node(0, "AXButton", "Leave", &[0]),
+            fixture_node(1, "AXToolbar", "Meeting controls", &[1]),
+        ],
     };
     let rows = browser_rows(vec![sharing_meet_window(), teams]);
     assert_eq!(rows.len(), 2);

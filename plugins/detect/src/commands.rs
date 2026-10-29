@@ -121,6 +121,17 @@ pub(crate) async fn list_mic_using_applications<R: tauri::Runtime>(
 
 #[tauri::command]
 #[specta::specta]
+pub(crate) async fn list_meeting_audio_processes<R: tauri::Runtime>(
+    _app: tauri::AppHandle<R>,
+) -> Result<Vec<anlg_detect::MeetingAudioProcess>, crate::Error> {
+    tauri::async_runtime::spawn_blocking(anlg_detect::list_meeting_audio_processes)
+        .await
+        .map_err(|error| anlg_detect::Error::AudioProcessQuery(error.to_string()))?
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+#[specta::specta]
 pub(crate) async fn list_default_ignored_bundle_ids<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
 ) -> Result<Vec<String>, String> {

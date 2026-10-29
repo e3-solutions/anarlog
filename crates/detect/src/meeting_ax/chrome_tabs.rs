@@ -4,7 +4,9 @@ const HEADER: &str = "E3_MEET_TABS_V1";
 const END: &str = "E3_MEET_TABS_END";
 
 pub(super) fn canonical_meet_url(value: &str) -> Option<String> {
-    super::platform::google_meet_url(value).map(|url| url.to_string())
+    super::platform::google_meet_url(value)
+        .or_else(|| super::platform::teams_meeting_url(value))
+        .map(|url| url.to_string())
 }
 
 pub(super) fn parse_inventory(output: &str) -> Option<Vec<String>> {
@@ -30,7 +32,11 @@ pub(super) fn parse_inventory(output: &str) -> Option<Vec<String>> {
         {
             return None;
         }
-        super::platform::google_meet_origin(value)?;
+        if super::platform::google_meet_origin(value).is_none()
+            && super::platform::teams_meeting_url(value).is_none()
+        {
+            return None;
+        }
         // Meet home/prejoin without a canonical code is not a captured call.
         if let Some(url) = canonical_meet_url(value) {
             let identity = format!("{url}:tab:{id}");
@@ -59,8 +65,11 @@ set resultText to "E3_MEET_TABS_V1" & linefeed
 with timeout of 1 seconds
     tell application id "com.google.Chrome"
         repeat with browserWindow in every window
-            repeat with meetingTab in (every tab of browserWindow whose URL starts with "https://meet.google.com/")
+            repeat with meetingTab in every tab of browserWindow
+                set tabURL to URL of meetingTab
+                if tabURL starts with "https://meet.google.com/" or tabURL starts with "https://teams.microsoft.com/" or tabURL starts with "https://teams.live.com/" or tabURL starts with "https://teams.cloud.microsoft/" then
                 set resultText to resultText & (id of meetingTab as text) & (character id 9) & (URL of meetingTab as text) & linefeed
+                end if
             end repeat
         end repeat
     end tell

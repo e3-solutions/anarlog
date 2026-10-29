@@ -385,7 +385,10 @@ pub(super) fn browser_platform_from_url(url: Option<&str>) -> Option<MeetingPlat
 
     if host == "meet.google.com" {
         Some(MeetingPlatform::GoogleMeet)
-    } else if matches!(host.as_str(), "teams.microsoft.com" | "teams.live.com") {
+    } else if matches!(
+        host.as_str(),
+        "teams.microsoft.com" | "teams.live.com" | "teams.cloud.microsoft"
+    ) {
         Some(MeetingPlatform::MicrosoftTeams)
     } else if host == "zoom.us" || host.ends_with(".zoom.us") {
         Some(MeetingPlatform::Zoom)
@@ -462,6 +465,19 @@ pub(super) fn google_meet_url(value: &str) -> Option<url::Url> {
     url.set_query(None);
     url.set_fragment(None);
     Some(url)
+}
+
+pub(super) fn teams_meeting_url(value: &str) -> Option<url::Url> {
+    let url = url::Url::parse(value).ok()?;
+    (url.scheme() == "https"
+        && matches!(
+            url.host_str(),
+            Some("teams.microsoft.com" | "teams.live.com" | "teams.cloud.microsoft")
+        )
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.port().is_none())
+    .then_some(url)
 }
 
 pub(super) fn google_meet_code_from_title(title: &str) -> Option<String> {

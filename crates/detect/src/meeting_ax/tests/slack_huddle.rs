@@ -90,6 +90,19 @@ fn slack_recording_rejects_prejoin_disabled_hidden_and_cross_window_controls() {
 }
 
 #[test]
+fn slack_recording_rejects_cached_channel_strip_after_leaving_huddle() {
+    let mut nodes = current_slack_huddle_window();
+    nodes.remove(2);
+    nodes.push(node(4, "AXStaticText", "Huddle in test", None));
+    assert!(slack_huddle_context(&nodes).is_some());
+    assert!(!scoped_meeting_is_active(
+        &MeetingPlatform::Slack,
+        &nodes,
+        true
+    ));
+}
+
+#[test]
 fn test_slack_huddle_requires_huddle_label_and_enabled_leave_control() {
     let mut composer = node(2, "AXTextArea", "Message to test", None);
     composer.settable_value = true;

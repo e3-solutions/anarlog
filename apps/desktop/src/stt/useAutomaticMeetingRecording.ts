@@ -12,6 +12,7 @@ import {
   automaticMeetingObservation,
   selectAutomaticMeeting,
   sameAutomaticMeeting,
+  sameSuppressedAutomaticMeeting,
   type AutomaticMeeting,
 } from "./automatic-meeting";
 import {
@@ -155,12 +156,18 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
           },
         );
       try {
-        const [inspection, microphones] = await Promise.all([
+        const [inspection, microphones, audioProcesses] = await Promise.all([
           track(
             detectCommands.inspectMeetingAccessibility(),
             "inspectionStatus",
           ),
           track(detectCommands.listMicUsingApplications(), "micStatus"),
+          platform() === "macos"
+            ? detectCommands.listMeetingAudioProcesses()
+            : Promise.resolve({
+                status: "error" as const,
+                error: "unsupported",
+              }),
         ]);
         if (
           cancelled ||
@@ -177,6 +184,7 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
           {
             googleMeet: policy.current.enabled,
             slack: policy.current.enabled,
+            teams: policy.current.enabled,
           },
         );
         const now = Date.now();
@@ -252,12 +260,11 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
               capture.meeting,
               inspection.data,
             );
-            const macMeet =
-              capture.meeting.platform === "googleMeet" &&
-              platform() === "macos";
+            const macBrowser =
+              capture.meeting.platform !== "slack" && platform() === "macos";
             if (
               observation === "unknown" &&
-              macMeet &&
+              macBrowser &&
               !inspection.data.some(
                 (entry) =>
                   entry.app.id === capture!.meeting.app.id &&
@@ -268,11 +275,24 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
               // including unreadable ones. Missing that process is a departure.
               observation = "inactive";
             }
+            const matchingAudioProcesses =
+              audioProcesses.status === "ok"
+                ? audioProcesses.data.filter(
+                    (process) => process.app.id === capture!.meeting.app.id,
+                  )
+                : [];
+            const ownedAudioActive = matchingAudioProcesses.some(
+              (process) => process.inputActive || process.outputActive,
+            );
+            const audioUnknown =
+              platform() === "macos" && audioProcesses.status !== "ok";
             const micActive =
-              microphones.status !== "ok" ||
-              microphones.data.some(
-                (app) => app.id === capture!.meeting.app.id,
-              );
+              platform() === "macos" && audioProcesses.status === "ok"
+                ? matchingAudioProcesses.some((process) => process.inputActive)
+                : microphones.status !== "ok" ||
+                  microphones.data.some(
+                    (app) => app.id === capture!.meeting.app.id,
+                  );
             const evidence = {
               observation,
               micActive,
@@ -290,15 +310,16 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
               capture.networkHoldUntil ??= now + AUTO_STOP_NETWORK_HOLD_MS;
             if (
               observation === "active" ||
-              (observation === "unknown" && (macMeet || micActive))
+              (observation === "unknown" &&
+                (macBrowser || micActive || ownedAudioActive || audioUnknown))
             ) {
               // A hidden browser tab can lose AX evidence and microphone
               // ownership while its muted call continues. Only confirmed
-              // departure can end an established Meet capture.
-              // An unreadable Meet poll cannot stop capture. Preserve a prior
+              // departure can end an established browser capture.
+              // An unreadable browser poll cannot stop capture. Preserve a prior
               // confirmed departure so another fresh inactive poll can finish
               // its grace; positive attendance resets that evidence.
-              if (observation === "active" || !macMeet) {
+              if (observation === "active" || !macBrowser) {
                 capture.missingSince = null;
                 capture.missingObservation = null;
               }
@@ -308,9 +329,9 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
                   ? "auto_stop_disabled"
                   : observation === "active"
                     ? "meeting_active"
-                    : macMeet
-                      ? "ax_unknown"
-                      : "mic_still_active",
+                    : micActive
+                      ? "mic_still_active"
+                      : "ax_unknown",
                 evidence,
               );
               return;
@@ -397,7 +418,7 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
         if (
           !selected ||
           [...suppressed.values()].some((meeting) =>
-            sameAutomaticMeeting(meeting, selected),
+            sameSuppressedAutomaticMeeting(meeting, selected),
           )
         )
           return;
@@ -439,6 +460,7 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
               {
                 googleMeet: policy.current.enabled,
                 slack: policy.current.enabled,
+                teams: policy.current.enabled,
               },
             )?.key !== selected.key ||
             !store.getState().canStartLiveSession(sessionId)

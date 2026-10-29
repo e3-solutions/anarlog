@@ -42,6 +42,19 @@ export const commands = {
       else return { status: "error", error: e as any };
     }
   },
+  async listMeetingAudioProcesses(): Promise<
+    Result<MeetingAudioProcess[], string>
+  > {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE("plugin:detect|list_meeting_audio_processes"),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
   async setRespectDoNotDisturb(
     enabled: boolean,
   ): Promise<Result<null, string>> {
@@ -241,6 +254,12 @@ export type MeetingAccessibilityInspection = {
   warnings: string[];
 };
 export type MeetingApp = { id: string; name: string };
+export type MeetingAudioProcess = {
+  pid: number;
+  app: InstalledApp;
+  inputActive: boolean;
+  outputActive: boolean;
+};
 export type MeetingCapturedChatMessage = {
   id: string;
   platform: MeetingPlatform;

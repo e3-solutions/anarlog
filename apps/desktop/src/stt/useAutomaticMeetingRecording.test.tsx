@@ -10,6 +10,7 @@ import { createListenerStore } from "~/store/zustand/listener";
 const mocks = vi.hoisted(() => ({
   inspect: vi.fn(),
   microphones: vi.fn(),
+  audioProcesses: vi.fn(),
   create: vi.fn(),
   remove: vi.fn(),
   open: vi.fn(),
@@ -40,6 +41,7 @@ vi.mock("@anlg/plugin-detect", () => ({
   commands: {
     inspectMeetingAccessibility: mocks.inspect,
     listMicUsingApplications: mocks.microphones,
+    listMeetingAudioProcesses: mocks.audioProcesses,
   },
 }));
 vi.mock("~/session/queries", () => ({
@@ -133,6 +135,20 @@ beforeEach(() => {
     );
   });
   mocks.microphones.mockResolvedValue({ status: "ok", data: [] });
+  mocks.audioProcesses.mockImplementation(async () => {
+    const result = await mocks.microphones();
+    return result.status === "ok"
+      ? {
+          status: "ok",
+          data: result.data.map((app: { id: string; name: string }) => ({
+            app,
+            pid: 123,
+            inputActive: true,
+            outputActive: false,
+          })),
+        }
+      : result;
+  });
   mocks.create.mockResolvedValue("session-1");
   mocks.remove.mockResolvedValue(undefined);
   // Default to no signed-in account so the exclusion gate stays dormant and
@@ -442,6 +458,111 @@ describe("automatic local meeting recording", () => {
     mocks.microphones.mockResolvedValue({ status: "ok", data: [meet.app] });
     await tick(40_000);
     expect(stop).not.toHaveBeenCalled();
+  });
+
+  it.each([slack, meet])(
+    "keeps muted $platform on its application output session and ignores unrelated audio after confirmed leave",
+    async (inspection) => {
+      snapshot([inspection]);
+      const audio = {
+        app: inspection.app,
+        pid: 456,
+        inputActive: true,
+        outputActive: false,
+      };
+      mocks.audioProcesses.mockResolvedValue({ status: "ok", data: [audio] });
+      const { active, stop } = setup();
+      await tick(0);
+      active();
+      snapshot([
+        {
+          ...inspection,
+          activeCall: false,
+          warnings: ["no uniquely scoped meeting AXWindow"],
+        },
+      ]);
+      mocks.audioProcesses.mockResolvedValue({
+        status: "ok",
+        data: [{ ...audio, inputActive: false, outputActive: true }],
+      });
+      await tick(90_000);
+      expect(stop).not.toHaveBeenCalled();
+      snapshot([{ ...inspection, activeCall: false }]);
+      mocks.audioProcesses.mockResolvedValue({
+        status: "ok",
+        data: [{ ...audio, pid: 789 }],
+      });
+      await tick(18_000);
+      expect(stop).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("preserves Teams recording and manual Stop when the bound tab changes its SPA route", async () => {
+    const identity = "https://teams.cloud.microsoft/v2/#/meet/123:tab:42";
+    const joined = {
+      ...meet,
+      platform: "microsoftTeams" as const,
+      callIdentity: identity,
+      openCallIdentities: [identity],
+    };
+    snapshot([joined]);
+    const { active, stop } = setup();
+    await tick(0);
+    active();
+    const changed = {
+      ...joined,
+      callIdentity:
+        "https://teams.cloud.microsoft/v2/?context=updated#/meet/123:tab:42",
+      openCallIdentities: [
+        "https://teams.cloud.microsoft/v2/?context=updated#/meet/123:tab:42",
+      ],
+    };
+    snapshot([changed]);
+    await tick(90_000);
+    expect(stop).not.toHaveBeenCalled();
+    expect(mocks.open).toHaveBeenCalledOnce();
+    stop();
+    snapshot([joined]);
+    await tick(90_000);
+    expect(mocks.open).toHaveBeenCalledOnce();
+    snapshot([
+      {
+        ...joined,
+        activeCall: false,
+        openCallIdentities: ["https://meet.google.com/abc-defg-hij:tab:42"],
+      },
+    ]);
+    await tick();
+    snapshot([changed]);
+    await tick();
+    expect(mocks.open).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves manual Stop across Teams window URL changes without Automation permission", async () => {
+    const joined = {
+      ...meet,
+      platform: "microsoftTeams" as const,
+      callIdentity: "https://teams.cloud.microsoft/v2/#/meet/123:window:abc",
+    };
+    snapshot([joined]);
+    const { active, stop } = setup();
+    await tick(0);
+    active();
+    stop();
+    snapshot([
+      {
+        ...joined,
+        callIdentity:
+          "https://teams.cloud.microsoft/v2/?context=updated#/meet/123:window:abc",
+      },
+    ]);
+    await tick(90_000);
+    expect(mocks.open).toHaveBeenCalledOnce();
+    snapshot([{ ...joined, activeCall: false }]);
+    await tick();
+    snapshot([joined]);
+    await tick();
+    expect(mocks.open).toHaveBeenCalledTimes(2);
   });
 
   it("reports a stalled AX probe without claiming that recording stopped", async () => {
