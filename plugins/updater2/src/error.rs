@@ -4,6 +4,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("Update deferred until recording finishes and automatic updates are enabled")]
+    UpdateDeferred,
     #[error(transparent)]
     Store2(#[from] tauri_plugin_store2::Error),
     #[error(transparent)]
