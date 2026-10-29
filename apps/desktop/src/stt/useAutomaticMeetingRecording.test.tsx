@@ -191,7 +191,7 @@ describe("automatic local meeting recording", () => {
     snapshot([joined]);
     await tick(2_000);
     snapshot([{ ...hidden, openCallIdentities: [] }]);
-    await tick(14_000);
+    await tick(10_000);
     expect(stop).not.toHaveBeenCalled();
     snapshot([hidden]);
     await tick(4_000);
@@ -225,7 +225,7 @@ describe("automatic local meeting recording", () => {
     await tick(90_000);
     expect(stop).not.toHaveBeenCalled();
     snapshot([{ ...hidden, ...{ openCallIdentities: [] } }]);
-    await tick(14_000);
+    await tick(10_000);
     expect(stop).not.toHaveBeenCalled();
     await tick(4_000);
     expect(stop).toHaveBeenCalledOnce();
@@ -302,7 +302,7 @@ describe("automatic local meeting recording", () => {
     expect(stop).not.toHaveBeenCalled();
     expect(mocks.open).toHaveBeenCalledOnce();
     snapshot([presence, { ...a, activeCall: false }, b]);
-    await tick(14_000);
+    await tick(10_000);
     expect(stop).not.toHaveBeenCalled();
     await tick(4_000);
     expect(stop).toHaveBeenCalledOnce();
@@ -374,12 +374,12 @@ describe("automatic local meeting recording", () => {
     },
   );
 
-  it("stops after confirmed absence and records the next call without a reminder cooldown", async () => {
+  it("stops after ten seconds of confirmed absence and records the next call without a reminder cooldown", async () => {
     const { active, stop } = setup();
     await tick(0);
     active();
     snapshot([{ ...meet, activeCall: false }]);
-    await tick(14_000);
+    await tick(10_000);
     expect(stop).not.toHaveBeenCalled();
     await tick(4_000);
     expect(stop).toHaveBeenCalledOnce();
@@ -517,12 +517,12 @@ describe("automatic local meeting recording", () => {
         status: "ok",
         data: [{ ...audio, inputActive: false }],
       });
-      await tick(10_000);
+      await tick(6_000);
       if (axBehavior === "later confirms departure")
         snapshot([{ ...meet, activeCall: false }]);
       await tick(4_000);
       expect(stop).not.toHaveBeenCalled();
-      await tick(4_000);
+      await tick(1_000);
       expect(stop).toHaveBeenCalledOnce();
       snapshot([meet]);
       await tick(20_000);
@@ -686,7 +686,7 @@ describe("automatic local meeting recording", () => {
     await tick();
     expect(mocks.open).toHaveBeenCalledOnce();
     snapshot([{ ...meet, activeCall: false }]);
-    await tick(14_000);
+    await tick(10_000);
     expect(stop).not.toHaveBeenCalled();
     await tick(4_000);
     expect(stop).toHaveBeenCalledOnce();
@@ -700,7 +700,7 @@ describe("automatic local meeting recording", () => {
       await tick(0);
       active();
       snapshot([{ ...meet, pid: meet.pid + 1, activeCall: false }]);
-      await tick(14_000);
+      await tick(10_000);
       expect(stop).not.toHaveBeenCalled();
       await tick(4_000);
       if (os === "macos") expect(stop).toHaveBeenCalledOnce();
@@ -729,7 +729,7 @@ describe("automatic local meeting recording", () => {
       },
     ]);
     mocks.audioProcesses.mockResolvedValue({ status: "ok", data: [] });
-    await tick(14_000);
+    await tick(10_000);
     expect(stop).not.toHaveBeenCalled();
     await tick(4_000);
     expect(stop).toHaveBeenCalledOnce();

@@ -6,7 +6,7 @@ import {
 } from "./meeting-accessibility";
 
 export const AUTOMATIC_MEETING_POLL_MS = 2_000;
-export const AUTOMATIC_MEETING_STOP_GRACE_MS = 15_000;
+export const AUTOMATIC_MEETING_STOP_GRACE_MS = 10_000;
 
 export type AutomaticMeetingOptions = {
   googleMeet: boolean;
