@@ -44,7 +44,7 @@ pub async fn list_connections(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthContext>,
 ) -> Result<Json<ListConnectionsResponse>> {
-    let rows = state
+    let mut rows = state
         .supabase
         .list_user_connections(&auth.token, &auth.claims.sub)
         .await?;
@@ -57,6 +57,40 @@ pub async fn list_connections(
         })
         .await
         .unwrap_or_default();
+
+    let mut recovered = false;
+    if state.supabase.is_configured() {
+        for connection in &nango_connections {
+            // A filtered list alone is not proof of ownership. Only Nango's
+            // server-assigned end user can recover a missed auth webhook.
+            if connection.end_user.as_ref().map(|user| user.id.as_str())
+                != Some(auth.claims.sub.as_str())
+                || !connection.errors.is_empty()
+                || rows.iter().any(|row| {
+                    row.integration_id == connection.provider_config_key
+                        && row.connection_id == connection.connection_id
+                })
+            {
+                continue;
+            }
+            state
+                .supabase
+                .upsert_connection(
+                    &auth.claims.sub,
+                    &connection.provider_config_key,
+                    &connection.connection_id,
+                    &connection.provider,
+                )
+                .await?;
+            recovered = true;
+        }
+    }
+    if recovered {
+        rows = state
+            .supabase
+            .list_user_connections(&auth.token, &auth.claims.sub)
+            .await?;
+    }
     let nango_map: std::collections::HashMap<(&str, &str), _> = nango_connections
         .iter()
         .map(|connection| {
@@ -132,5 +166,148 @@ pub async fn list_connections(
         }
     }
 
+    let mut calendar_aliases = Vec::new();
+    for connection in &connections {
+        if connection.integration_id != "google-meet"
+            || connection.status.as_deref() == Some("reconnect_required")
+            || connections.iter().any(|item| {
+                item.integration_id == "google-calendar"
+                    && item.connection_id == connection.connection_id
+            })
+        {
+            continue;
+        }
+        if crate::google_meet_calendar_access(
+            &state.nango,
+            &auth.claims.sub,
+            &connection.connection_id,
+        )
+        .await
+        {
+            calendar_aliases.push(ConnectionItem {
+                integration_id: "google-calendar".into(),
+                connection_id: connection.connection_id.clone(),
+                status: connection.status.clone(),
+                account_identity: connection.account_identity.clone(),
+                last_error_type: None,
+                last_error_description: None,
+                last_error_at: None,
+                updated_at: connection.updated_at.clone(),
+            });
+        }
+    }
+    connections.extend(calendar_aliases);
+
     Ok(Json(ListConnectionsResponse { connections }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{method, path, query_param},
+    };
+
+    #[tokio::test]
+    async fn calendar_access_requires_matching_owner_and_successful_provider_permission() {
+        for (owner, status, expected) in [
+            ("user-one", 200, true),
+            ("user-one", 403, false),
+            ("other-user", 200, false),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/connections/meet"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": 1, "connection_id": "meet", "provider_config_key": "google-meet",
+                    "provider": "google-meet", "errors": [], "end_user": {"id":owner},
+                    "metadata": {}, "connection_config": {}, "credentials": {},
+                    "created_at": "", "updated_at": "", "last_fetched_at": ""
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/proxy/calendar/v3/users/me/calendarList"))
+                .and(query_param("maxResults", "1"))
+                .respond_with(
+                    ResponseTemplate::new(status).set_body_json(serde_json::json!({"items":[]})),
+                )
+                .mount(&server)
+                .await;
+            let nango = anlg_nango::NangoClient::builder()
+                .api_key("fixture-key")
+                .api_base(server.uri())
+                .build()
+                .unwrap();
+            assert_eq!(
+                crate::google_meet_calendar_access(&nango, "user-one", "meet").await,
+                expected
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn missed_webhook_recovers_only_connections_with_matching_server_end_user() {
+        let nango = MockServer::start().await;
+        let database = MockServer::start().await;
+        let stored = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+        let rows = stored.clone();
+        Mock::given(method("GET"))
+            .and(path("/rest/v1/nango_connections"))
+            .and(query_param("user_id", "eq.user-one"))
+            .respond_with(move |_: &wiremock::Request| {
+                ResponseTemplate::new(200).set_body_json(rows.lock().unwrap().clone())
+            })
+            .mount(&database)
+            .await;
+        let rows = stored.clone();
+        Mock::given(method("POST"))
+            .and(path("/rest/v1/nango_connections"))
+            .respond_with(move |request: &wiremock::Request| {
+                let row: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+                rows.lock().unwrap().push(row);
+                ResponseTemplate::new(201)
+            })
+            .mount(&database)
+            .await;
+        let connection = |id: &str, owner: Option<&str>, errors: serde_json::Value| {
+            serde_json::json!({
+                "id":1,"connection_id":id,"provider":"google-meet",
+                "provider_config_key":"google-meet","created":"2026-10-20T00:00:00Z",
+                "metadata":null,"errors":errors,
+                "end_user":owner.map(|id| serde_json::json!({"id":id})),
+                "tags":{"end_user_id":"user-one","account_identity":"person@example.com"}
+            })
+        };
+        Mock::given(method("GET"))
+            .and(path("/connections"))
+            .and(query_param("endUserId", "user-one"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "connections":[
+                    connection("owned",Some("user-one"),serde_json::json!([])),
+                    connection("foreign",Some("user-two"),serde_json::json!([])),
+                    connection("unassigned",None,serde_json::json!([])),
+                    connection("broken",Some("user-one"),serde_json::json!([{"type":"auth","log_id":"failure"}]))
+                ]
+            })))
+            .mount(&nango).await;
+        let state = AppState::new(crate::config::NangoConfig::for_test(
+            &nango.uri(),
+            &database.uri(),
+        ));
+        let auth = AuthContext {
+            token: "verified-user-token".into(),
+            claims: serde_json::from_value(serde_json::json!({"sub":"user-one"})).unwrap(),
+        };
+        let Json(response) = list_connections(State(state), Extension(auth))
+            .await
+            .unwrap();
+        assert_eq!(response.connections.len(), 1);
+        assert_eq!(response.connections[0].connection_id, "owned");
+        let stored = stored.lock().unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0]["user_id"], "user-one");
+    }
 }

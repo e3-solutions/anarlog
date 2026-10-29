@@ -4,6 +4,18 @@ Default permissions for the plugin
 
 #### This default permission set includes the following:
 
+- `allow-recording-diagnostics-configure`
+- `allow-recording-diagnostics-record`
+- `allow-recording-diagnostics-batch`
+- `allow-recording-diagnostics-ack`
+- `allow-shared-recording-configuration`
+- `allow-meeting-recording-control-set`
+- `allow-meeting-recording-exclusions`
+- `allow-shared-recording-configure`
+- `allow-shared-recording-observe`
+- `allow-shared-recording-enqueue`
+- `allow-shared-recording-queue`
+- `allow-shared-recording-flush`
 - `allow-list-microphone-devices`
 - `allow-get-current-microphone-device`
 - `allow-start-capture`
@@ -875,6 +887,58 @@ Denies the mark_capture_audio_saved command without any pre-configured scope.
 <tr>
 <td>
 
+`transcription:allow-meeting-recording-control-set`
+
+</td>
+<td>
+
+Enables the meeting_recording_control_set command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:deny-meeting-recording-control-set`
+
+</td>
+<td>
+
+Denies the meeting_recording_control_set command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:allow-meeting-recording-exclusions`
+
+</td>
+<td>
+
+Enables the meeting_recording_exclusions command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:deny-meeting-recording-exclusions`
+
+</td>
+<td>
+
+Denies the meeting_recording_exclusions command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `transcription:allow-parse-subtitle`
 
 </td>
@@ -946,6 +1010,110 @@ Enables the reconcile_refined_speaker_clusters command without any pre-configure
 <td>
 
 Denies the reconcile_refined_speaker_clusters command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:allow-recording-diagnostics-ack`
+
+</td>
+<td>
+
+Enables the recording_diagnostics_ack command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:deny-recording-diagnostics-ack`
+
+</td>
+<td>
+
+Denies the recording_diagnostics_ack command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:allow-recording-diagnostics-batch`
+
+</td>
+<td>
+
+Enables the recording_diagnostics_batch command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:deny-recording-diagnostics-batch`
+
+</td>
+<td>
+
+Denies the recording_diagnostics_batch command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:allow-recording-diagnostics-configure`
+
+</td>
+<td>
+
+Enables the recording_diagnostics_configure command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:deny-recording-diagnostics-configure`
+
+</td>
+<td>
+
+Denies the recording_diagnostics_configure command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:allow-recording-diagnostics-record`
+
+</td>
+<td>
+
+Enables the recording_diagnostics_record command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:deny-recording-diagnostics-record`
+
+</td>
+<td>
+
+Denies the recording_diagnostics_record command without any pre-configured scope.
 
 </td>
 </tr>
@@ -1154,6 +1322,162 @@ Enables the set_mic_muted command without any pre-configured scope.
 <td>
 
 Denies the set_mic_muted command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:allow-shared-recording-configuration`
+
+</td>
+<td>
+
+Enables the shared_recording_configuration command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:deny-shared-recording-configuration`
+
+</td>
+<td>
+
+Denies the shared_recording_configuration command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:allow-shared-recording-configure`
+
+</td>
+<td>
+
+Enables the shared_recording_configure command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:deny-shared-recording-configure`
+
+</td>
+<td>
+
+Denies the shared_recording_configure command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:allow-shared-recording-enqueue`
+
+</td>
+<td>
+
+Enables the shared_recording_enqueue command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:deny-shared-recording-enqueue`
+
+</td>
+<td>
+
+Denies the shared_recording_enqueue command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:allow-shared-recording-flush`
+
+</td>
+<td>
+
+Enables the shared_recording_flush command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:deny-shared-recording-flush`
+
+</td>
+<td>
+
+Denies the shared_recording_flush command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:allow-shared-recording-observe`
+
+</td>
+<td>
+
+Enables the shared_recording_observe command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:deny-shared-recording-observe`
+
+</td>
+<td>
+
+Denies the shared_recording_observe command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:allow-shared-recording-queue`
+
+</td>
+<td>
+
+Enables the shared_recording_queue command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`transcription:deny-shared-recording-queue`
+
+</td>
+<td>
+
+Denies the shared_recording_queue command without any pre-configured scope.
 
 </td>
 </tr>

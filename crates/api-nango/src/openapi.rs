@@ -10,6 +10,7 @@ use crate::routes::{
 #[openapi(
     paths(
         crate::routes::connect::create_session,
+        crate::routes::google_signin::connect,
         crate::routes::google_drive_oauth::start,
         crate::routes::google_drive_oauth::complete,
         crate::routes::google_drive::validate_folder,
@@ -24,6 +25,8 @@ use crate::routes::{
     components(
         schemas(
             CreateSessionRequest,
+            crate::routes::google_signin::GoogleSigninRequest,
+            crate::routes::google_signin::GoogleSigninResponse,
             SessionMode,
             DeleteConnectionRequest,
             DeleteConnectionResponse,

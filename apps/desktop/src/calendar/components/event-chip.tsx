@@ -40,6 +40,7 @@ import {
 import { useTimeFormat } from "~/shared/hooks/useTimeFormat";
 import type { TimelineEventRow } from "~/sidebar/timeline/utils";
 import { useTabs } from "~/store/zustand/tabs";
+import { RecordingExclusionControl } from "~/stt/recording-exclusion-control";
 
 export function EventChip({
   eventId,
@@ -437,6 +438,16 @@ function EventPopoverContent({
           meetingLink: event.meeting_link ?? undefined,
           description: event.description ?? undefined,
           calendarId: event.calendar_id ?? undefined,
+        }}
+      />
+      <RecordingExclusionControl
+        event={{
+          id: eventId,
+          calendar_id: event.calendar_id ?? undefined,
+          tracking_id_event: event.tracking_id_event ?? undefined,
+          started_at: event.started_at ?? undefined,
+          ended_at: event.ended_at ?? undefined,
+          meeting_link: event.meeting_link ?? undefined,
         }}
       />
       <Button

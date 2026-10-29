@@ -18,7 +18,7 @@ pub const FATHOM_OAUTH_SCOPES: &str = "public_api";
 pub const WEBEX_OAUTH_SCOPES: &str =
     "spark:people_read meeting:schedules_read meeting:transcripts_read";
 
-pub const GOOGLE_MEET_OAUTH_SCOPES: &str = "https://www.googleapis.com/auth/meetings.space.readonly https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email";
+pub const GOOGLE_MEET_OAUTH_SCOPES: &str = "https://www.googleapis.com/auth/meetings.space.readonly https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/calendar.readonly";
 
 pub const MICROSOFT_TEAMS_OAUTH_SCOPES: &str =
     "offline_access User.Read Calendars.Read OnlineMeetings.Read OnlineMeetingTranscript.Read.All";
@@ -40,6 +40,17 @@ pub fn oauth_scopes_override(integration_id: &str) -> Option<&'static str> {
 pub fn integrations_config_defaults(
     integration_id: &str,
 ) -> Option<HashMap<String, IntegrationConfigDefault>> {
+    if integration_id == Slack::ID {
+        return Some(HashMap::from([(
+            integration_id.to_string(),
+            IntegrationConfigDefault {
+                user_scopes: Some("users:read,users.profile:read".to_string()),
+                connection_config: Some(ConnectionConfigOverride {
+                    oauth_scopes_override: Some(String::new()),
+                }),
+            },
+        )]));
+    }
     let scopes = oauth_scopes_override(integration_id)?;
     Some(HashMap::from([(
         integration_id.to_string(),
@@ -253,9 +264,25 @@ mod tests {
     }
 
     #[test]
+    fn slack_connections_verify_the_recording_user_without_requesting_bot_access() {
+        let defaults = integrations_config_defaults(Slack::ID).unwrap();
+        let slack = defaults.get(Slack::ID).unwrap();
+        assert_eq!(
+            slack.user_scopes.as_deref(),
+            Some("users:read,users.profile:read")
+        );
+        assert_eq!(
+            slack
+                .connection_config
+                .as_ref()
+                .and_then(|config| config.oauth_scopes_override.as_deref()),
+            Some("")
+        );
+    }
+
+    #[test]
     fn other_integrations_keep_dashboard_scopes() {
         assert!(integrations_config_defaults(GitHub::ID).is_none());
-        assert!(integrations_config_defaults(Slack::ID).is_none());
         assert!(integrations_config_defaults("unknown").is_none());
     }
 }

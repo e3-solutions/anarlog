@@ -10,7 +10,6 @@ use tauri::menu::{HELP_SUBMENU_ID, Submenu, WINDOW_SUBMENU_ID};
 use tauri::tray::{MouseButtonState, TrayIconEvent};
 use tauri::{
     AppHandle, Result,
-    image::Image,
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
 };
@@ -20,7 +19,7 @@ use crate::{
         TrayAgendaSection, TrayScheduleEvent, agenda_sections, menu_bar_title,
         next_schedule_refresh_ms,
     },
-    tray_icon::{RECORDING_FRAMES, TrayIconState},
+    tray_icon::{RECORDING_FRAMES, TrayIconState, recording_image},
 };
 
 #[cfg(target_os = "macos")]
@@ -202,8 +201,9 @@ impl<'a, M: tauri::Manager<tauri::Wry>> Tray<'a, tauri::Wry, M> {
         *AGENDA_SECTIONS.lock().unwrap() = agenda;
 
         let builder = TrayIconBuilder::with_id(TRAY_ID)
-            .icon(TrayIconState::Default.to_image()?)
+            .icon(TrayIconState::Default.to_image(is_scribe(app))?)
             .icon_as_template(true)
+            .tooltip(app.package_info().name.as_str())
             .menu(&menu)
             .show_menu_on_left_click(true);
         #[cfg(target_os = "macos")]
@@ -222,6 +222,9 @@ impl<'a, M: tauri::Manager<tauri::Wry>> Tray<'a, tauri::Wry, M> {
         #[cfg(target_os = "macos")]
         crate::macos_position::seed_default_position(TRAY_ID);
 
+        let builder = builder.on_menu_event(|_app, event| {
+            crate::meeting_control::handle_meeting_recording_menu(event.id().as_ref());
+        });
         builder.build(app)?;
         #[cfg(target_os = "macos")]
         crate::macos_position::apply_autosave_name(app, TRAY_ID);
@@ -348,13 +351,31 @@ impl<'a, M: tauri::Manager<tauri::Wry>> Tray<'a, tauri::Wry, M> {
             .unwrap_or_default()
             .as_millis() as f64;
         let recording_title = RECORDING_TITLE.lock().unwrap().clone();
-        let title = menu_bar_title(
-            &SCHEDULE.lock().unwrap(),
-            now_ms,
-            SHOW_EVENTS.load(Ordering::SeqCst),
-            IS_RECORDING.load(Ordering::SeqCst),
-            recording_title.as_deref(),
-        );
+        let title =
+            if let (Some(context), pending, uncertain) = crate::meeting_control::menu_context() {
+                Some(
+                    if uncertain {
+                        "E3 Needs attention"
+                    } else if pending {
+                        "E3 Updating…"
+                    } else if IS_RECORDING.load(Ordering::SeqCst) {
+                        "E3 Recording"
+                    } else if context.state == crate::MeetingRecordingState::Excluded {
+                        "E3 Off"
+                    } else {
+                        "E3 Ready"
+                    }
+                    .to_string(),
+                )
+            } else {
+                menu_bar_title(
+                    &SCHEDULE.lock().unwrap(),
+                    now_ms,
+                    SHOW_EVENTS.load(Ordering::SeqCst),
+                    IS_RECORDING.load(Ordering::SeqCst),
+                    recording_title.as_deref(),
+                )
+            };
         let mut current_title = MENU_BAR_TITLE.lock().unwrap();
 
         if *current_title != title {
@@ -362,6 +383,11 @@ impl<'a, M: tauri::Manager<tauri::Wry>> Tray<'a, tauri::Wry, M> {
             tray.set_title(Some(title.as_deref().unwrap_or("")))?;
             *current_title = title;
         }
+        let tooltip = match current_title.as_deref() {
+            Some(status) => format!("{} · {status}", app.package_info().name),
+            None => app.package_info().name.clone(),
+        };
+        tray.set_tooltip(Some(tooltip))?;
 
         Ok(())
     }
@@ -383,6 +409,36 @@ impl<'a, M: tauri::Manager<tauri::Wry>> Tray<'a, tauri::Wry, M> {
         agenda: &[TrayAgendaSection],
     ) -> Result<Menu<tauri::Wry>> {
         let menu = Menu::new(app)?;
+        if let (Some(context), pending, uncertain) = crate::meeting_control::menu_context() {
+            if uncertain {
+                menu.append(&MenuItem::with_id(
+                    app,
+                    "e3_meeting_stop_unconfirmed",
+                    "Recording stop not confirmed",
+                    false,
+                    None::<&str>,
+                )?)?;
+            }
+            let excluded = context.state == crate::MeetingRecordingState::Excluded;
+            let action = if excluded { "resume" } else { "stop" };
+            let label = if pending {
+                "Updating recording…"
+            } else if uncertain {
+                "Retry stopping this meeting"
+            } else if excluded {
+                "Resume recording"
+            } else {
+                "Stop for this meeting"
+            };
+            menu.append(&MenuItem::with_id(
+                app,
+                format!("e3_meeting_{action}:{}", context.revision),
+                label,
+                !pending,
+                None::<&str>,
+            )?)?;
+            menu.append(&PredefinedMenuItem::separator(app)?)?;
+        }
 
         for (section_index, section) in agenda.iter().enumerate() {
             let heading = MenuItem::with_id(
@@ -419,6 +475,11 @@ impl<'a, M: tauri::Manager<tauri::Wry>> Tray<'a, tauri::Wry, M> {
         menu.append(&TrayQuitCompletely::build(app)?)?;
 
         Ok(menu)
+    }
+
+    pub fn refresh_meeting_control(&self) -> Result<()> {
+        Self::refresh_menu_bar_title(self.manager.app_handle())?;
+        Self::rebuild_menu(self.manager.app_handle())
     }
 
     pub fn refresh_menu(&self) -> Result<()> {
@@ -559,6 +620,7 @@ impl<'a, M: tauri::Manager<tauri::Wry>> Tray<'a, tauri::Wry, M> {
             }
 
             if IS_RECORDING.load(Ordering::SeqCst) && !IS_DEGRADED.load(Ordering::SeqCst) {
+                let scribe = is_scribe(app);
                 let app = app.clone();
                 *task = Some(tauri::async_runtime::spawn(async move {
                     let mut interval = tokio::time::interval(std::time::Duration::from_millis(250));
@@ -571,7 +633,7 @@ impl<'a, M: tauri::Manager<tauri::Wry>> Tray<'a, tauri::Wry, M> {
                                 && crate::macos_position::wanted_visible()
                                 && let Some(tray) = app.tray_by_id(TRAY_ID)
                             {
-                                tray.set_icon(Some(Image::from_bytes(RECORDING_FRAMES[frame])?))?;
+                                tray.set_icon(Some(recording_image(frame, scribe)?))?;
                             }
                             Ok(())
                         });
@@ -594,7 +656,7 @@ impl<'a, M: tauri::Manager<tauri::Wry>> Tray<'a, tauri::Wry, M> {
             TrayIconState::Default
         };
 
-        tray.set_icon(Some(state.to_image()?))?;
+        tray.set_icon(Some(state.to_image(is_scribe(app))?))?;
 
         Ok(())
     }
@@ -603,6 +665,10 @@ impl<'a, M: tauri::Manager<tauri::Wry>> Tray<'a, tauri::Wry, M> {
         START_DISABLED.store(disabled, Ordering::SeqCst);
         Self::rebuild_menu(self.manager.app_handle())
     }
+}
+
+fn is_scribe(app: &AppHandle<tauri::Wry>) -> bool {
+    app.config().identifier.starts_with("ai.e3group.")
 }
 
 // Tauri's TrayIcon is Send, but cloning/dropping it touches tray-icon's Rc.

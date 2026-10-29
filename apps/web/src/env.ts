@@ -7,6 +7,11 @@ const isDev = process.env.NODE_ENV !== "production";
 const requiredInProd = <T extends z.ZodTypeAny>(schema: T) =>
   isDev ? schema.optional() : schema;
 
+const optionalForE3 = <T extends z.ZodTypeAny>(schema: T) =>
+  process.env.ANARLOG_SHARED_RECORDINGS_PREVIEW === "1"
+    ? schema.optional()
+    : requiredInProd(schema);
+
 export function requireEnv<T>(value: T | undefined, name: string): T {
   if (value === undefined) {
     throw new Error(`Missing required environment variable: ${name}`);
@@ -16,18 +21,18 @@ export function requireEnv<T>(value: T | undefined, name: string): T {
 
 export const env = createEnv({
   server: {
-    DATABASE_URL: requiredInProd(z.string().min(1)),
+    DATABASE_URL: optionalForE3(z.string().min(1)),
 
     SUPABASE_URL: requiredInProd(z.string().min(1)),
     SUPABASE_ANON_KEY: requiredInProd(z.string().min(1)),
     SUPABASE_SERVICE_ROLE_KEY: z.string().min(1).optional(),
     WORKSPACE_SHARE_PROXY_SECRET: z.string().min(1).optional(),
 
-    STRIPE_SECRET_KEY: requiredInProd(z.string().min(1)),
-    STRIPE_MONTHLY_PRICE_ID: requiredInProd(z.string().min(1)),
-    STRIPE_YEARLY_PRICE_ID: requiredInProd(z.string().min(1)),
+    STRIPE_SECRET_KEY: optionalForE3(z.string().min(1)),
+    STRIPE_MONTHLY_PRICE_ID: optionalForE3(z.string().min(1)),
+    STRIPE_YEARLY_PRICE_ID: optionalForE3(z.string().min(1)),
 
-    LOOPS_KEY: requiredInProd(z.string().min(1)),
+    LOOPS_KEY: optionalForE3(z.string().min(1)),
 
     GITHUB_TOKEN: z.string().optional(),
   },
@@ -42,7 +47,7 @@ export const env = createEnv({
       : z.string().default("https://api.anarlog.so"),
     VITE_SUPABASE_URL: requiredInProd(z.string().min(1)),
     VITE_SUPABASE_ANON_KEY: requiredInProd(z.string().min(1)),
-    VITE_POSTHOG_API_KEY: requiredInProd(z.string().min(1)),
+    VITE_POSTHOG_API_KEY: optionalForE3(z.string().min(1)),
     VITE_POSTHOG_HOST: z.string().default("https://us.i.posthog.com"),
     VITE_OTEL_EXPORTER_OTLP_ENDPOINT: z.url().optional(),
     VITE_OTEL_SAMPLE_RATE: z.coerce.number().int().positive().default(10),

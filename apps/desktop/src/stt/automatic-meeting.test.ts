@@ -8,7 +8,7 @@ import {
   sameAutomaticMeeting,
 } from "./automatic-meeting";
 
-const options = { googleMeet: true, slack: true };
+const options = { googleMeet: true, slack: true, teams: true };
 const meet: MeetingAccessibilityInspection = {
   activeCall: true,
   app: { id: "com.google.Chrome", name: "Chrome" },
@@ -37,6 +37,35 @@ describe("automatic meeting evidence", () => {
     expect(
       selectAutomaticMeeting([{ ...meet, platform: "unknown" }], options),
     ).toBeNull();
+  });
+
+  it("tracks joined Teams browser calls through the same policy and complete tab inventory", () => {
+    const identity = "https://teams.microsoft.com/meet/123456789:tab:42";
+    const teams = {
+      ...meet,
+      platform: "microsoftTeams" as const,
+      callIdentity: identity,
+      openCallIdentities: [identity],
+    };
+    const meeting = selectAutomaticMeeting([teams], options)!;
+    expect(meeting).toMatchObject({
+      platform: "microsoftTeams",
+      title: "Microsoft Teams",
+    });
+    expect(
+      selectAutomaticMeeting([teams], { ...options, teams: false }),
+    ).toBeNull();
+    expect(
+      automaticMeetingObservation(meeting, [
+        {
+          ...teams,
+          activeCall: false,
+          platform: "unknown",
+          callIdentity: null,
+          openCallIdentities: [],
+        },
+      ]),
+    ).toBe("inactive");
   });
 
   it("uses the same supported-platform policy for Slack", () => {
@@ -96,6 +125,24 @@ describe("automatic meeting evidence", () => {
     expect(
       automaticMeetingObservation(meeting, [{ ...meet, activeCall: false }]),
     ).toBe("inactive");
+    expect(
+      automaticMeetingObservation(meeting, [
+        {
+          ...meet,
+          activeCall: false,
+          warnings: ["without a uniquely validated active huddle"],
+        },
+      ]),
+    ).toBe("inactive");
+    expect(
+      automaticMeetingObservation(meeting, [
+        {
+          ...meet,
+          activeCall: false,
+          warnings: ["no uniquely validated meeting window"],
+        },
+      ]),
+    ).toBe("unknown");
   });
 
   it("tracks distinct call contexts in one browser without confusing home or another departure", () => {

@@ -4,6 +4,221 @@
 /** user-defined commands **/
 
 export const commands = {
+  async recordingDiagnosticsConfigure(
+    userId: string | null,
+    enabled: boolean,
+    purge: boolean | null,
+  ): Promise<Result<null, string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE(
+          "plugin:transcription|recording_diagnostics_configure",
+          { userId, enabled, purge },
+        ),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async recordingDiagnosticsRecord(
+    userId: string,
+    input: Input,
+  ): Promise<Result<null, string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE(
+          "plugin:transcription|recording_diagnostics_record",
+          { userId, input },
+        ),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async recordingDiagnosticsBatch(
+    userId: string,
+  ): Promise<Result<DiagnosticBatch, string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE(
+          "plugin:transcription|recording_diagnostics_batch",
+          { userId },
+        ),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async recordingDiagnosticsAck(
+    userId: string,
+    eventIds: string[],
+  ): Promise<Result<null, string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE(
+          "plugin:transcription|recording_diagnostics_ack",
+          { userId, eventIds },
+        ),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async sharedRecordingConfiguration(): Promise<
+    Result<Configuration | null, string>
+  > {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE(
+          "plugin:transcription|shared_recording_configuration",
+        ),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async meetingRecordingControlSet(
+    context: MeetingRecordingContext | null,
+    resumeOf: string | null,
+  ): Promise<Result<MeetingRecordingContext | null, string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE(
+          "plugin:transcription|meeting_recording_control_set",
+          { context, resumeOf },
+        ),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async meetingRecordingExclusions(
+    userId: string,
+  ): Promise<Result<MeetingRecordingContext[], string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE(
+          "plugin:transcription|meeting_recording_exclusions",
+          { userId },
+        ),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async sharedRecordingConfigure(
+    config: Configuration,
+  ): Promise<Result<Configuration, string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE(
+          "plugin:transcription|shared_recording_configure",
+          { config },
+        ),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async sharedRecordingObserve(
+    sessionId: string,
+    platform: string,
+    callIdentity: string | null,
+    observedAtMs: number,
+    accessToken: string,
+    userId: string,
+    quarantineReason: string | null,
+    diagnosticSummary: ObservationSummary | null,
+  ): Promise<Result<string | null, string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE(
+          "plugin:transcription|shared_recording_observe",
+          {
+            sessionId,
+            platform,
+            callIdentity,
+            observedAtMs,
+            accessToken,
+            userId,
+            quarantineReason,
+            diagnosticSummary,
+          },
+        ),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async sharedRecordingEnqueue(
+    sessionId: string,
+    transcriptId: string,
+    audioPath: string,
+    startedAtMs: number,
+    stoppedAtMs: number,
+  ): Promise<Result<Job | null, string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE(
+          "plugin:transcription|shared_recording_enqueue",
+          { sessionId, transcriptId, audioPath, startedAtMs, stoppedAtMs },
+        ),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async sharedRecordingQueue(userId: string): Promise<Result<Job[], string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE(
+          "plugin:transcription|shared_recording_queue",
+          { userId },
+        ),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async sharedRecordingFlush(
+    accessToken: string,
+    userId: string,
+  ): Promise<Result<null, string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE(
+          "plugin:transcription|shared_recording_flush",
+          { accessToken, userId },
+        ),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
   async listMicrophoneDevices(): Promise<Result<string[], string>> {
     try {
       return {
@@ -54,7 +269,9 @@ export const commands = {
       else return { status: "error", error: e as any };
     }
   },
-  async startCapture(params: CaptureParams): Promise<Result<null, string>> {
+  async startCapture(
+    params: CaptureStartRequest,
+  ): Promise<Result<null, string>> {
     try {
       return {
         status: "ok",
@@ -1035,6 +1252,21 @@ export type CaptureSnapshot = {
   degraded?: DegradedError | null;
   captureHealth?: CaptureHealth | null;
 };
+export type CaptureStartRequest = {
+  session_id: string;
+  live_transcript?: LiveTranscriptTarget | null;
+  retain_audio?: boolean | null;
+  languages: string[];
+  onboarding: boolean;
+  model: string;
+  base_url: string;
+  api_key: string;
+  keywords: string[];
+  mic_device?: string | null;
+  transcription_mode?: TranscriptionMode | null;
+  participant_human_ids?: string[];
+  self_human_id?: string | null;
+} & { authenticated_user_id?: string | null };
 export type CaptureState = "active" | "finalizing" | "inactive";
 export type CaptureStatusEvent =
   | { type: "audio_initializing"; session_id: string }
@@ -1054,12 +1286,45 @@ export type CompletedTranscription = {
   session_id: string;
   response: BatchResponse;
 };
+export type Configuration = {
+  enabled: boolean;
+  apiBaseUrl: string;
+  organizationId: string;
+  userId: string;
+  connections: Connection[];
+};
+export type Connection = {
+  integrationId: string;
+  connectionId: string;
+  status: string;
+};
 export type DegradedError =
   | { type: "authentication_failed"; provider: string }
   | { type: "upstream_unavailable"; message: string }
   | { type: "connection_timeout" }
   | { type: "provider_configuration"; provider: string; message: string }
   | { type: "stream_error"; message: string };
+export type DiagnosticBatch = {
+  deviceId: string;
+  bootId: string;
+  events: DiagnosticEvent[];
+  droppedCount: number;
+  retentionDropped: boolean;
+};
+export type DiagnosticEvent = {
+  id: string;
+  deviceId: string;
+  bootId: string;
+  sequence: number;
+  observedAtMs: number;
+  elapsedMs: number;
+  appVersion: string;
+  buildSha: string;
+  sessionId: string | null;
+  kind: string;
+  reason: string;
+  evidence: Partial<{ [key in string]: JsonValue }>;
+};
 export type FinalizedWord = {
   id: string;
   text: string;
@@ -1069,6 +1334,7 @@ export type FinalizedWord = {
   state: WordState;
   speaker_index?: number | null;
 };
+export type Gap = { start: number; end: number };
 export type IdentityAssignment = { human_id: string; scope: IdentityScope };
 export type IdentityScope =
   | { kind: "channel"; channel: ChannelProfile }
@@ -1083,6 +1349,30 @@ export type InheritedCapture = {
   retainAudio?: boolean | null;
   provider?: string | null;
   model?: string | null;
+};
+export type Input = {
+  sessionId: string | null;
+  kind: string;
+  reason: string;
+  evidence?: Partial<{ [key in string]: JsonValue }>;
+};
+export type Job = {
+  id: string;
+  sessionId: string;
+  state: string;
+  error: string | null;
+  userId: string;
+  organizationId: string;
+  deviceId?: string;
+  apiBaseUrl: string;
+  transcriptId: string;
+  startedAtMs: number;
+  stoppedAtMs: number;
+  binding: JsonValue | null;
+  segments: Segment[];
+  gaps?: Gap[];
+  rawFrames?: number | null;
+  audioTimelineVerified?: boolean | null;
 };
 export type JsonValue =
   | null
@@ -1127,6 +1417,28 @@ export type LiveTranscriptTarget = {
   provider: string | null;
   model: string | null;
 };
+export type MeetingOccurrence = {
+  key: string;
+  room: string | null;
+  kind: OccurrenceKind;
+  eventId?: string | null;
+};
+export type MeetingRecordingContext = {
+  sessionId: string;
+  userId: string;
+  occurrence: MeetingOccurrence;
+  revision: string;
+  state: MeetingRecordingState;
+};
+export type MeetingRecordingState = "recording" | "excluded" | "pending";
+export type ObservationSummary = {
+  inspectionStatus: string;
+  rowCount: number;
+  activeCallCount: number;
+  trustedCount: number;
+  warningCategories: string[];
+};
+export type OccurrenceKind = "calendar" | "room" | "session" | "ambiguous";
 export type PartialWord = {
   text: string;
   start_ms: number;
@@ -1207,6 +1519,7 @@ export type SaveBatchTranscriptRequest = {
   promotion: BatchTranscriptPromotion;
   mark_audio_complete: boolean;
 };
+export type Segment = { sha256: string; frames: number };
 export type SegmentKey = {
   channel: ChannelProfile;
   speaker_index?: number | null;

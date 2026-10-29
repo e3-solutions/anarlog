@@ -7,6 +7,7 @@ Default permissions for the plugin
 - `allow-list-installed-applications`
 - `allow-get-installed-application-icons`
 - `allow-list-mic-using-applications`
+- `allow-list-meeting-audio-processes`
 - `allow-inspect-meeting-accessibility`
 - `allow-send-meeting-chat-message`
 - `allow-capture-meeting-chat-messages`
@@ -232,6 +233,32 @@ Enables the list_installed_applications command without any pre-configured scope
 <td>
 
 Denies the list_installed_applications command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`detect:allow-list-meeting-audio-processes`
+
+</td>
+<td>
+
+Enables the list_meeting_audio_processes command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`detect:deny-list-meeting-audio-processes`
+
+</td>
+<td>
+
+Denies the list_meeting_audio_processes command without any pre-configured scope.
 
 </td>
 </tr>

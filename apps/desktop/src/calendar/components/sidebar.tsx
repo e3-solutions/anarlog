@@ -40,6 +40,7 @@ import {
 import { useAuth } from "~/auth";
 import { useBillingAccess } from "~/auth/billing-context";
 import { useConnections } from "~/auth/useConnections";
+import { useE3CalendarAccess } from "~/calendar/access";
 import {
   allowReconnectedCalendarConnections,
   removeDisconnectedCalendarConnection,
@@ -123,12 +124,13 @@ export function CalendarSidebarContent({
   const isMacos = platform() === "macos";
   const calendar = usePermission("calendar");
   const { isPaid } = useBillingAccess();
+  const e3Calendar = useE3CalendarAccess();
   const [connectionPollUntil, setConnectionPollUntil] = useState<number | null>(
     null,
   );
   const connectionKeyWhenPollStartedRef = useRef("");
   const isPollingConnections = connectionPollUntil !== null;
-  const { data: connections } = useConnections(isPaid, {
+  const { data: connections } = useConnections(isPaid || e3Calendar, {
     refetchInterval: isPollingConnections ? CONNECTION_POLL_INTERVAL_MS : false,
   });
   const connectionKey = getCalendarConnectionKey(connections);
@@ -230,8 +232,16 @@ function ProviderAccordionItem({
   const { t } = useLingui();
   const auth = useAuth();
   const { isPaid, isPro } = useBillingAccess();
+  const e3Calendar = useE3CalendarAccess() && provider.id === "google";
+  const integrationId = e3Calendar
+    ? "google-meet"
+    : provider.nangoIntegrationId;
   const { openIntegration, openingAction } = useOpenIntegrationUrl();
-  const { data: connections, isPending, isError } = useConnections(isPaid);
+  const {
+    data: connections,
+    isPending,
+    isError,
+  } = useConnections(isPaid || e3Calendar);
   const [isApplePermissionDialogOpen, setIsApplePermissionDialogOpen] =
     useState(false);
   const providerConnections =
@@ -239,14 +249,20 @@ function ProviderAccordionItem({
       (connection) => connection.integration_id === provider.nangoIntegrationId,
     ) ?? [];
 
-  const requiresPro = !!provider.nangoIntegrationId && !isPro;
+  const meetConnection = e3Calendar
+    ? connections?.find(
+        (connection) => connection.integration_id === "google-meet",
+      )
+    : undefined;
+  const requiresPro = !!provider.nangoIntegrationId && !isPro && !e3Calendar;
   const appleNeedsPermission =
     provider.id === "apple" && calendar.status !== "authorized";
 
   const canAddAccount =
     !!provider.nangoIntegrationId &&
     !!auth.session &&
-    isPaid &&
+    (isPaid || e3Calendar) &&
+    !(e3Calendar && providerConnections.length > 0) &&
     !isPending &&
     !isError;
   const shouldConnectOnClick =
@@ -291,8 +307,9 @@ function ProviderAccordionItem({
       event.preventDefault();
       onConnectStarted();
       openIntegration({
-        nangoIntegrationId: provider.nangoIntegrationId,
-        action: "connect",
+        nangoIntegrationId: integrationId,
+        connectionId: meetConnection?.connection_id,
+        action: meetConnection ? "reconnect" : "connect",
         returnTo,
       });
     },
@@ -301,7 +318,8 @@ function ProviderAccordionItem({
       handleAppleConnect,
       onConnectStarted,
       openIntegration,
-      provider.nangoIntegrationId,
+      integrationId,
+      meetConnection,
       returnTo,
       shouldConnectOnClick,
     ],
@@ -313,8 +331,9 @@ function ProviderAccordionItem({
       event.stopPropagation();
       onConnectStarted();
       openIntegration({
-        nangoIntegrationId: provider.nangoIntegrationId,
-        action: "connect",
+        nangoIntegrationId: integrationId,
+        connectionId: meetConnection?.connection_id,
+        action: meetConnection ? "reconnect" : "connect",
         returnTo,
       });
     },
@@ -322,7 +341,8 @@ function ProviderAccordionItem({
       canAddAccount,
       onConnectStarted,
       openIntegration,
-      provider.nangoIntegrationId,
+      integrationId,
+      meetConnection,
       returnTo,
     ],
   );
@@ -336,8 +356,9 @@ function ProviderAccordionItem({
               action: () => {
                 onConnectStarted();
                 void openIntegration({
-                  nangoIntegrationId: provider.nangoIntegrationId,
-                  action: "connect",
+                  nangoIntegrationId: integrationId,
+                  connectionId: meetConnection?.connection_id,
+                  action: meetConnection ? "reconnect" : "connect",
                   returnTo,
                 });
               },
@@ -372,7 +393,8 @@ function ProviderAccordionItem({
       onConnectStarted,
       provider.displayName,
       provider.id,
-      provider.nangoIntegrationId,
+      integrationId,
+      meetConnection,
       openIntegration,
       returnTo,
       t,

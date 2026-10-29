@@ -1,5 +1,4 @@
 use super::subscription_aliases;
-use crate::PAID_ENTITLEMENTS;
 use crate::{
     auth::{self, AuthState},
     env::RuntimeConfig,
@@ -7,17 +6,11 @@ use crate::{
 use axum::{Router, middleware};
 use std::sync::Arc;
 
-pub(crate) fn router(
+pub(crate) async fn router(
     env: &RuntimeConfig,
     analytics: Arc<anlg_analytics::AnalyticsClient>,
 ) -> Router {
     let auth_state = AuthState::new(&env.supabase.supabase_url);
-    let auth_state_paid = auth_state.clone().with_required_entitlements(
-        PAID_ENTITLEMENTS
-            .iter()
-            .map(|value| (*value).to_string())
-            .collect(),
-    );
     let auth_state_basic = auth_state.clone();
     let nango_config = env.nango.as_ref().map(|nango| {
         anlg_api_nango::NangoConfig::new(
@@ -26,6 +19,77 @@ pub(crate) fn router(
             Some(env.supabase.supabase_service_role_key.clone()),
         )
     });
+    let recording_routes = if env.anarlog_shared_recordings_enabled {
+        use anlg_api_recordings::{
+            recording_app::{self, RecordingAppState},
+            recording_identity::RecordingIdentityResolver,
+            recording_members::RecordingMemberships,
+            recording_transcription::{RecordingProcessor, RecordingTranscriber},
+            shared_recordings::SharedRecordingService,
+        };
+        let service = Arc::new(
+            SharedRecordingService::supabase(
+                &env.supabase.supabase_url,
+                &env.supabase.supabase_service_role_key,
+            )
+            .expect("shared recording Supabase configuration validated"),
+        );
+        let identities = nango_config.as_ref().map(|config| {
+            RecordingIdentityResolver::new(anlg_api_nango::NangoConnectionState::from_config(
+                config,
+            ))
+        });
+        let processor = env
+            .anarlog_shared_recordings_transcription_url
+            .as_ref()
+            .map(|url| {
+                let transcriber = RecordingTranscriber::new(
+                    url.clone(),
+                    env.anarlog_shared_recordings_transcription_key
+                        .clone()
+                        .unwrap_or_default(),
+                    env.anarlog_shared_recordings_transcription_model
+                        .clone()
+                        .expect("recording model validated"),
+                )
+                .expect("recording transcription configuration validated");
+                Arc::new(RecordingProcessor::new(service.clone(), transcriber))
+            });
+        recording_app::router(
+            RecordingAppState {
+                service,
+                members: RecordingMemberships::new(
+                    &env.supabase.supabase_url,
+                    &env.supabase.supabase_anon_key,
+                )
+                .expect("recording membership configuration validated"),
+                identities,
+                processor,
+            },
+            auth_state_basic.clone(),
+        )
+        .route_layer(middleware::from_fn(auth::sentry_and_analytics))
+        .route(
+            "/download",
+            axum::routing::get(|| async { axum::response::Html(include_str!("e3-download.html")) }),
+        )
+        .route(
+            "/install.sh",
+            axum::routing::get(|| async {
+                (
+                    [(
+                        axum::http::header::CONTENT_TYPE,
+                        "text/plain; charset=utf-8",
+                    )],
+                    include_str!("e3-install.sh"),
+                )
+            }),
+        )
+    } else if env.upstreams.anarlog_core_origin.is_some() {
+        anlg_api_recordings::recording_app::forwarding_router()
+    } else {
+        Router::new()
+    };
     let subscription_config = env.subscription.as_ref().map(|(stripe, loops)| {
         anlg_api_subscription::SubscriptionConfig::new(&env.supabase, stripe, loops)
             .with_analytics(analytics.clone())
@@ -63,7 +127,21 @@ pub(crate) fn router(
                 .layer(axum::Extension(nango_connection_state))
                 .route_layer(middleware::from_fn(auth::sentry_and_analytics))
                 .route_layer(middleware::from_fn_with_state(
-                    auth_state_paid,
+                    if env.anarlog_shared_recordings_enabled {
+                        Some(
+                            anlg_api_recordings::recording_members::RecordingMemberships::new(
+                                &env.supabase.supabase_url,
+                                &env.supabase.supabase_anon_key,
+                            )
+                            .expect("recording membership configuration validated"),
+                        )
+                    } else {
+                        None
+                    },
+                    auth::require_integration_access,
+                ))
+                .route_layer(middleware::from_fn_with_state(
+                    auth_state_basic.clone(),
                     auth::require_auth,
                 ))
         }
@@ -95,6 +173,7 @@ pub(crate) fn router(
         None => Router::new(),
     };
     Router::new()
+        .merge(recording_routes)
         .merge(nango_webhook_routes)
         .merge(integration_routes)
         .merge(integration_management_routes)

@@ -40,6 +40,7 @@ import { getCalendarConnectionKey } from "./shared";
 
 import { useBillingAccess } from "~/auth/billing-context";
 import { useConnections } from "~/auth/useConnections";
+import { useE3CalendarAccess } from "~/calendar/access";
 import {
   useCalendarData,
   useEnabledCalendars,
@@ -88,7 +89,8 @@ function useVisibleCols(ref: React.RefObject<HTMLDivElement | null>) {
 export function CalendarView() {
   const { scheduleSync } = useSync();
   const { isPaid } = useBillingAccess();
-  const { data: connections } = useConnections(isPaid);
+  const e3Calendar = useE3CalendarAccess();
+  const { data: connections } = useConnections(isPaid || e3Calendar);
   const connectionKey = useMemo(
     () => getCalendarConnectionKey(connections),
     [connections],

@@ -39,6 +39,11 @@ export const SETTING_DEFINITIONS = {
     path: ["general", "automatic_updates"],
     default: true as boolean,
   },
+  shared_recording_defaults_applied: {
+    type: "string",
+    path: ["general", "shared_recording_defaults_applied"],
+    default: "[]" as string,
+  },
   auto_stop_meetings: {
     type: "boolean",
     path: ["general", "auto_stop_meetings"],
@@ -119,7 +124,7 @@ export const SETTING_DEFINITIONS = {
   theme: {
     type: "string",
     path: ["general", "theme"],
-    default: "system" as string,
+    default: "light" as string,
     synced: true,
   },
   app_icon: {

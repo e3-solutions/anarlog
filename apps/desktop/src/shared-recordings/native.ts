@@ -1,0 +1,68 @@
+import { invoke } from "@tauri-apps/api/core";
+
+import type {
+  Configuration,
+  Job,
+  ObservationSummary,
+} from "@anlg/plugin-transcription";
+
+export type SharedRecordingConfiguration = Configuration;
+export type SharedRecordingJob = Pick<
+  Job,
+  "id" | "sessionId" | "state" | "error"
+>;
+
+const command = (name: string) =>
+  `plugin:transcription|shared_recording_${name}`;
+
+export function sharedRecordingConfiguration() {
+  return invoke<SharedRecordingConfiguration | null>(command("configuration"));
+}
+
+export function configureSharedRecordings(
+  config: SharedRecordingConfiguration,
+) {
+  return invoke<SharedRecordingConfiguration>(command("configure"), { config });
+}
+
+export function sharedRecordingQueue(userId: string) {
+  return invoke<SharedRecordingJob[]>(command("queue"), { userId });
+}
+
+export function flushSharedRecordings(accessToken: string, userId: string) {
+  return invoke<void>(command("flush"), { accessToken, userId });
+}
+
+export function observeSharedRecording(input: {
+  sessionId: string;
+  platform: "googleMeet" | "slack" | "unverified";
+  callIdentity: string | null;
+  observedAtMs: number;
+  accessToken: string;
+  userId: string;
+  quarantineReason?:
+    | "ax_unavailable"
+    | "ax_ambiguous"
+    | "meeting_unverified"
+    | "inventory_missing"
+    | "inventory_conflict"
+    | "meeting_departed"
+    | "call_changed"
+    | "auth_unavailable"
+    | "observer_stopped";
+  diagnosticSummary?: ObservationSummary;
+}) {
+  return invoke<string | null>(command("observe"), input);
+}
+
+export function excludeSharedRecording(sessionId: string, userId: string) {
+  return invoke<string | null>(command("observe"), {
+    sessionId,
+    userId,
+    platform: "unverified",
+    callIdentity: null,
+    observedAtMs: Date.now(),
+    accessToken: "",
+    quarantineReason: "user_excluded",
+  });
+}

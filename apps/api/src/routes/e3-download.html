@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#523664" />
+    <meta name="description" content="Download E3 Scribe for Mac and get set up with your E3 account." />
+    <meta property="og:title" content="E3 Scribe for Mac" />
+    <meta property="og:description" content="Download the app. Sign in with E3. Connect your meetings." />
+    <title>Download E3 Scribe</title>
+    <style>
+      :root { color-scheme: light; --page: #f7f5f9; --surface: #fff; --ink: #29232e; --muted: #706877; --plum: #523664; --hover: #40274f; --line: #e5dfe9; }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--page); color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 16px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
+      a, button { cursor: pointer; }
+      a { color: var(--plum); text-underline-offset: 4px; }
+      a:focus-visible, button:focus-visible, summary:focus-visible { outline: 3px solid var(--plum); outline-offset: 5px; }
+      .wrap { max-width: 1000px; margin: auto; padding: 0 32px; }
+      header { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 30px 0; border-bottom: 1px solid var(--line); }
+      .brand { font-size: 20px; font-weight: 650; letter-spacing: -.7px; }
+      .brand span { color: var(--plum); margin-right: 5px; }
+      main { padding: 66px 0 52px; }
+      .intro { max-width: 600px; }
+      h1 { margin: 0 0 16px; font-size: clamp(36px, 6vw, 52px); line-height: 1.12; font-weight: 650; letter-spacing: -2px; text-wrap: balance; }
+      .lead { margin: 0; color: var(--muted); font-size: 19px; line-height: 1.65; max-width: 510px; }
+      .download { display: inline-flex; align-items: center; justify-content: center; gap: 12px; margin-top: 28px; padding: 13px 22px; background: var(--plum); color: white; border-radius: 9px; text-decoration: none; font-weight: 600; transition: background 150ms; }
+      .download:hover { background: var(--hover); }
+      .download svg { width: 20px; height: 20px; }
+      .requirements { color: var(--muted); font-size: 13px; margin: 12px 0 0; }
+      .terminal { margin-top: 26px; }
+      .terminal p { margin: 0 0 9px; font-size: 14px; color: var(--muted); }
+      .command { display: flex; align-items: center; gap: 14px; padding: 13px 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); }
+      .command code { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 12px; line-height: 1.7; }
+      .command button { flex: none; border: 1px solid var(--line); border-radius: 6px; padding: 7px 12px; background: var(--page); color: var(--plum); font: inherit; font-size: 13px; font-weight: 600; }
+      .command button:hover { background: #eee8f2; }
+      .terminal .command-note { margin-top: 9px; font-size: 12px; }
+      .setup { margin-top: 54px; padding-top: 34px; border-top: 1px solid var(--line); }
+      h2 { margin: 0 0 24px; font-size: 24px; font-weight: 650; letter-spacing: -.7px; line-height: 1.3; }
+      ol { list-style: none; counter-reset: steps; padding: 0; margin: 0; }
+      .step { counter-increment: steps; display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); gap: 42px; align-items: center; padding: 32px 0; border-top: 1px solid var(--line); }
+      .step:first-child { border-top: 0; padding-top: 8px; }
+      .step-copy { padding-left: 40px; position: relative; }
+      .step-copy::before { content: counter(steps); position: absolute; left: 0; top: 0; display: grid; place-items: center; height: 27px; width: 27px; border-radius: 50%; color: var(--plum); font-size: 13px; font-weight: 650; background: #eae2ef; }
+      h3 { margin: 0 0 10px; font-size: 20px; letter-spacing: -.4px; font-weight: 650; line-height: 1.3; }
+      .step p, .ready p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.65; }
+      .step p + p { margin-top: 10px; }
+      .permission-list { margin-top: 14px; display: grid; gap: 9px; font-size: 14px; line-height: 1.5; }
+      .permission-list div { color: var(--muted); }
+      .permission-list strong { display: block; color: var(--ink); font-weight: 600; }
+      figure { margin: 0; min-width: 0; }
+      .screen { display: block; width: 100%; height: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+      figure a { display: block; border-radius: 10px; }
+      figure a:hover .screen { border-color: #b9a6c6; }
+      figcaption { color: var(--muted); font-size: 12px; line-height: 1.6; margin-top: 9px; }
+      .ready { margin-top: 12px; padding-top: 34px; border-top: 1px solid var(--line); }
+      .ready h2 { margin-bottom: 12px; }
+      .ready > p { max-width: 630px; }
+      .ready figure { margin-top: 22px; }
+      .help { margin-top: 28px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; }
+      details { border-top: 1px solid var(--line); padding-top: 16px; }
+      summary { cursor: pointer; font-size: 14px; font-weight: 600; }
+      details p { padding-top: 10px; }
+      footer { padding: 24px 0 32px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+      @media (max-width: 720px) { .wrap { padding: 0 22px; } header { padding: 22px 0; } main { padding-top: 42px; } .setup { margin-top: 38px; } .step { grid-template-columns: 1fr; gap: 22px; padding: 28px 0; } .step figure { margin-left: 40px; } .help { grid-template-columns: 1fr; gap: 18px; } .download { width: 100%; } h1 { letter-spacing: -1.4px; } }
+      @media (prefers-reduced-motion: reduce) { .download { transition: none; } }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <div class="brand"><span>E3</span> Scribe</div>
+      </header>
+      <main>
+        <section class="intro" aria-labelledby="title">
+          <h1 id="title">Download E3 Scribe.</h1>
+          <p class="lead">Your meeting recordings and transcripts, automatically saved for E3.</p>
+          <a id="download" class="download" href="https://rwefimqhinohocgmtwjj.supabase.co/storage/v1/object/public/e3-scribe-releases/releases/0.1.19/E3-Scribe-arm64.dmg">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 16v4h14v-4" /></svg>
+            Download for Mac
+          </a>
+          <p class="requirements"><span id="version">Version 0.1.19</span> · Apple Silicon (M1 or newer) · macOS 15+</p>
+          <p class="requirements">Open the .dmg, drag Scribe into Applications, then open it.</p>
+          <div class="terminal">
+            <p>Prefer Terminal? Install and open setup with one command.</p>
+            <div class="command">
+              <code id="install-command">curl -fsSL https://e3-scribe-setup.up.railway.app/install.sh | bash</code>
+              <button id="copy-command" type="button" aria-label="Copy install command">Copy</button>
+            </div>
+            <p class="command-note" id="copy-status" role="status">No developer tools needed. <a href="/install.sh">View the script</a>. Then follow the steps below.</p>
+          </div>
+        </section>
+        <section class="setup" aria-labelledby="setup-title">
+          <h2 id="setup-title">Your first setup.</h2>
+          <ol>
+            <li class="step">
+              <div class="step-copy"><h3>Install and open Scribe</h3><p>Run the command above in Terminal. It installs the app and opens setup.</p><p>Or open the downloaded .dmg, drag <strong>E3 Scribe</strong> into <strong>Applications</strong>, then open it. Choose <strong>Get started</strong>.</p></div>
+              <figure><a href="https://rwefimqhinohocgmtwjj.supabase.co/storage/v1/object/public/e3-scribe-releases/guide/onboarding-v3/install.png" target="_blank" rel="noopener"><img class="screen" src="https://rwefimqhinohocgmtwjj.supabase.co/storage/v1/object/public/e3-scribe-releases/guide/onboarding-v3/install.png" alt="E3 Scribe welcome screen with the Get started button." loading="lazy" /></a><figcaption>The command opens the same signed app as the Mac download.</figcaption></figure>
+            </li>
+            <li class="step">
+              <div class="step-copy"><h3>Sign in with Google</h3><p>Choose <strong>Sign in with Google</strong> and use your <strong>@e3group.ai</strong> account.</p><p>Approve read-only <strong>Google Meet</strong> and <strong>Calendar</strong> access when Google asks. One sign-in connects both and selects your main E3 calendar.</p></div>
+              <figure><a href="https://rwefimqhinohocgmtwjj.supabase.co/storage/v1/object/public/e3-scribe-releases/guide/onboarding-v3/google-sign-in.png" target="_blank" rel="noopener"><img class="screen" src="https://rwefimqhinohocgmtwjj.supabase.co/storage/v1/object/public/e3-scribe-releases/guide/onboarding-v3/google-sign-in.png" alt="E3 Scribe Google sign-in screen." loading="lazy" /></a><figcaption>Google may show “Anarlog Shared Recordings Preview,” the name of E3’s existing connection. No history import needed.</figcaption></figure>
+            </li>
+            <li class="step">
+              <div class="step-copy"><h3>Allow Mac permissions</h3><p>Follow each prompt in Scribe, then approve the matching macOS request.</p><div class="permission-list"><div><strong>Microphone</strong>Allow access to capture your voice.</div><div><strong>System audio</strong>Allow access to capture other speakers.</div><div><strong>Accessibility</strong>Turn on E3 Scribe in System Settings so it can detect meeting activity.</div></div><p>Reopen Scribe if macOS asks.</p></div>
+              <figure><a href="https://rwefimqhinohocgmtwjj.supabase.co/storage/v1/object/public/e3-scribe-releases/guide/onboarding-v3/mac-permissions-detail.png" target="_blank" rel="noopener"><img class="screen" src="https://rwefimqhinohocgmtwjj.supabase.co/storage/v1/object/public/e3-scribe-releases/guide/onboarding-v3/mac-permissions-detail.png" alt="E3 Scribe setup showing microphone, system audio, and Accessibility permissions." loading="lazy" /></a><figcaption>Illustrative app screen. Enable all three; macOS opens its own approval prompts.</figcaption></figure>
+            </li>
+            <li class="step">
+              <div class="step-copy"><h3>Finish setup</h3><p>Check that <strong>Google</strong> shows <strong>Connected</strong>, then choose <strong>Finish setup</strong>.</p><p>Google is already connected from your first sign-in. No additional account connection is needed.</p></div>
+              <figure><a href="https://rwefimqhinohocgmtwjj.supabase.co/storage/v1/object/public/e3-scribe-releases/guide/onboarding-v4/connection-review.png" target="_blank" rel="noopener"><img class="screen" src="https://rwefimqhinohocgmtwjj.supabase.co/storage/v1/object/public/e3-scribe-releases/guide/onboarding-v4/connection-review.png" alt="E3 Scribe connection review showing Google connected and Finish setup." loading="lazy" /></a><figcaption>Illustrative app screen. Google should show Connected before you finish.</figcaption></figure>
+            </li>
+          </ol>
+        </section>
+        <section class="ready" aria-labelledby="ready-title">
+          <h2 id="ready-title">You’re ready for your next meeting.</h2>
+          <p>Keep Scribe running. It launches at login and records supported detected meetings automatically. Your recordings and transcripts appear in <strong>Meeting library</strong>. Original audio and transcripts are saved to E3’s database.</p>
+          <figure>
+            <a href="https://rwefimqhinohocgmtwjj.supabase.co/storage/v1/object/public/e3-scribe-releases/guide/onboarding-v4/personal-library.png" target="_blank" rel="noopener">
+              <img class="screen" src="https://rwefimqhinohocgmtwjj.supabase.co/storage/v1/object/public/e3-scribe-releases/guide/onboarding-v4/personal-library.png" width="1280" height="480" alt="E3 Scribe Meeting library showing your recordings and Transcript tab." loading="lazy" />
+            </a>
+            <figcaption>Choose your meeting, then open <strong>Recordings → Listen</strong> or <strong>Transcript</strong>. Example meeting data shown. Select any image to enlarge.</figcaption>
+          </figure>
+          <div class="help">
+            <details><summary>Check your first meeting</summary><p>Join a short Google Meet, confirm Scribe starts recording, then leave. Open Meeting library once the upload finishes.</p></details>
+            <details><summary>Do I need an API key?</summary><p>No. E3 manages shared meeting transcription. You don’t need a personal API key or a model download.</p></details>
+            <details><summary>What about updates?</summary><p>Future updates arrive through the app. Your recording and sharing preferences stay under your control.</p></details>
+          </div>
+        </section>
+      </main>
+      <footer>For E3 teammates · Signed and notarized for macOS · Keep Scribe running to capture meetings.</footer>
+    </div>
+    <script>
+      document.getElementById("copy-command").addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(document.getElementById("install-command").textContent);
+          document.getElementById("copy-command").textContent = "Copied";
+          document.getElementById("copy-status").textContent = "Copied. Paste into Terminal and press Return.";
+        } catch {
+          document.getElementById("copy-status").textContent = "Select the command above and copy it with ⌘C.";
+        }
+      });
+      const releaseRoot = "https://rwefimqhinohocgmtwjj.supabase.co/storage/v1/object/public/e3-scribe-releases";
+      fetch(`${releaseRoot}/update/darwin-aarch64.json`, { cache: "no-store" })
+        .then((response) => { if (!response.ok) throw new Error("Release unavailable"); return response.json(); })
+        .then(({ version }) => {
+          if (!/^\d+\.\d+\.\d+$/.test(version)) return;
+          document.getElementById("download").href = `${releaseRoot}/releases/${version}/E3-Scribe-arm64.dmg`;
+          document.getElementById("version").textContent = `Version ${version}`;
+        })
+        .catch(() => {});
+    </script>
+  </body>
+</html>

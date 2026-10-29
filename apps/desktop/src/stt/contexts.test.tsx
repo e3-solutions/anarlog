@@ -31,6 +31,7 @@ const {
   createSessionMock,
   softDeleteSessionMock,
   openNewMock,
+  recordingDiagnosticMock,
 } = vi.hoisted(() => ({
   listMicUsingApplicationsMock: vi.fn(),
   inspectMeetingAccessibilityMock: vi.fn(),
@@ -44,12 +45,20 @@ const {
   createSessionMock: vi.fn(),
   softDeleteSessionMock: vi.fn(),
   openNewMock: vi.fn(),
+  recordingDiagnosticMock: vi.fn(),
 }));
+
+vi.mock("~/application-health/recording-diagnostics", () => ({
+  recordRecordingDiagnostic: recordingDiagnosticMock,
+}));
+
+vi.mock("@tauri-apps/plugin-os", () => ({ platform: () => "macos" }));
 
 vi.mock("@anlg/plugin-detect", () => ({
   commands: {
     inspectMeetingAccessibility: inspectMeetingAccessibilityMock,
     listMicUsingApplications: listMicUsingApplicationsMock,
+    listMeetingAudioProcesses: vi.fn(async () => ({ status: "ok", data: [] })),
   },
   events: {
     detectEvent: {
@@ -995,6 +1004,16 @@ describe("ListenerProvider detect events", () => {
 
     expect(listMicUsingApplicationsMock).toHaveBeenCalledTimes(1);
     expect(stopSpy).toHaveBeenCalledTimes(1);
+    expect(recordingDiagnosticMock).toHaveBeenCalledWith(
+      "session-1",
+      "stop_requested",
+      "grace_elapsed",
+      expect.objectContaining({
+        autoStop: true,
+        micStatus: "ok",
+        micActive: false,
+      }),
+    );
   });
 
   test("auto-stops when MicStopped omits the trigger app and no trigger app remains active (regression: #5436)", async () => {
@@ -1531,6 +1550,60 @@ describe("ListenerProvider detect events", () => {
       );
     },
   );
+
+  test("does not treat hidden browser microphone release or an AX failure as departure", async () => {
+    const store = createListenerStore();
+    const stopSpy = vi.fn();
+    store.setState({ stop: stopSpy });
+    store.getState().setTriggerAppIds(["com.google.Chrome"]);
+    setStoreActive(store);
+    inspectMeetingAccessibilityMock.mockResolvedValue({
+      status: "ok",
+      data: [
+        {
+          activeCall: false,
+          app: { id: "com.google.Chrome", name: "Chrome" },
+          pid: 42,
+          platform: "unknown",
+          surface: "web",
+          accessibilityTrusted: true,
+          windowTitle: null,
+          remoteScreenShare: false,
+          warnings: ["no uniquely scoped meeting AXWindow"],
+        },
+      ],
+    });
+    const handler = await renderProvider(store);
+    vi.useFakeTimers();
+    handler({
+      payload: {
+        type: "micStopped",
+        apps: [{ id: "com.google.Chrome", name: "Chrome" }],
+      },
+    });
+    await vi.advanceTimersByTimeAsync(3 * AUTO_STOP_CONFIRM_DELAY_MS);
+    expect(stopSpy).not.toHaveBeenCalled();
+    expect(showNotificationMock).not.toHaveBeenCalled();
+    inspectMeetingAccessibilityMock.mockResolvedValue({
+      status: "error",
+      error: "unavailable",
+    });
+    await vi.advanceTimersByTimeAsync(AUTO_STOP_CONFIRM_DELAY_MS);
+    expect(showNotificationMock).not.toHaveBeenCalled();
+    inspectMeetingAccessibilityMock.mockResolvedValue({
+      status: "ok",
+      data: [],
+    });
+    await vi.advanceTimersByTimeAsync(AUTO_STOP_CONFIRM_DELAY_MS);
+    expect(showNotificationMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(AUTO_STOP_CONFIRM_DELAY_MS);
+    expect(showNotificationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: expect.stringContaining("auto-stop-ended:session-1"),
+      }),
+    );
+    expect(stopSpy).not.toHaveBeenCalled();
+  });
 
   test("rechecks after accessibility confirms the meeting is active", async () => {
     const store = createListenerStore();

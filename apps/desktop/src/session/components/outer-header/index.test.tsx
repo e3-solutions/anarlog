@@ -20,12 +20,21 @@ const mocks = vi.hoisted(() => ({
   getScheme: vi.fn(),
   startListening: vi.fn(),
   stopListening: vi.fn(),
+  diagnostic: vi.fn(),
   requestMainListenerControl: vi.fn(),
   isMainWebviewWindow: true,
   audioExists: false,
   hasTranscriptBySession: {} as Record<string, boolean>,
   configValues: {} as Record<string, boolean>,
   meetingMicInUse: false,
+}));
+
+vi.mock("~/application-health/recording-diagnostics", () => ({
+  recordRecordingDiagnostic: mocks.diagnostic,
+}));
+
+vi.mock("~/stt/recording-exclusion-control", () => ({
+  RecordingExclusionControl: () => null,
 }));
 
 vi.mock("../title-input", () => ({
@@ -319,6 +328,11 @@ describe("OuterHeader", () => {
     fireEvent.click(screen.getByRole("button", { name: "Stop" }));
 
     expect(mocks.stopListening).toHaveBeenCalledTimes(1);
+    expect(mocks.diagnostic).toHaveBeenCalledWith(
+      "session-1",
+      "stop_requested",
+      "manual_stop",
+    );
   });
 
   it("delegates stop to the main window from standalone windows", () => {

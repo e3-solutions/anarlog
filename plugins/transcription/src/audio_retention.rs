@@ -172,6 +172,15 @@ async fn session_audio_is_idle<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     session_id: &str,
 ) -> bool {
+    if app
+        .state::<crate::shared_recording::QueueState>()
+        .pins
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(session_id)
+    {
+        return false;
+    }
     let Ok(snapshot) = app.listener().get_capture_snapshot().await else {
         return false;
     };

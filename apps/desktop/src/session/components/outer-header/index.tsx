@@ -17,6 +17,7 @@ import { RecordingIcon, useHasTranscript } from "../shared";
 import { TitleInput } from "../title-input";
 import { OverflowButton } from "./overflow";
 
+import { recordRecordingDiagnostic } from "~/application-health/recording-diagnostics";
 import { useAudioPlayer } from "~/audio-player";
 import { useNow } from "~/calendar/hooks";
 import { useShell } from "~/contexts/shell";
@@ -41,6 +42,7 @@ import {
 import { getScheme } from "~/shared/utils";
 import type { EditorView, Tab } from "~/store/zustand/tabs/schema";
 import { useListener } from "~/stt/contexts";
+import { RecordingExclusionControl } from "~/stt/recording-exclusion-control";
 import { useStartListening } from "~/stt/useStartListening";
 import {
   isMainWebviewWindow,
@@ -87,7 +89,7 @@ export function OuterHeader({
         "relative flex w-full items-center gap-[2px]",
         // 46px content box centers the 28px controls at 23px, matching the
         // sidebar toggle row (pt-[9px] + size-7).
-        "h-12 pb-0.5",
+        "min-h-12 pb-0.5",
         standaloneWindow &&
           (showWindowControlsGutter ? WINDOW_CONTROLS_GUTTER_CLASS : "pl-2"),
         !standaloneWindow && !showSidebarTimelineHeaderGutter && "pl-2",
@@ -124,6 +126,7 @@ export function OuterHeader({
           sessionMode={sessionMode}
           meetingOver={meetingOver}
         />
+        <RecordingExclusionControl sessionId={sessionId} />
         <OverflowButton
           standaloneWindow={standaloneWindow}
           sessionId={sessionId}
@@ -279,6 +282,7 @@ function HeaderMeetingAction({
       return;
     }
 
+    recordRecordingDiagnostic(sessionId, "stop_requested", "manual_stop");
     stop();
   }, [sessionId, stop]);
   const action = (() => {

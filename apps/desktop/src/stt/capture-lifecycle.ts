@@ -30,6 +30,7 @@ import { cancelMeetingRecordingDisclosure } from "./meeting-disclosure";
 import { createNativeTranscriptPersistence } from "./native-transcript-persistence";
 import { persistTranscriptWrite } from "./persist-retry";
 import { consumePrimaryDeviceYield } from "./primary-device";
+import { isRecordingSessionExcluded } from "./recording-exclusions";
 import {
   canRunBatchTranscription,
   isStoppedTranscriptionError,
@@ -1270,6 +1271,11 @@ export function useCaptureLifecycle(sessionId: string) {
           queryKey: ["audio", sessionId],
         });
         try {
+          if (
+            auth?.session?.user.id &&
+            isRecordingSessionExcluded(auth.session.user.id, sessionId)
+          )
+            return;
           await finalizeStoppedInner(details, requestRecoveryOnFailure);
         } catch (error) {
           if (!recoveryStateCleared && !recoveryPending) {
@@ -1312,7 +1318,26 @@ export function useCaptureLifecycle(sessionId: string) {
           });
         }
       };
+      const finishExcludedCapture = async () => {
+        refreshCredentialsActive = false;
+        clearTimeout(credentialTimer);
+        audioRecovery.cancel();
+        recoveryUnlisten.forEach((unlisten) => unlisten());
+        cancelMeetingRecordingDisclosure(sessionId);
+        await stopMeetingChatTasks();
+        await transcriptPersistence.flush();
+        transcriptPersistence.dispose();
+        updateBatchTranscriptionPending(false);
+        await clearCaptureLifecycleMarker(sessionId, transcriptId);
+        await releaseCloudsyncLease();
+      };
+      const captureExcluded = () =>
+        Boolean(
+          auth?.session?.user.id &&
+          isRecordingSessionExcluded(auth.session.user.id, sessionId),
+        );
       const onStopped: OnStoppedCallback = async (_sessionId, details) => {
+        if (captureExcluded()) return finishExcludedCapture();
         usesChunkedAudio = details.chunkedAudio === true;
         if (usesChunkedAudio) {
           await transcriptPersistence.flush();
@@ -1402,6 +1427,7 @@ export function useCaptureLifecycle(sessionId: string) {
         }
       };
       const recoverStopped: OnStoppedCallback = async (_sessionId, details) => {
+        if (captureExcluded()) return finishExcludedCapture();
         if (inheritedOnly) {
           audioRecovery.batchOnly(true);
           const recovery = await stopAudioRecovery();
@@ -1516,6 +1542,7 @@ export function useCaptureLifecycle(sessionId: string) {
       };
     },
     [
+      auth?.session?.user.id,
       audioRetention,
       conn?.model,
       conn?.provider,
@@ -1532,6 +1559,8 @@ export function useCaptureLifecycle(sessionId: string) {
   );
 
   return {
+    authenticatedUserId: auth?.session?.user.id ?? null,
+    authenticationReady: auth.session !== undefined,
     conn,
     connectionReady,
     createCaptureLifecycle,

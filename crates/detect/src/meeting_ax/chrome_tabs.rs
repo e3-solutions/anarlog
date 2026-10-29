@@ -4,23 +4,9 @@ const HEADER: &str = "E3_MEET_TABS_V1";
 const END: &str = "E3_MEET_TABS_END";
 
 pub(super) fn canonical_meet_url(value: &str) -> Option<String> {
-    let mut url = url::Url::parse(value).ok()?;
-    if url.scheme() != "https"
-        || url.host_str() != Some("meet.google.com")
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.port().is_some()
-    {
-        return None;
-    }
-    let code = super::platform::google_meet_code_from_title(&format!(
-        "Meet - {}",
-        url.path().trim_matches('/')
-    ))?;
-    url.set_path(&format!("/{code}"));
-    url.set_query(None);
-    url.set_fragment(None);
-    Some(url.to_string())
+    super::platform::google_meet_url(value)
+        .or_else(|| super::platform::teams_meeting_url(value))
+        .map(|url| url.to_string())
 }
 
 pub(super) fn parse_inventory(output: &str) -> Option<Vec<String>> {
@@ -40,10 +26,14 @@ pub(super) fn parse_inventory(output: &str) -> Option<Vec<String>> {
         if id.is_empty()
             || !id.bytes().all(|byte| byte.is_ascii_digit())
             || id.parse::<u64>().ok()? == 0
-            || !value.starts_with("https://meet.google.com/")
             || value.contains('\t')
             || identities.len() >= 4096
             || !seen_ids.insert(id)
+        {
+            return None;
+        }
+        if super::platform::google_meet_origin(value).is_none()
+            && super::platform::teams_meeting_url(value).is_none()
         {
             return None;
         }
@@ -75,8 +65,11 @@ set resultText to "E3_MEET_TABS_V1" & linefeed
 with timeout of 1 seconds
     tell application id "com.google.Chrome"
         repeat with browserWindow in every window
-            repeat with meetingTab in (every tab of browserWindow whose URL starts with "https://meet.google.com/")
+            repeat with meetingTab in every tab of browserWindow
+                set tabURL to URL of meetingTab
+                if tabURL starts with "https://meet.google.com/" or tabURL starts with "https://teams.microsoft.com/" or tabURL starts with "https://teams.live.com/" or tabURL starts with "https://teams.cloud.microsoft/" then
                 set resultText to resultText & (id of meetingTab as text) & (character id 9) & (URL of meetingTab as text) & linefeed
+                end if
             end repeat
         end repeat
     end tell
@@ -247,6 +240,9 @@ mod tests {
             "https://user@meet.google.com/abc-defg-hij",
             "https://meet.google.com/",
             "https://meet.google.com/abc-defg-hij/extra",
+            "https://meet.google.com/meet/abc-defg-hij/extra",
+            "https://meet.google.com/lookup/abc-defg-hij",
+            "https://meet.google.com/meet/abc-defg-hij%20extra",
         ] {
             assert_eq!(canonical_meet_url(value), None);
         }

@@ -44,8 +44,8 @@ describe("normalizeThemePreference", () => {
     ["light", "light"],
     ["dark", "dark"],
     ["system", "system"],
-    [null, "system"],
-    ["invalid", "system"],
+    [null, "light"],
+    ["invalid", "light"],
   ])("normalizes %s to %s", (preference, expected) => {
     expect(normalizeThemePreference(preference)).toBe(expected);
   });
@@ -65,9 +65,9 @@ describe("resolveBootIsDark", () => {
     ["dark", false, true],
     ["system", true, true],
     ["system", false, false],
-    [null, true, true],
+    [null, true, false],
     [null, false, false],
-    ["legacy-value", true, true],
+    ["legacy-value", true, false],
     ["legacy-value", false, false],
   ])(
     "resolves stored theme %s with system appearance %s to %s",

@@ -92,6 +92,30 @@ pub fn list_mic_using_apps() -> Result<Vec<InstalledApp>, crate::Error> {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct MeetingAudioProcess {
+    pub pid: i32,
+    pub app: InstalledApp,
+    pub input_active: bool,
+}
+
+pub fn list_meeting_audio_processes() -> Result<Vec<MeetingAudioProcess>, crate::Error> {
+    #[cfg(target_os = "macos")]
+    {
+        Ok(macos::list_meeting_audio_processes()?
+            .into_iter()
+            .filter(|process| !is_self_app(&process.app))
+            .collect())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err(crate::Error::AudioProcessQuery(
+            "meeting audio process snapshots are unsupported on this platform".to_string(),
+        ))
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
 pub struct InstalledApp {
     pub id: String,
     pub name: String,

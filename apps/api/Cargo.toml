@@ -16,6 +16,7 @@ anlg-api-messenger = { workspace = true }
 anlg-api-nango = { workspace = true }
 anlg-api-notion = { workspace = true }
 anlg-api-pyannote = { workspace = true }
+anlg-api-recordings = { workspace = true }
 anlg-api-research = { workspace = true }
 anlg-api-subscription = { workspace = true }
 anlg-api-sync = { workspace = true }
@@ -58,5 +59,6 @@ tower = { workspace = true }
 utoipa = { workspace = true }
 
 [dev-dependencies]
+tempfile = { workspace = true }
 tokio-tungstenite = { workspace = true }
 wiremock = { workspace = true }

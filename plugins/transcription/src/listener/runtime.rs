@@ -42,15 +42,57 @@ impl anlg_storage::StorageRuntime for TauriRuntime {
 }
 
 impl ListenerRuntime for TauriRuntime {
+    fn capture_source_ended(&self, session_id: &str) {
+        crate::recording_diagnostics::lifecycle(
+            &self.app,
+            session_id,
+            "capture_source_ended",
+            "native_capture_ended",
+        );
+    }
+    fn capture_allowed(&self, session_id: &str) -> bool {
+        crate::shared_recording::capture_allowed(&self.app, session_id)
+    }
+    fn observe_raw_audio_frames(&self, session_id: &str, frames: u64, captured: bool) {
+        crate::shared_recording::observe_raw(&self.app, session_id, frames, captured);
+    }
     fn emit_lifecycle(&self, event: anlg_transcription_core::listener::SessionLifecycleEvent) {
+        use anlg_transcription_core::listener::SessionLifecycleEvent;
+        match &event {
+            SessionLifecycleEvent::Active { session_id, .. } => {
+                crate::recording_diagnostics::lifecycle(
+                    &self.app,
+                    session_id,
+                    "capture_started",
+                    "native_lifecycle",
+                )
+            }
+            SessionLifecycleEvent::Finalizing { .. } => {}
+            SessionLifecycleEvent::Inactive {
+                session_id, error, ..
+            } => crate::recording_diagnostics::stopped(&self.app, session_id, error.is_some()),
+        }
         use tauri_plugin_tray::TrayPluginExt;
         match &event {
-            anlg_transcription_core::listener::SessionLifecycleEvent::Active { error, .. } => {
+            anlg_transcription_core::listener::SessionLifecycleEvent::Active {
+                session_id,
+                error,
+                ..
+            } => {
+                crate::shared_recording::meeting_control::publish_runtime(
+                    &self.app, session_id, true,
+                );
                 let _ = self.app.tray().set_start_disabled(true);
                 let _ = self.app.tray().set_degraded(error.is_some());
                 let _ = self.app.tray().set_recording(true);
             }
-            anlg_transcription_core::listener::SessionLifecycleEvent::Inactive { .. } => {
+            anlg_transcription_core::listener::SessionLifecycleEvent::Inactive {
+                session_id,
+                ..
+            } => {
+                crate::shared_recording::meeting_control::publish_runtime(
+                    &self.app, session_id, false,
+                );
                 let app = self.app.clone();
                 tauri::async_runtime::spawn(async move {
                     match current_root_state().await {
@@ -126,6 +168,13 @@ impl ListenerRuntime for TauriRuntime {
                     })
                     .unwrap_or((None, None));
                 let stopped_at_ms = crate::capture_gaps::unix_now_ms();
+                crate::shared_recording::snapshot_stopped(
+                    &self.app,
+                    &session_id,
+                    audio_path.as_deref(),
+                    started_at_ms,
+                    stopped_at_ms,
+                );
                 self.capture_gap_registry
                     .stopped(&session_id, stopped_at_ms);
                 let duration_seconds = started_at_ms
@@ -197,6 +246,23 @@ impl ListenerRuntime for TauriRuntime {
     }
 
     fn emit_error(&self, event: anlg_transcription_core::listener::SessionErrorEvent) {
+        use anlg_transcription_core::listener::SessionErrorEvent;
+        let (session_id, reason) = match &event {
+            SessionErrorEvent::AudioError {
+                session_id, error, ..
+            } => (
+                session_id,
+                if error.starts_with("audio_storage_") {
+                    "saving_failed"
+                } else {
+                    "audio_capture_error"
+                },
+            ),
+            SessionErrorEvent::ConnectionError { session_id, .. } => {
+                (session_id, "transcription_error")
+            }
+        };
+        crate::recording_diagnostics::lifecycle(&self.app, session_id, "capture_error", reason);
         match &event {
             anlg_transcription_core::listener::SessionErrorEvent::ConnectionError {
                 session_id,
@@ -208,9 +274,11 @@ impl ListenerRuntime for TauriRuntime {
                 session_id,
                 error,
                 ..
-            } if error.starts_with("audio_storage_") => self
-                .capture_gap_registry
-                .storage_failed(session_id, crate::capture_gaps::unix_now_ms()),
+            } if error.starts_with("audio_storage_") => {
+                self.capture_gap_registry
+                    .storage_failed(session_id, crate::capture_gaps::unix_now_ms());
+                crate::shared_recording::storage_failed(&self.app, session_id);
+            }
             _ => {}
         }
         update_audio_cleanup_status(&self.audio_cleanup_status, &event);

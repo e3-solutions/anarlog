@@ -25,6 +25,7 @@ fn resolve_app_folder<'a>(data_dir: &Path, bundle_id: &'a str, is_debug: bool) -
             bundle_id,
             STAGING_BUNDLE_ID | NIGHTLY_BUNDLE_ID | E3_PILOT_BUNDLE_ID
         )
+        || bundle_id.starts_with("ai.e3group.meeting-capture-shared-preview")
     {
         bundle_id
     } else if has_app_data(&data_dir.join(LEGACY_RELEASE_APP_FOLDER))
@@ -120,6 +121,12 @@ mod tests {
                 resolve_app_folder(temp.path(), E3_PILOT_BUNDLE_ID, false),
                 E3_PILOT_BUNDLE_ID
             );
+            for preview in [
+                "ai.e3group.meeting-capture-shared-preview",
+                "ai.e3group.meeting-capture-shared-preview-second",
+            ] {
+                assert_eq!(resolve_app_folder(temp.path(), preview, false), preview);
+            }
         }
     }
 

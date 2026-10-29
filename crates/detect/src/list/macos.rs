@@ -6,7 +6,7 @@ use objc2_app_kit::NSRunningApplication;
 use objc2_foundation::NSString;
 use sysinfo::{Pid, System};
 
-use super::InstalledApp;
+use super::{InstalledApp, MeetingAudioProcess};
 
 const APPLE_CALL_DAEMON_IDS: &[&str] = &[
     "/usr/libexec/avconferenced",
@@ -103,6 +103,35 @@ pub fn list_mic_using_apps() -> Result<Vec<InstalledApp>, crate::Error> {
     let mut apps = build_mic_using_apps(snapshots, resolve_to_app, fallback_app_for_pid)?;
     label_apple_call_daemon(&mut apps, detected_apple_call_app_name());
     Ok(apps)
+}
+
+pub fn list_meeting_audio_processes() -> Result<Vec<MeetingAudioProcess>, crate::Error> {
+    let processes =
+        ca::System::processes().map_err(|e| crate::Error::AudioProcessQuery(format!("{e:?}")))?;
+    let mut snapshots = Vec::new();
+    let call_app_name = detected_apple_call_app_name();
+
+    for process in processes {
+        let input_active = process
+            .is_running_input()
+            .map_err(|e| crate::Error::AudioProcessState(format!("input: {e:?}")))?;
+        if !input_active {
+            continue;
+        }
+        let pid = process.pid().map_err(|e| {
+            crate::Error::AudioProcessState(format!("active process missing pid: {e:?}"))
+        })?;
+
+        let mut app = resolve_to_app(pid).unwrap_or_else(|| fallback_app_for_pid(pid));
+        label_apple_call_daemon(std::slice::from_mut(&mut app), call_app_name);
+        snapshots.push(MeetingAudioProcess {
+            pid,
+            app,
+            input_active,
+        });
+    }
+
+    Ok(snapshots)
 }
 
 fn detected_apple_call_app_name() -> Option<&'static str> {

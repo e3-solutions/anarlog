@@ -18,6 +18,7 @@ import { ReconnectRequiredIndicator } from "./status";
 import { useAuth } from "~/auth";
 import { useBillingAccess } from "~/auth/billing-context";
 import { useConnections } from "~/auth/useConnections";
+import { useE3CalendarAccess } from "~/calendar/access";
 import type { CalendarProvider } from "~/calendar/components/shared";
 import { PlanGate } from "~/settings/plan-gate";
 import { useOpenIntegrationUrl } from "~/shared/integration";
@@ -33,7 +34,18 @@ export function OAuthProviderContent({
 }) {
   const auth = useAuth();
   const { isPro } = useBillingAccess();
-  const { data: connections, isError } = useConnections(isPro);
+  const e3Calendar = useE3CalendarAccess() && config.id === "google";
+  const { data: connections, isError } = useConnections(isPro || e3Calendar);
+  const meetConnection =
+    config.id === "google"
+      ? connections?.find(
+          (connection) => connection.integration_id === "google-meet",
+        )
+      : undefined;
+  const integrationId = e3Calendar ? "google-meet" : config.nangoIntegrationId;
+  const combinedConnectionIds = (connections ?? [])
+    .filter((connection) => connection.integration_id === "google-meet")
+    .map((connection) => connection.connection_id);
   const { openIntegration, openingAction } = useOpenIntegrationUrl();
   const providerConnections = useMemo(
     () =>
@@ -46,11 +58,19 @@ export function OAuthProviderContent({
   const handleAddAccount = useCallback(() => {
     onConnectStarted?.();
     openIntegration({
-      nangoIntegrationId: config.nangoIntegrationId,
-      action: "connect",
+      nangoIntegrationId: integrationId,
+      connectionId: e3Calendar ? meetConnection?.connection_id : undefined,
+      action: e3Calendar && meetConnection ? "reconnect" : "connect",
       returnTo,
     });
-  }, [config.nangoIntegrationId, onConnectStarted, openIntegration, returnTo]);
+  }, [
+    e3Calendar,
+    meetConnection,
+    integrationId,
+    onConnectStarted,
+    openIntegration,
+    returnTo,
+  ]);
 
   if (!auth.session) {
     return (
@@ -72,7 +92,7 @@ export function OAuthProviderContent({
     );
   }
 
-  if (!isPro) {
+  if (!isPro && !e3Calendar) {
     return (
       <div className="pt-1 pb-2">
         <PlanGate plan="pro" allowed={false}>
@@ -123,6 +143,9 @@ export function OAuthProviderContent({
         <ConnectedContent
           config={config}
           connections={providerConnections}
+          combinedConnectionIds={
+            config.id === "google" ? combinedConnectionIds : []
+          }
           returnTo={returnTo}
           onConnectStarted={onConnectStarted}
         />
@@ -210,11 +233,13 @@ function ReconnectRequiredContent({
 function ConnectedContent({
   config,
   connections,
+  combinedConnectionIds,
   returnTo,
   onConnectStarted,
 }: {
   config: CalendarProvider;
   connections: ConnectionItem[];
+  combinedConnectionIds: string[];
   returnTo: string;
   onConnectStarted?: () => void;
 }) {
@@ -237,6 +262,9 @@ function ConnectedContent({
         );
 
         if (!connection) return group;
+        const combined = combinedConnectionIds.includes(
+          connection.connection_id,
+        );
 
         return {
           ...group,
@@ -247,29 +275,36 @@ function ConnectedContent({
               action: () => {
                 onConnectStarted?.();
                 void openIntegration({
-                  nangoIntegrationId: config.nangoIntegrationId,
+                  nangoIntegrationId: combined
+                    ? "google-meet"
+                    : config.nangoIntegrationId,
                   connectionId: connection.connection_id,
                   action: "reconnect",
                   returnTo,
                 });
               },
             },
-            {
-              id: `disconnect-${connection.connection_id}`,
-              text: t`Disconnect`,
-              action: () =>
-                void openIntegration({
-                  nangoIntegrationId: config.nangoIntegrationId,
-                  connectionId: connection.connection_id,
-                  action: "disconnect",
-                  returnTo,
-                }),
-            },
+            ...(combined
+              ? []
+              : [
+                  {
+                    id: `disconnect-${connection.connection_id}`,
+                    text: t`Disconnect`,
+                    action: () =>
+                      void openIntegration({
+                        nangoIntegrationId: config.nangoIntegrationId,
+                        connectionId: connection.connection_id,
+                        action: "disconnect",
+                        returnTo,
+                      }),
+                  },
+                ]),
           ],
         };
       }),
     [
       config.nangoIntegrationId,
+      combinedConnectionIds,
       connectionSourceMap,
       connections,
       groups,
@@ -280,11 +315,16 @@ function ConnectedContent({
   );
 
   return (
-    <OAuthCalendarSelection
-      groups={groupsWithMenus}
-      onToggle={handleToggle}
-      onRefresh={handleRefresh}
-      isLoading={isLoading}
-    />
+    <div className="flex flex-col gap-2">
+      {combinedConnectionIds.length > 0 && (
+        <p className="text-muted-foreground text-xs">Connected with Google</p>
+      )}
+      <OAuthCalendarSelection
+        groups={groupsWithMenus}
+        onToggle={handleToggle}
+        onRefresh={handleRefresh}
+        isLoading={isLoading}
+      />
+    </div>
   );
 }

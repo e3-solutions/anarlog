@@ -25,6 +25,22 @@ import {
 
 import { enqueueSessionAudioOperation } from "~/session/audio-operations";
 
+vi.mock("./meeting-recording-control", () => ({
+  replayNativeRecordingExclusions: vi.fn(async () => []),
+  prepareMeetingRecording: vi.fn(async () => ({})),
+}));
+
+vi.mock("./recording-exclusions", () => ({
+  resolveRecordingOccurrence: vi.fn(async () => ({
+    key: "session:session-1",
+    room: null,
+    kind: "session",
+  })),
+  isRecordingExcluded: vi.fn(() => false),
+  isRecordingSessionExcluded: vi.fn(() => false),
+  bindRecordingSession: vi.fn(),
+}));
+
 vi.mock("./capture-completion", () => ({
   completeCaptureTranscript: vi.fn().mockResolvedValue(undefined),
   loadCaptureStop: vi.fn().mockResolvedValue(null),
@@ -173,7 +189,10 @@ vi.mock("@anlg/plugin-db", () => ({
 }));
 
 vi.mock("~/auth", () => ({
-  useAuth: () => ({ getSessionForRequest: vi.fn(async () => null) }),
+  useAuth: () => ({
+    session: { user: { id: "auth-user-1" } },
+    getSessionForRequest: vi.fn(async () => null),
+  }),
 }));
 vi.mock("@anlg/plugin-transcription", () => ({
   commands: {
@@ -221,6 +240,10 @@ vi.mock("@anlg/plugin-permissions", () => ({
 
 vi.mock("@anlg/plugin-detect", () => ({
   commands: {
+    inspectMeetingAccessibility: vi.fn(async () => ({
+      status: "ok",
+      data: [],
+    })),
     listMicUsingApplications: listMicUsingApplicationsMock,
     sendMeetingChatMessage: sendMeetingChatMessageMock,
   },
@@ -726,6 +749,7 @@ describe("useStartListening", () => {
     });
     expect(startMock.mock.calls[0]?.[0]).toMatchObject({ retain_audio: false });
     expect(startMock.mock.calls[0]?.[0]).toMatchObject({
+      authenticated_user_id: "auth-user-1",
       live_transcript: expect.objectContaining({
         transcript_id: "generated-id",
         owner_user_id: "user-1",

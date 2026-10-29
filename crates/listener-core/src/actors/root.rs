@@ -291,6 +291,9 @@ async fn start_session_impl(
     let span = session_span(&session_id);
 
     async {
+        if !state.runtime.capture_allowed(&session_id) {
+            return Err(StartSessionError::FailedToStartSession);
+        }
         clear_stopped_supervisors(state);
 
         if state.active_supervisor.is_some() {

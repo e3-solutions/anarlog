@@ -86,3 +86,24 @@ adoption requires independent verification that the exact image handles SIGUSR1;
 health alone does not establish that capability. Secrets are filtered by the
 selected runtime before staging. Core's checked-in profile enables cleanup so
 routine deployments preserve worker ownership.
+
+## Shared recordings
+
+`ANARLOG_SHARED_RECORDINGS_ENABLED=true` opts the existing `core` or `all`
+runtime into organization recording ingestion. It uses the existing `SUPABASE_URL`
+and server-only `SUPABASE_SERVICE_ROLE_KEY`: meeting identity, capture metadata,
+and source transcripts live in Postgres; original WAV files live in a private
+Supabase Storage bucket. Apply the shared-recording Supabase migration before
+enabling ingestion. Core forwarding and local ingestion cannot be enabled together.
+
+The routes reuse API session authentication and Nango configuration, then check
+current organization membership on each request. Optional
+`ANARLOG_SHARED_RECORDINGS_TRANSCRIPTION_URL` and
+`ANARLOG_SHARED_RECORDINGS_TRANSCRIPTION_MODEL` configure an OpenAI-compatible
+JSON endpoint; `ANARLOG_SHARED_RECORDINGS_TRANSCRIPTION_KEY` is optional. Without
+an endpoint, source transcripts remain pending. Each immutable uploaded audio source
+has its own cached transcript, capture identity, and verified meeting identity.
+There is no audio stitching or transcript consolidation. The optional recording
+container's durable volume caches local ASR models and runtime files; it does not
+store ingested audio or transcript data. Keep earlier preview volume data until
+its original recordings have been migrated and verified separately.

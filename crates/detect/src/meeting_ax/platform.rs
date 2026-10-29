@@ -385,7 +385,10 @@ pub(super) fn browser_platform_from_url(url: Option<&str>) -> Option<MeetingPlat
 
     if host == "meet.google.com" {
         Some(MeetingPlatform::GoogleMeet)
-    } else if matches!(host.as_str(), "teams.microsoft.com" | "teams.live.com") {
+    } else if matches!(
+        host.as_str(),
+        "teams.microsoft.com" | "teams.live.com" | "teams.cloud.microsoft"
+    ) {
         Some(MeetingPlatform::MicrosoftTeams)
     } else if host == "zoom.us" || host.ends_with(".zoom.us") {
         Some(MeetingPlatform::Zoom)
@@ -427,6 +430,54 @@ pub(super) fn browser_title_platform_signals(text: &str) -> Vec<MeetingPlatform>
     }
 
     platforms
+}
+
+pub(super) fn google_meet_origin(value: &str) -> Option<url::Url> {
+    let url = url::Url::parse(value).ok()?;
+    if url.scheme() != "https"
+        || url.host_str() != Some("meet.google.com")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
+    {
+        return None;
+    }
+    Some(url)
+}
+
+pub(super) fn google_meet_url(value: &str) -> Option<url::Url> {
+    let mut url = google_meet_origin(value)?;
+    let segments = url.path_segments()?.collect::<Vec<_>>();
+    let code = match segments.as_slice() {
+        [code] | ["meet", code] | [code, ""] | ["meet", code, ""] => *code,
+        _ => return None,
+    };
+    if code.len() != 12
+        || !code.bytes().enumerate().all(|(index, byte)| match index {
+            3 | 8 => byte == b'-',
+            _ => byte.is_ascii_lowercase(),
+        })
+    {
+        return None;
+    }
+    let path = format!("/{code}");
+    url.set_path(&path);
+    url.set_query(None);
+    url.set_fragment(None);
+    Some(url)
+}
+
+pub(super) fn teams_meeting_url(value: &str) -> Option<url::Url> {
+    let url = url::Url::parse(value).ok()?;
+    (url.scheme() == "https"
+        && matches!(
+            url.host_str(),
+            Some("teams.microsoft.com" | "teams.live.com" | "teams.cloud.microsoft")
+        )
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.port().is_none())
+    .then_some(url)
 }
 
 pub(super) fn google_meet_code_from_title(title: &str) -> Option<String> {

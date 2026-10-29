@@ -3,6 +3,7 @@ import {
   desktopSchemeSchema,
   desktopAuthStateSchema,
   type DesktopScheme,
+  isE3ScribeFlow,
 } from "../functions/desktop-flow.ts";
 import { sanitizeInternalReturnPath } from "./auth-redirect.ts";
 
@@ -16,8 +17,14 @@ export type AuthFlowContext = {
 export function shouldReuseBrowserSession(search: {
   provider?: string;
   view?: string;
+  flow?: string;
+  scheme?: string;
 }) {
-  return search.provider === undefined && search.view === undefined;
+  return (
+    !isE3ScribeFlow(search) &&
+    search.provider === undefined &&
+    search.view === undefined
+  );
 }
 
 export function resolveAuthFlowContext({

@@ -230,15 +230,15 @@ fn unique_scope_for_search(count: usize, complete: bool) -> UniqueMatch {
 
 #[cfg(any(test, target_os = "macos"))]
 fn browser_call_identity(root: &BrowserMeetingRoot) -> Option<String> {
-    if root.platform != MeetingPlatform::GoogleMeet {
-        return None;
-    }
-    let mut url = url::Url::parse(&context::browser_meeting_identity(root)?).ok()?;
-    let code = url.path().trim_matches('/');
-    let code = platform::google_meet_code_from_title(&format!("Meet - {code}"))?;
-    url.set_path(&format!("/{code}"));
-    url.set_query(None);
-    url.set_fragment(None);
+    let url = match root.platform {
+        MeetingPlatform::GoogleMeet => {
+            platform::google_meet_url(&context::browser_meeting_identity(root)?)?
+        }
+        MeetingPlatform::MicrosoftTeams => {
+            platform::teams_meeting_url(root.web_area_url.as_deref()?)?
+        }
+        _ => return None,
+    };
     let window_hash = root
         .nodes
         .iter()
@@ -248,7 +248,7 @@ fn browser_call_identity(root: &BrowserMeetingRoot) -> Option<String> {
 }
 
 #[cfg(any(test, target_os = "macos"))]
-fn is_meet_departure_node(node: &AxNode) -> bool {
+fn is_browser_departure_node(node: &AxNode) -> bool {
     node_has_positive_bounds(node)
         && match node.role.as_deref() {
             Some("AXHeading") => node_labels(node).any(|label| {
@@ -268,6 +268,28 @@ fn is_meet_departure_node(node: &AxNode) -> bool {
 }
 
 #[cfg(any(test, target_os = "macos"))]
+fn browser_root_is_active(root: &BrowserMeetingRoot) -> bool {
+    if root.platform == MeetingPlatform::MicrosoftTeams {
+        return root
+            .nodes
+            .iter()
+            .any(|node| is_platform_active_call_control(&root.platform, node))
+            || (teams_has_active_call_evidence(&root.nodes)
+                && root.nodes.iter().any(|node| {
+                    node_labels(node).any(|label| {
+                        matches!(
+                            label.trim().to_ascii_lowercase().as_str(),
+                            "meeting controls" | "calling controls"
+                        )
+                    })
+                }));
+    }
+    root.nodes
+        .iter()
+        .any(|node| is_browser_active_call_control(&root.platform, node))
+}
+
+#[cfg(any(test, target_os = "macos"))]
 fn browser_inspections_from_roots(
     app: MeetingApp,
     pid: i32,
@@ -278,44 +300,54 @@ fn browser_inspections_from_roots(
 ) -> Vec<MeetingAccessibilityInspection> {
     let active_roots = roots
         .iter()
-        .filter(|root| {
-            root.nodes
-                .iter()
-                .any(|node| is_browser_active_call_control(&root.platform, node))
-        })
-        .count();
+        .filter(|root| browser_root_is_active(root))
+        .collect::<Vec<_>>();
+    let first_identity = active_roots
+        .first()
+        .and_then(|root| browser_call_identity(root));
+    let same_meet = first_identity
+        .as_ref()
+        .and_then(|identity| identity.split_once(":window:"))
+        .map(|(url, _)| url);
+    let competing = active_roots.len() > 1
+        && !same_meet.is_some_and(|url| {
+            active_roots.iter().all(|root| {
+                browser_call_identity(root).is_some_and(|identity| {
+                    identity
+                        .split_once(":window:")
+                        .is_some_and(|(other, _)| other == url)
+                })
+            })
+        });
     let uncertain = has_unscoped_meeting_window
         || warnings.iter().any(|warning| {
             let warning = warning.to_ascii_lowercase();
             warning.contains("ambiguous") || warning.contains("incomplete")
         });
-    if uncertain || active_roots > 1 {
+    if uncertain || competing {
         warnings.push("browser meeting window scope was ambiguous or incomplete".to_string());
     }
-    let trustworthy = accessibility_trusted && !uncertain && active_roots <= 1;
+    let trustworthy = accessibility_trusted && !uncertain && !competing;
     let mut rows: Vec<_> = roots
         .into_iter()
         .map(|root| {
-            let joined = root
-                .nodes
-                .iter()
-                .any(|node| is_browser_active_call_control(&root.platform, node));
-            let departed = root.platform == MeetingPlatform::GoogleMeet
-                && root.nodes.iter().any(is_meet_departure_node);
+            let joined = browser_root_is_active(&root);
+            let lifecycle_platform = matches!(
+                root.platform,
+                MeetingPlatform::GoogleMeet | MeetingPlatform::MicrosoftTeams
+            );
+            let departed = lifecycle_platform && root.nodes.iter().any(is_browser_departure_node);
             let call_identity = (joined || departed)
                 .then(|| browser_call_identity(&root))
                 .flatten();
             let mut row_warnings = warnings.clone();
-            if root.platform == MeetingPlatform::GoogleMeet
-                && ((!joined && !departed) || call_identity.is_none())
-            {
+            if lifecycle_platform && ((!joined && !departed) || call_identity.is_none()) {
                 row_warnings.push(
                     "browser meeting identity or departure evidence was incomplete".to_string(),
                 );
             }
-            let active_call = trustworthy
-                && joined
-                && (root.platform != MeetingPlatform::GoogleMeet || call_identity.is_some());
+            let active_call =
+                trustworthy && joined && (!lifecycle_platform || call_identity.is_some());
             MeetingAccessibilityInspection {
                 active_call,
                 app: app.clone(),
@@ -2519,9 +2551,6 @@ fn slack_huddle_context(nodes: &[AxNode]) -> Option<(String, String)> {
 
 #[cfg(any(test, target_os = "macos"))]
 fn slack_huddle_recording_label(nodes: &[AxNode]) -> Option<String> {
-    if let Some((label, _)) = slack_huddle_context(nodes) {
-        return Some(label);
-    }
     // Recording needs live-call evidence, not the channel identity required
     // for safely addressing a chat composer. The caller scopes one Slack window.
     if nodes
@@ -2548,7 +2577,11 @@ fn slack_huddle_recording_label(nodes: &[AxNode]) -> Option<String> {
     (has_toolbar
         && live_button("leave huddle")
         && (live_button("mute microphone") || live_button("unmute microphone")))
-    .then(|| "Slack huddle".to_string())
+    .then(|| {
+        slack_huddle_context(nodes)
+            .map(|(label, _)| label)
+            .unwrap_or_else(|| "Slack huddle".to_string())
+    })
 }
 
 #[cfg(any(test, target_os = "macos", target_os = "linux", target_os = "windows"))]

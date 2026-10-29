@@ -7,6 +7,7 @@ type RegistryParams = Parameters<typeof createToastRegistry>[0];
 const baseParams: RegistryParams = {
   isAuthenticated: true,
   isAuthLoading: false,
+  isManagedRecordingApp: false,
   hasLLMConfigured: true,
   hasSttConfigured: true,
   hasProSttConfigured: false,
@@ -64,6 +65,16 @@ describe("sidebar toast registry", () => {
       expect(toast?.lifecycle).toEqual({ type: "condition-bound" });
     },
   );
+
+  it("does not ask managed recording users to configure local transcription", () => {
+    expect(
+      showToast({
+        isManagedRecordingApp: true,
+        hasSttConfigured: false,
+      }),
+    ).toBeNull();
+    expect(showToast({ hasSttConfigured: false })?.id).toBe("missing-stt");
+  });
 
   it("suggests signing in before provider setup", () => {
     const onSignIn = vi.fn();

@@ -1,0 +1,29 @@
+[package]
+name = "api-recordings"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anlg-api-auth = { workspace = true }
+anlg-api-nango = { workspace = true }
+anlg-http = { workspace = true }
+anyhow = { workspace = true }
+axum = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true }
+hound = { workspace = true }
+reqwest = { workspace = true, features = ["json", "multipart", "query", "stream"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time"] }
+tower-http = { workspace = true, features = ["limit"] }
+tracing = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+jsonwebtoken = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tower = { workspace = true, features = ["util"] }
+wiremock = { workspace = true }

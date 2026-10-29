@@ -29,7 +29,10 @@ pub(crate) async fn install_and_relaunch<R: tauri::Runtime>(
     app.updater2()
         .install_and_relaunch(&version)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|error| {
+            tracing::error!(?error, %version, "manual_update_install_failed");
+            error.to_string()
+        })
 }
 
 #[tauri::command]

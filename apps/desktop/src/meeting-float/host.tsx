@@ -40,6 +40,7 @@ import {
   showFloatingMeetingWindow,
 } from "./window-panel";
 
+import { recordRecordingDiagnostic } from "~/application-health/recording-diagnostics";
 import { getDictationPanelState } from "~/dictation/panel";
 import { useDictationStatus } from "~/dictation/state";
 import {
@@ -264,6 +265,11 @@ function FloatingMeetingWindowSync({
           listenerStore.getState().live.status !== "active"
         )
           return;
+        recordRecordingDiagnostic(
+          listenerStore.getState().live.sessionId,
+          "stop_requested",
+          "manual_stop",
+        );
         windowSynchronizer.update(null);
         listenerStore.getState().stop();
       })

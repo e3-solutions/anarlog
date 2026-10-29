@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { notarizationEnvironment } from "../../../scripts/notarize-dmg.mjs";
+
 const desktopDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const buildArgs = process.argv.slice(2);
 if (
@@ -22,6 +24,10 @@ const required = (name) => {
 const endpoint = required("E3_UPDATER_ENDPOINT");
 const publicKey = required("E3_UPDATER_PUBLIC_KEY");
 const identifier = required("E3_APP_IDENTIFIER");
+const version = required("E3_APP_VERSION");
+if (!/^\d+\.\d+\.\d+$/.test(version)) {
+  throw new Error("E3_APP_VERSION must be a semantic version");
+}
 required("TAURI_SIGNING_PRIVATE_KEY");
 
 const url = new URL(endpoint);
@@ -57,8 +63,26 @@ if (identifier.startsWith("com.hyprnote.")) {
 const tempDir = await mkdtemp(path.join(os.tmpdir(), "anarlog-e3-build-"));
 const configPath = path.join(tempDir, "e3-updater.json");
 const config = {
+  productName: "E3 Scribe",
+  mainBinaryName: "e3-scribe",
   identifier,
+  version,
+  bundle: {
+    createUpdaterArtifacts: true,
+    externalBin: [
+      "binaries/char-chrome-native-host",
+      "binaries/check-permissions",
+      "resources/cli/anarlog-cli",
+    ],
+    macOS: {
+      signingIdentity: required("APPLE_SIGNING_IDENTITY"),
+      hardenedRuntime: true,
+    },
+  },
   plugins: {
+    "deep-link": {
+      desktop: { schemes: ["e3-shared-recordings-preview"] },
+    },
     updater: {
       active: true,
       endpoints: [endpoint],
@@ -79,7 +103,15 @@ try {
     args.push("--config", "src-tauri/tauri.conf.stable-macos.json");
   }
   args.push(...buildArgs, "--config", configPath);
-  const child = spawn("pnpm", args, { cwd: desktopDir, stdio: "inherit" });
+  const child = spawn("pnpm", args, {
+    cwd: desktopDir,
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      ...notarizationEnvironment(),
+      VITE_E3_SCRIBE: "true",
+    },
+  });
   const exitCode = await new Promise((resolve, reject) => {
     child.on("error", reject);
     child.on("close", resolve);

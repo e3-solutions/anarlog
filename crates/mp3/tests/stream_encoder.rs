@@ -31,11 +31,11 @@ fn mono_stream_encoder_f32_roundtrips_across_multiple_chunks() -> TestResult {
 }
 
 #[test]
-fn stereo_stream_encoder_f32_roundtrips_across_multiple_chunks() -> TestResult {
+fn stereo_stream_encoder_finish_preserves_the_final_partial_pcm_frame() -> TestResult {
     let case = Case {
         channels: 2,
         frames: 7_000,
-        sample_rate: 48_000,
+        sample_rate: 16_000,
     };
     let left = fixture_channel_f32(case.frames, 0);
     let right = fixture_channel_f32(case.frames, 1);
@@ -45,12 +45,13 @@ fn stereo_stream_encoder_f32_roundtrips_across_multiple_chunks() -> TestResult {
     encoder.encode_f32(&left[..2_048], &right[..2_048], &mut output)?;
     encoder.encode_f32(&left[2_048..5_120], &right[2_048..5_120], &mut output)?;
     encoder.encode_f32(&left[5_120..], &right[5_120..], &mut output)?;
-    encoder.flush(&mut output)?;
+    encoder.finish(&mut output)?;
 
     assert!(!output.is_empty(), "streaming encoder produced no mp3 data");
 
     let (decoded_spec, decoded_samples) = decode_mp3_bytes(&output)?;
     assert_decoded_matches_case(case, case.frames * 2, &decoded_spec, &decoded_samples);
+    assert!(decoded_samples.len() / usize::from(case.channels) >= case.frames);
     Ok(())
 }
 

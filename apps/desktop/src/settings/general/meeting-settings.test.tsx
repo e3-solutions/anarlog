@@ -9,6 +9,10 @@ vi.mock("@tauri-apps/plugin-os", () => ({
   platform: mocks.platform,
 }));
 
+vi.mock("~/shared-recordings", () => ({
+  SharedRecordingsAccount: () => null,
+}));
+
 vi.mock("./default-share-access", () => ({
   DefaultMeetingShareAccessSelector: () => (
     <span>Default sharing selector</span>

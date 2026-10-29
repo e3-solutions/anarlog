@@ -5,6 +5,7 @@ import { DefaultMeetingShareAccessSelector } from "./default-share-access";
 import { PrimaryRecordingDeviceSelector } from "./primary-recording-device";
 
 import { SettingSwitchRow } from "~/settings/setting-row";
+import { SharedRecordingsAccount } from "~/shared-recordings";
 
 interface SettingItem {
   value: boolean;
@@ -125,6 +126,10 @@ export function MeetingSettingsView({
         checked={floatingBar.value}
         onChange={floatingBar.onChange}
       />
+      <section className="space-y-4 border-t pt-5">
+        <h3 className="text-sm font-semibold">Team recordings</h3>
+        <SharedRecordingsAccount settings />
+      </section>
     </div>
   );
 }

@@ -1,4 +1,16 @@
 const COMMANDS: &[&str] = &[
+    "recording_diagnostics_configure",
+    "recording_diagnostics_record",
+    "recording_diagnostics_batch",
+    "recording_diagnostics_ack",
+    "shared_recording_configuration",
+    "meeting_recording_control_set",
+    "meeting_recording_exclusions",
+    "shared_recording_configure",
+    "shared_recording_observe",
+    "shared_recording_enqueue",
+    "shared_recording_queue",
+    "shared_recording_flush",
     "list_microphone_devices",
     "get_current_microphone_device",
     "get_mic_muted",
@@ -54,5 +66,29 @@ const COMMANDS: &[&str] = &[
 ];
 
 fn main() {
+    let sha = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|sha| sha.trim().to_string())
+        .filter(|sha| sha.len() == 40 && sha.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .unwrap_or_else(|| "unknown".into());
+    println!("cargo:rustc-env=ANLG_DIAGNOSTICS_BUILD_SHA={sha}");
+    if let Ok(output) = std::process::Command::new("git")
+        .args(["rev-parse", "--git-path", "HEAD"])
+        .output()
+        && let Ok(path) = String::from_utf8(output.stdout)
+    {
+        println!("cargo:rerun-if-changed={}", path.trim());
+    }
+    if let Ok(output) = std::process::Command::new("git")
+        .args(["rev-parse", "--git-path", "refs"])
+        .output()
+        && let Ok(path) = String::from_utf8(output.stdout)
+    {
+        println!("cargo:rerun-if-changed={}", path.trim());
+    }
     tauri_plugin::Builder::new(COMMANDS).build();
 }

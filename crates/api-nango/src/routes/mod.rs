@@ -3,6 +3,7 @@ pub(crate) mod disconnect;
 pub(crate) mod google_drive;
 pub(crate) mod google_drive_oauth;
 pub(crate) mod google_meet_presence;
+pub(crate) mod google_signin;
 pub(crate) mod identity;
 pub(crate) mod status;
 pub(crate) mod webhook;
@@ -18,6 +19,7 @@ use crate::state::AppState;
 
 pub use connect::{CreateSessionRequest, SessionMode, SessionResponse};
 pub use disconnect::{DeleteConnectionRequest, DeleteConnectionResponse};
+pub use google_meet_presence::{VerifiedMeetOccurrence, resolve_verified_active_conference};
 pub use status::{ConnectionItem, ListConnectionsResponse};
 pub use webhook::{ForwardHandler, ForwardHandlerRegistry, WebhookResponse, forward_handler};
 pub use whoami::{WhoAmIItem, WhoAmIResponse};
@@ -31,6 +33,7 @@ pub fn session_router(config: NangoConfig) -> Router {
 
     Router::new()
         .route("/session", post(connect::create_session))
+        .route("/google-signin", post(google_signin::connect))
         .route(
             "/google-drive/picker-start",
             post(google_drive_oauth::start),

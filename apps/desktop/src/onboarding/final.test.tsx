@@ -148,3 +148,12 @@ it("ignores concurrent finish attempts", async () => {
   expect(mocks.getOrCreateWelcomeSession).toHaveBeenCalledTimes(1);
   expect(onContinue).toHaveBeenCalledTimes(1);
 });
+
+it("opens a blank note instead of the demo for E3 onboarding", async () => {
+  const onContinue = vi.fn();
+  mocks.createSession.mockResolvedValueOnce("e3-session");
+
+  await finishOnboarding(onContinue, undefined, true);
+
+  expect(onContinue).toHaveBeenCalledWith("e3-session");
+});

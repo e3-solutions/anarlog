@@ -26,6 +26,7 @@ import { fetchLastSignInMethod } from "@/functions/auth-last-used";
 import { authSearchSchema } from "@/functions/auth-search";
 import {
   DEFAULT_DESKTOP_SCHEME,
+  isE3ScribeFlow,
   type DesktopScheme,
 } from "@/functions/desktop-flow";
 import { useMountEffect } from "@/hooks/useMountEffect";
@@ -150,14 +151,18 @@ function Component() {
     );
   }
 
-  const showApple = !provider || provider === "apple";
+  const e3Scribe = isE3ScribeFlow({ flow, scheme });
+  const showApple = !e3Scribe && (!provider || provider === "apple");
   const showGoogle = !provider || provider === "google";
-  const showMicrosoft = !provider || provider === "azure";
-  const showGithub = !provider || provider === "github";
-  const showEmail = !provider;
+  const showMicrosoft = !e3Scribe && (!provider || provider === "azure");
+  const showGithub = !e3Scribe && (!provider || provider === "github");
+  const showEmail = !e3Scribe && !provider;
 
   return (
-    <AuthShell title="Welcome to Anarlog" showEyebrow={false}>
+    <AuthShell
+      title={e3Scribe ? "Welcome to E3 Scribe" : "Welcome to Anarlog"}
+      showEyebrow={false}
+    >
       {view === "main" && (
         <>
           <div className="flex flex-col gap-3">

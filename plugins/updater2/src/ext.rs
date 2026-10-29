@@ -16,7 +16,10 @@ use crate::events::{
 static DOWNLOAD_MUTEX: LazyLock<tokio::sync::Mutex<()>> =
     LazyLock::new(|| tokio::sync::Mutex::new(()));
 
-static MEETING_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+// Wait for the frontend's first recording-state publication before restarting.
+static MEETING_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+static INSTALL_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 pub struct Updater2<'a, R: tauri::Runtime, M: tauri::Manager<R>> {
     manager: &'a M,
@@ -35,6 +38,7 @@ impl<'a, R: tauri::Runtime, M: tauri::Manager<R>> Updater2<'a, R, M> {
     pub fn set_automatic_updates_enabled(&self, enabled: bool) -> Result<(), crate::Error> {
         let store = self.manager.store2().scoped_store(crate::PLUGIN_NAME)?;
         store.set(crate::StoreKey::AutomaticUpdatesEnabled, enabled)?;
+        crate::UPDATE_WAKE.notify_one();
         Ok(())
     }
 
@@ -44,6 +48,7 @@ impl<'a, R: tauri::Runtime, M: tauri::Manager<R>> Updater2<'a, R, M> {
 
     pub fn set_meeting_active(&self, active: bool) {
         MEETING_ACTIVE.store(active, std::sync::atomic::Ordering::Relaxed);
+        crate::UPDATE_WAKE.notify_one();
     }
 
     pub fn get_last_seen_version(&self) -> Result<Option<String>, crate::Error> {
@@ -228,6 +233,15 @@ impl<'a, R: tauri::Runtime, M: tauri::Manager<R>> Updater2<'a, R, M> {
     // is what prevents an install/relaunch loop, since the installed artifact
     // stays cached until check() prunes it.
     pub async fn install_and_relaunch(&self, version: &str) -> Result<(), crate::Error> {
+        self.install(version, false).await
+    }
+
+    pub(crate) async fn install_automatically(&self, version: &str) -> Result<(), crate::Error> {
+        self.install(version, true).await
+    }
+
+    async fn install(&self, version: &str, automatic: bool) -> Result<(), crate::Error> {
+        let _install_guard = INSTALL_MUTEX.lock().await;
         let current = self.manager.config().version.clone().unwrap_or_default();
         let is_newer = match (
             semver::Version::parse(version),
@@ -253,6 +267,11 @@ impl<'a, R: tauri::Runtime, M: tauri::Manager<R>> Updater2<'a, R, M> {
             .await?
             .ok_or(crate::Error::UpdateNotAvailable)?;
         update.version = version.to_string();
+
+        // The feed request above yields; recording or update policy may have changed.
+        if self.meeting_active() || (automatic && !self.automatic_updates_enabled()?) {
+            return Err(crate::Error::UpdateDeferred);
+        }
 
         let _ = self.manager.store2().save();
 

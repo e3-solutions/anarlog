@@ -5,6 +5,8 @@ export const DESKTOP_SCHEMES = [
   "anarlog-staging",
   "anarlog-nightly",
   "anarlog-dev",
+  "e3-shared-recordings-preview",
+  "e3-shared-recordings-preview-second",
   "hypr",
   "hyprnote",
   "hyprnote-staging",
@@ -45,3 +47,11 @@ export const flowSearchSchema = <T extends z.ZodRawShape>(
     }),
   ]);
 };
+
+export function isE3ScribeFlow(context: { flow?: string; scheme?: string }) {
+  return (
+    context.flow === "desktop" &&
+    (context.scheme === "e3-shared-recordings-preview" ||
+      context.scheme === "e3-shared-recordings-preview-second")
+  );
+}

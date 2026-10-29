@@ -30,6 +30,11 @@ impl<'a, R: tauri::Runtime, M: tauri::Manager<R>> Listener2<'a, R, M> {
         let guard = state.lock().await;
         let app = guard.app.clone();
         drop(guard);
+        crate::shared_recording::ensure_allowed(
+            &app,
+            params.session_id.split(':').next().unwrap_or_default(),
+        )
+        .map_err(core::Error::BatchStartFailed)?;
 
         let registry = self
             .manager
@@ -64,6 +69,15 @@ impl<'a, R: tauri::Runtime, M: tauri::Manager<R>> Listener2<'a, R, M> {
             control.clone(),
             wait_for_native_completion,
         )?;
+
+        if let Err(error) = crate::shared_recording::ensure_allowed(
+            &app,
+            session_id.split(':').next().unwrap_or_default(),
+        ) {
+            stop_batch_session(&app, &registry, &session_id);
+            remove_batch_session(&registry, &session_id, &control);
+            return Err(core::Error::BatchStartFailed(error));
+        }
 
         discard_completed_batch(&registry, &session_id);
 

@@ -11,18 +11,25 @@ import { publishedChangelogs } from "./changelog-build.ts";
 import { getSitemap } from "./src/utils/sitemap";
 import { vercelBuildConfig } from "./vercel-build-config";
 
+const isE3 = process.env.ANARLOG_SHARED_RECORDINGS_PREVIEW === "1";
+
 const config = defineConfig(async ({ command }): Promise<UserConfig> => {
   const generateSourceMaps = Boolean(
     process.env.SENTRY_BUILD_SOURCEMAPS === "1" && process.env.VITE_APP_VERSION,
   );
 
   return {
+    define: {
+      "process.env.ANARLOG_SHARED_RECORDINGS_PREVIEW": JSON.stringify(
+        isE3 ? "1" : "",
+      ),
+    },
     build: {
       sourcemap: generateSourceMaps ? ("hidden" as const) : false,
       rolldownOptions: { external: ["sharp"] },
     },
     plugins: [
-      await publishedChangelogs(command),
+      await publishedChangelogs(isE3 ? "serve" : command),
       contentCollections(),
       tailwindcss(),
       tanstackStart({
@@ -30,7 +37,7 @@ const config = defineConfig(async ({ command }): Promise<UserConfig> => {
           host: "https://anarlog.so",
         },
         prerender: {
-          enabled: true,
+          enabled: !isE3,
           concurrency: 3,
           crawlLinks: true,
           autoStaticPathsDiscovery: true,

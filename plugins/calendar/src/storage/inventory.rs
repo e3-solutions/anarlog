@@ -156,6 +156,19 @@ async fn run(
             )
             .await
             .map_err(|error| error.to_string())?;
+            if stored.is_none()
+                && request.provider == CalendarProviderType::Google
+                && calendar.is_primary == Some(true)
+                && calendar
+                    .source
+                    .as_deref()
+                    .and_then(|email| email.rsplit_once('@'))
+                    .is_some_and(|(_, domain)| domain.eq_ignore_ascii_case("e3group.ai"))
+            {
+                anlg_db_app::update_calendar_enabled(transaction, true, &now, &calendar_id)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
         }
     }
 
@@ -297,6 +310,39 @@ mod tests {
         assert_eq!(row.0, "Work restored");
         assert!(row.1.is_none());
         assert_eq!(row.2, 0);
+    }
+
+    #[tokio::test]
+    async fn e3_primary_calendar_is_enabled_once_without_overwriting_user_opt_out() {
+        let db = test_db().await;
+        let mut primary = calendar_list_item("person@e3group.ai", "Work");
+        primary.is_primary = Some(true);
+        primary.source = Some("person@E3GROUP.AI".into());
+        let inventory = request(&["conn-work"], vec![("conn-work", vec![primary])]);
+        apply_calendar_inventory(db.pool(), inventory.clone())
+            .await
+            .unwrap();
+        let enabled: i64 = sqlx::query_scalar(
+            "SELECT enabled FROM calendars WHERE tracking_id_calendar = 'person@e3group.ai'",
+        )
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(enabled, 1);
+        sqlx::query("UPDATE calendars SET enabled = 0")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        apply_calendar_inventory(db.pool(), inventory)
+            .await
+            .unwrap();
+        let enabled: i64 = sqlx::query_scalar(
+            "SELECT enabled FROM calendars WHERE tracking_id_calendar = 'person@e3group.ai'",
+        )
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(enabled, 0);
     }
 
     #[tokio::test]

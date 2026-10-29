@@ -9,7 +9,8 @@ mod supabase;
 
 pub use config::NangoConfig;
 pub use extractor::{
-    NangoConnection, NangoConnectionError, NangoConnectionState, is_provider_auth_failure,
+    NangoConnection, NangoConnectionError, NangoConnectionState, google_meet_calendar_access,
+    is_provider_auth_failure,
 };
 pub use integrations::{
     Attio, Close, Discord, Fathom, GitHub, GoogleCalendar, GoogleDrive, GoogleMail, GoogleMeet,
@@ -18,6 +19,6 @@ pub use integrations::{
 };
 pub use openapi::openapi;
 pub use routes::{
-    ForwardHandler, ForwardHandlerRegistry, forward_handler, management_router, router,
-    session_router, webhook_router,
+    ForwardHandler, ForwardHandlerRegistry, VerifiedMeetOccurrence, forward_handler,
+    management_router, resolve_verified_active_conference, router, session_router, webhook_router,
 };

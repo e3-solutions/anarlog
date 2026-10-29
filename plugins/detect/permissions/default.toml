@@ -4,6 +4,7 @@ permissions = [
     "allow-list-installed-applications",
     "allow-get-installed-application-icons",
     "allow-list-mic-using-applications",
+    "allow-list-meeting-audio-processes",
     "allow-inspect-meeting-accessibility",
     "allow-send-meeting-chat-message",
     "allow-capture-meeting-chat-messages",

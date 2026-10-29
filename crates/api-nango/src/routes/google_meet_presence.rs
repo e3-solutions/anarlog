@@ -91,57 +91,19 @@ fn validate_meeting_code(code: &str) -> Result<(), PresenceError> {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Person {
-    metadata: Option<PersonMetadata>,
-}
-
-#[derive(Deserialize)]
-struct PersonMetadata {
-    #[serde(default)]
-    sources: Vec<PersonSource>,
-}
-
-#[derive(Deserialize)]
-struct PersonSource {
-    #[serde(rename = "type")]
-    source_type: String,
-    id: String,
-}
-
-impl Person {
-    fn account_id(self) -> Result<String, PresenceError> {
-        // A Person resource name can change as profiles and contacts are linked.
-        // The ACCOUNT source ID is the Google Account ID accepted by People API.
-        let account_ids: HashSet<_> = self
-            .metadata
-            .ok_or_else(provider_error)?
-            .sources
-            .into_iter()
-            .filter(|source| source.source_type == "ACCOUNT" && !source.id.is_empty())
-            .map(|source| source.id)
-            .collect();
-        let id = if account_ids.len() == 1 {
-            account_ids.into_iter().next().unwrap()
-        } else {
-            return Err(provider_error());
-        };
-        if id.contains('/') {
-            return Err(provider_error());
-        }
-        Ok(id)
-    }
-}
-
-#[derive(Deserialize)]
 struct GoogleUserInfo {
+    id: Option<String>,
     email: Option<String>,
     verified_email: Option<bool>,
 }
 
 impl GoogleUserInfo {
-    fn account_email(self) -> Result<String, PresenceError> {
+    fn into_account(self) -> Result<(String, String), PresenceError> {
         if self.verified_email != Some(true) {
+            return Err(provider_error());
+        }
+        let id = self.id.ok_or_else(provider_error)?;
+        if id.is_empty() || id.len() > 255 || !id.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
             return Err(provider_error());
         }
         let email = self
@@ -152,7 +114,7 @@ impl GoogleUserInfo {
         if email.is_empty() || !email.contains('@') || email.contains(char::is_whitespace) {
             return Err(provider_error());
         }
-        Ok(email)
+        Ok((id, email))
     }
 }
 
@@ -221,18 +183,34 @@ async fn get<T: DeserializeOwned>(proxy: &OwnedNangoProxy, path: &str) -> Result
     response.json().await.map_err(|_| provider_error())
 }
 
+pub struct VerifiedMeetOccurrence {
+    pub conference_record: String,
+    pub start_time: String,
+}
+
+pub async fn resolve_verified_active_conference(
+    proxy: OwnedNangoProxy,
+    meeting_code: &str,
+) -> Result<VerifiedMeetOccurrence, PresenceError> {
+    validate_meeting_code(meeting_code)?;
+    let (presence, occurrence) = check_presence_details(proxy, meeting_code).await?;
+    if !presence.present {
+        return Err(provider_error());
+    }
+    occurrence.ok_or_else(provider_error)
+}
+
 async fn check_presence(
     proxy: OwnedNangoProxy,
     meeting_code: &str,
 ) -> Result<MeetPresenceResponse, PresenceError> {
-    let person: Person = get(
-        &proxy
-            .clone()
-            .base_url_override("https://people.googleapis.com"),
-        "/v1/people/me?personFields=metadata",
-    )
-    .await?;
-    let self_id = person.account_id()?;
+    Ok(check_presence_details(proxy, meeting_code).await?.0)
+}
+
+async fn check_presence_details(
+    proxy: OwnedNangoProxy,
+    meeting_code: &str,
+) -> Result<(MeetPresenceResponse, Option<VerifiedMeetOccurrence>), PresenceError> {
     let userinfo: GoogleUserInfo = get(
         &proxy
             .clone()
@@ -240,7 +218,8 @@ async fn check_presence(
         "/oauth2/v1/userinfo?alt=json",
     )
     .await?;
-    let account_email = userinfo.account_email()?;
+    // Workspace accounts need not expose an ACCOUNT source through People API.
+    let (self_id, account_email) = userinfo.into_account()?;
 
     let meet = proxy.base_url_override("https://meet.googleapis.com");
     let space: Space = get(&meet, &format!("/v2/spaces/{meeting_code}")).await?;
@@ -258,7 +237,7 @@ async fn check_presence(
         meeting_uri: space.meeting_uri,
     };
     let Some(active) = space.active_conference else {
-        return Ok(result);
+        return Ok((result, None));
     };
     if !valid_resource(&active.conference_record, "conferenceRecords/") {
         return Err(provider_error());
@@ -271,7 +250,7 @@ async fn check_presence(
     {
         return Err(provider_error());
     }
-    result.conference_start_time = Some(record.start_time);
+    result.conference_start_time = Some(record.start_time.clone());
 
     let self_name = format!("users/{self_id}");
     let mut seen_tokens = HashSet::new();
@@ -293,7 +272,13 @@ async fn check_presence(
                 .is_some_and(|user| user.user == self_name)
         }) {
             result.present = true;
-            return Ok(result);
+            return Ok((
+                result,
+                Some(VerifiedMeetOccurrence {
+                    conference_record: record.name,
+                    start_time: record.start_time,
+                }),
+            ));
         }
         match page.next_page_token {
             Some(token) if !token.is_empty() => {
@@ -302,7 +287,7 @@ async fn check_presence(
                 }
                 page_token = Some(token);
             }
-            _ => return Ok(result),
+            _ => return Ok((result, None)),
         }
     }
     Err(provider_error())
@@ -397,26 +382,6 @@ mod tests {
         (status, serde_json::from_slice(&body).unwrap())
     }
 
-    async fn mock_person(server: &MockServer, body: Value) {
-        Mock::given(method("GET"))
-            .and(path("/proxy/v1/people/me"))
-            .and(query_param("personFields", "metadata"))
-            .and(header("Connection-Id", "connection"))
-            .and(header("Provider-Config-Key", "google-meet"))
-            .and(header("Base-Url-Override", "https://people.googleapis.com"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(body))
-            .mount(server)
-            .await;
-    }
-
-    fn person() -> Value {
-        json!({
-            "resourceName":"people/different-aggregate-id",
-            "metadata":{"sources":[{"type":"PROFILE","id":"profile-id"},{"type":"ACCOUNT","id":"12345"}]},
-            "emailAddresses":[{"value":"e3@example.com","metadata":{"primary":true,"source":{"type":"DOMAIN_PROFILE","id":"workspace-profile"}}}]
-        })
-    }
-
     async fn mock_userinfo(server: &MockServer, body: Value) {
         Mock::given(method("GET"))
             .and(path("/proxy/oauth2/v1/userinfo"))
@@ -468,12 +433,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn matches_account_source_id_not_person_resource_name() {
+    async fn matches_google_subject_without_people_account_source() {
         let (server, app) = setup(true).await;
-        mock_person(&server, person()).await;
         mock_userinfo(
             &server,
-            json!({"email":"E3@example.com","verified_email":true}),
+            json!({"id":"12345","email":"E3@example.com","verified_email":true}),
         )
         .await;
         mock_space(&server, true).await;
@@ -495,10 +459,9 @@ mod tests {
     #[tokio::test]
     async fn other_active_participant_does_not_count_as_self() {
         let (server, app) = setup(true).await;
-        mock_person(&server, person()).await;
         mock_userinfo(
             &server,
-            json!({"email":"E3@example.com","verified_email":true}),
+            json!({"id":"12345","email":"E3@example.com","verified_email":true}),
         )
         .await;
         mock_space(&server, true).await;
@@ -519,10 +482,9 @@ mod tests {
     #[tokio::test]
     async fn checks_next_page_before_reporting_absent() {
         let (server, app) = setup(true).await;
-        mock_person(&server, person()).await;
         mock_userinfo(
             &server,
-            json!({"email":"E3@example.com","verified_email":true}),
+            json!({"id":"12345","email":"E3@example.com","verified_email":true}),
         )
         .await;
         mock_space(&server, true).await;
@@ -554,10 +516,9 @@ mod tests {
     #[tokio::test]
     async fn no_active_conference_is_absent() {
         let (server, app) = setup(true).await;
-        mock_person(&server, person()).await;
         mock_userinfo(
             &server,
-            json!({"email":"E3@example.com","verified_email":true}),
+            json!({"id":"12345","email":"E3@example.com","verified_email":true}),
         )
         .await;
         mock_space(&server, false).await;
@@ -570,10 +531,9 @@ mod tests {
     #[tokio::test]
     async fn google_denial_is_error_not_absence() {
         let (server, app) = setup(true).await;
-        mock_person(&server, person()).await;
         mock_userinfo(
             &server,
-            json!({"email":"E3@example.com","verified_email":true}),
+            json!({"id":"12345","email":"E3@example.com","verified_email":true}),
         )
         .await;
         Mock::given(method("GET"))
@@ -587,12 +547,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn missing_account_source_fails_closed() {
+    async fn missing_google_subject_fails_closed() {
         let (server, app) = setup(true).await;
-        mock_person(&server, json!({
-            "resourceName":"people/12345", "metadata":{"sources":[{"type":"PROFILE","id":"12345"}]},
-            "emailAddresses":[{"value":"e3@example.com","metadata":{"source":{"type":"PROFILE","id":"12345"}}}]
-        })).await;
+        mock_userinfo(
+            &server,
+            json!({"email":"e3@example.com","verified_email":true}),
+        )
+        .await;
         let (status, value) = post(app, "abc-defg-hij").await;
         assert_eq!(status, StatusCode::BAD_GATEWAY);
         assert!(value.get("present").is_none());
@@ -601,8 +562,11 @@ mod tests {
     #[tokio::test]
     async fn missing_userinfo_email_fails_closed() {
         let (server, app) = setup(true).await;
-        mock_person(&server, person()).await;
-        mock_userinfo(&server, json!({"name":"E3 employee"})).await;
+        mock_userinfo(
+            &server,
+            json!({"id":"12345","verified_email":true,"name":"E3 employee"}),
+        )
+        .await;
         let (status, value) = post(app, "abc-defg-hij").await;
         assert_eq!(status, StatusCode::BAD_GATEWAY);
         assert!(value.get("present").is_none());
@@ -611,10 +575,9 @@ mod tests {
     #[tokio::test]
     async fn unverified_userinfo_email_fails_closed() {
         let (server, app) = setup(true).await;
-        mock_person(&server, person()).await;
         mock_userinfo(
             &server,
-            json!({"email":"e3@example.com","verified_email":false}),
+            json!({"id":"12345","email":"e3@example.com","verified_email":false}),
         )
         .await;
         let (status, value) = post(app, "abc-defg-hij").await;
@@ -625,10 +588,9 @@ mod tests {
     #[tokio::test]
     async fn malformed_google_response_is_error_not_absence() {
         let (server, app) = setup(true).await;
-        mock_person(&server, person()).await;
         mock_userinfo(
             &server,
-            json!({"email":"E3@example.com","verified_email":true}),
+            json!({"id":"12345","email":"E3@example.com","verified_email":true}),
         )
         .await;
         Mock::given(method("GET"))
@@ -646,10 +608,9 @@ mod tests {
     #[tokio::test]
     async fn later_page_error_is_not_reported_as_absence() {
         let (server, app) = setup(true).await;
-        mock_person(&server, person()).await;
         mock_userinfo(
             &server,
-            json!({"email":"E3@example.com","verified_email":true}),
+            json!({"id":"12345","email":"E3@example.com","verified_email":true}),
         )
         .await;
         mock_space(&server, true).await;

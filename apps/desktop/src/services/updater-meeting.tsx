@@ -24,7 +24,11 @@ export function UpdaterMeetingSync() {
   const meetingActive = useStore(
     listenerStore,
     (state) =>
-      state.live.status === "active" || state.live.status === "finalizing",
+      state.live.loading ||
+      state.live.status === "active" ||
+      state.live.status === "finalizing" ||
+      Object.keys(state.live.finalizingBySession).length > 0 ||
+      Object.keys(state.live.postStopProcessingBySession).length > 0,
   );
 
   if (isAppStoreBuild()) {

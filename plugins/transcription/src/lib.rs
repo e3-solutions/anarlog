@@ -16,7 +16,9 @@ mod error;
 mod listener;
 mod listener2;
 mod live_journal;
+mod recording_diagnostics;
 mod session_transcript;
+mod shared_recording;
 mod stopped_captures;
 mod voiceprint;
 
@@ -136,10 +138,23 @@ pub enum BatchTerminalState {
     Finished,
 }
 
-fn make_specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
-    tauri_specta::Builder::<R>::new()
+fn make_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
+    tauri_specta::Builder::<tauri::Wry>::new()
         .plugin_name(PLUGIN_NAME)
+        .typ::<CaptureParams>()
         .commands(tauri_specta::collect_commands![
+            recording_diagnostics::recording_diagnostics_configure,
+            recording_diagnostics::recording_diagnostics_record,
+            recording_diagnostics::recording_diagnostics_batch,
+            recording_diagnostics::recording_diagnostics_ack,
+            shared_recording::shared_recording_configuration::<tauri::Wry>,
+            shared_recording::meeting_control::meeting_recording_control_set,
+            shared_recording::meeting_control::meeting_recording_exclusions,
+            shared_recording::shared_recording_configure::<tauri::Wry>,
+            shared_recording::shared_recording_observe::<tauri::Wry>,
+            shared_recording::shared_recording_enqueue::<tauri::Wry>,
+            shared_recording::shared_recording_queue::<tauri::Wry>,
+            shared_recording::shared_recording_flush::<tauri::Wry>,
             listener::commands::list_microphone_devices::<tauri::Wry>,
             listener::commands::get_current_microphone_device::<tauri::Wry>,
             listener::commands::get_mic_muted::<tauri::Wry>,
@@ -216,6 +231,15 @@ pub fn init() -> tauri::plugin::TauriPlugin<tauri::Wry> {
                 app: app_handle.clone(),
             }));
             app.manage(state);
+            app.manage(recording_diagnostics::RecordingDiagnostics::new(
+                app.path()
+                    .app_data_dir()
+                    .ok()
+                    .map(|dir| dir.join("recording-diagnostics")),
+                app.package_info().version.to_string(),
+            ));
+            app.manage(shared_recording::QueueState::default());
+            shared_recording::clear_legacy_playback(&app_handle);
             app.manage(live_journal::LiveJournalRegistry::default());
             let stopped_capture_registry = StoppedCaptureRegistry::default();
             app.manage(stopped_capture_registry.clone());
@@ -231,6 +255,7 @@ pub fn init() -> tauri::plugin::TauriPlugin<tauri::Wry> {
             });
             listener2::load_completed_batches(&batch_registry);
             app.manage(batch_registry);
+            shared_recording::meeting_control::setup(&app_handle);
 
             let audio = app.state::<Arc<dyn AudioProvider>>().inner().clone();
             let session_state_cache: SessionStateCache = Arc::new(StdMutex::new(HashMap::new()));
@@ -273,7 +298,7 @@ mod test {
     fn export_types() {
         const OUTPUT_FILE: &str = "./js/bindings.gen.ts";
 
-        make_specta_builder::<tauri::Wry>()
+        make_specta_builder()
             .export(
                 specta_typescript::Typescript::default()
                     .formatter(specta_typescript::formatter::prettier)

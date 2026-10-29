@@ -10,11 +10,29 @@ import { createListenerStore } from "~/store/zustand/listener";
 const mocks = vi.hoisted(() => ({
   inspect: vi.fn(),
   microphones: vi.fn(),
+  audioProcesses: vi.fn(),
   create: vi.fn(),
   remove: vi.fn(),
   open: vi.fn(),
   config: vi.fn(),
   platform: vi.fn(),
+  auth: vi.fn(),
+  resolve: vi.fn(),
+  excluded: vi.fn(),
+  bind: vi.fn(),
+  replay: vi.fn(),
+  block: vi.fn(),
+  diagnostic: vi.fn(),
+}));
+
+vi.mock("~/application-health/recording-diagnostics", () => ({
+  recordRecordingDiagnostic: mocks.diagnostic,
+}));
+
+vi.mock("./meeting-recording-control", () => ({
+  replayNativeRecordingExclusions: mocks.replay,
+  stopMeetingRecordingForExcludedOccurrence: mocks.block,
+  prepareMeetingRecording: vi.fn(async () => ({})),
 }));
 
 vi.mock("@tauri-apps/plugin-os", () => ({ platform: mocks.platform }));
@@ -22,7 +40,7 @@ vi.mock("@tauri-apps/plugin-os", () => ({ platform: mocks.platform }));
 vi.mock("@anlg/plugin-detect", () => ({
   commands: {
     inspectMeetingAccessibility: mocks.inspect,
-    listMicUsingApplications: mocks.microphones,
+    listMeetingAudioProcesses: mocks.audioProcesses,
   },
 }));
 vi.mock("~/session/queries", () => ({
@@ -33,6 +51,12 @@ vi.mock("~/store/zustand/tabs", () => ({
   useTabs: { getState: () => ({ openNew: mocks.open }) },
 }));
 vi.mock("~/shared/config", () => ({ useConfigValue: mocks.config }));
+vi.mock("~/auth", () => ({ useOptionalAuth: mocks.auth }));
+vi.mock("./recording-exclusions", () => ({
+  resolveRecordingOccurrence: mocks.resolve,
+  isRecordingExcluded: mocks.excluded,
+  bindRecordingSession: mocks.bind,
+}));
 
 const meet: MeetingAccessibilityInspection = {
   activeCall: true,
@@ -52,6 +76,12 @@ const slack: MeetingAccessibilityInspection = {
   app: { id: "com.tinyspeck.slackmacgap", name: "Slack" },
   surface: "native",
   windowTitle: "Huddle",
+};
+
+const occurrence = {
+  key: "calendar:abc-defg-hij",
+  room: "https://meet.google.com/abc-defg-hij",
+  kind: "calendar" as const,
 };
 
 function Harness({ store }: { store: ReturnType<typeof createListenerStore> }) {
@@ -95,6 +125,8 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.resetAllMocks();
   mocks.platform.mockReturnValue("macos");
+  mocks.replay.mockResolvedValue([]);
+  mocks.block.mockResolvedValue(undefined);
   mocks.config.mockImplementation((key: string) => {
     if (key === "ignored_platforms") return [];
     return (
@@ -102,8 +134,26 @@ beforeEach(() => {
     );
   });
   mocks.microphones.mockResolvedValue({ status: "ok", data: [] });
+  mocks.audioProcesses.mockImplementation(async () => {
+    const result = await mocks.microphones();
+    return result.status === "ok"
+      ? {
+          status: "ok",
+          data: result.data.map((app: { id: string; name: string }) => ({
+            app,
+            pid: 123,
+            inputActive: true,
+          })),
+        }
+      : result;
+  });
   mocks.create.mockResolvedValue("session-1");
   mocks.remove.mockResolvedValue(undefined);
+  // Default to no signed-in account so the exclusion gate stays dormant and
+  // existing automatic-recording behavior is preserved; account tests override.
+  mocks.auth.mockReturnValue(null);
+  mocks.resolve.mockResolvedValue(occurrence);
+  mocks.excluded.mockReturnValue(false);
   snapshot([meet]);
 });
 
@@ -141,7 +191,7 @@ describe("automatic local meeting recording", () => {
     snapshot([joined]);
     await tick(2_000);
     snapshot([{ ...hidden, openCallIdentities: [] }]);
-    await tick(14_000);
+    await tick(10_000);
     expect(stop).not.toHaveBeenCalled();
     snapshot([hidden]);
     await tick(4_000);
@@ -175,7 +225,7 @@ describe("automatic local meeting recording", () => {
     await tick(90_000);
     expect(stop).not.toHaveBeenCalled();
     snapshot([{ ...hidden, ...{ openCallIdentities: [] } }]);
-    await tick(14_000);
+    await tick(10_000);
     expect(stop).not.toHaveBeenCalled();
     await tick(4_000);
     expect(stop).toHaveBeenCalledOnce();
@@ -252,7 +302,7 @@ describe("automatic local meeting recording", () => {
     expect(stop).not.toHaveBeenCalled();
     expect(mocks.open).toHaveBeenCalledOnce();
     snapshot([presence, { ...a, activeCall: false }, b]);
-    await tick(14_000);
+    await tick(10_000);
     expect(stop).not.toHaveBeenCalled();
     await tick(4_000);
     expect(stop).toHaveBeenCalledOnce();
@@ -324,12 +374,12 @@ describe("automatic local meeting recording", () => {
     },
   );
 
-  it("stops after confirmed absence and records the next call without a reminder cooldown", async () => {
+  it("stops after ten seconds of confirmed absence and records the next call without a reminder cooldown", async () => {
     const { active, stop } = setup();
     await tick(0);
     active();
     snapshot([{ ...meet, activeCall: false }]);
-    await tick(14_000);
+    await tick(10_000);
     expect(stop).not.toHaveBeenCalled();
     await tick(4_000);
     expect(stop).toHaveBeenCalledOnce();
@@ -408,26 +458,212 @@ describe("automatic local meeting recording", () => {
     expect(stop).not.toHaveBeenCalled();
   });
 
-  it("preserves a muted listening call while far-end speech continues despite unreadable Accessibility", async () => {
-    snapshot([slack]);
-    const { store, active, stop } = setup();
+  it.each([slack, meet])(
+    "keeps $platform input ownership through AX loss but stops on confirmed departure",
+    async (inspection) => {
+      snapshot([inspection]);
+      const audio = {
+        app: inspection.app,
+        pid: 456,
+        inputActive: true,
+      };
+      mocks.audioProcesses.mockResolvedValue({ status: "ok", data: [audio] });
+      const { active, stop } = setup();
+      await tick(0);
+      active();
+      snapshot([
+        {
+          ...inspection,
+          activeCall: false,
+          warnings: ["no uniquely scoped meeting AXWindow"],
+        },
+      ]);
+      mocks.audioProcesses.mockResolvedValue({
+        status: "ok",
+        data: [
+          {
+            ...audio,
+            inputActive: true,
+          },
+        ],
+      });
+      await tick(90_000);
+      expect(stop).not.toHaveBeenCalled();
+      snapshot([{ ...inspection, activeCall: false }]);
+      mocks.audioProcesses.mockResolvedValue({
+        status: "ok",
+        data: [{ ...audio, pid: 789 }],
+      });
+      await tick(18_000);
+      expect(stop).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["stays joined", "later confirms departure"])(
+    "keeps the first input-release deadline when AX %s and blocks restart until input returns",
+    async (axBehavior) => {
+      const audio = {
+        app: meet.app,
+        pid: 456,
+        inputActive: true,
+      };
+      mocks.audioProcesses.mockResolvedValue({ status: "ok", data: [audio] });
+      const { active, stop } = setup();
+      await tick(0);
+      active();
+      await tick(75_000);
+      expect(stop).not.toHaveBeenCalled();
+      mocks.audioProcesses.mockResolvedValue({
+        status: "ok",
+        data: [{ ...audio, inputActive: false }],
+      });
+      await tick(6_000);
+      if (axBehavior === "later confirms departure")
+        snapshot([{ ...meet, activeCall: false }]);
+      await tick(4_000);
+      expect(stop).not.toHaveBeenCalled();
+      await tick(1_000);
+      expect(stop).toHaveBeenCalledOnce();
+      snapshot([meet]);
+      await tick(20_000);
+      expect(mocks.open).toHaveBeenCalledOnce();
+      mocks.audioProcesses.mockResolvedValue({ status: "ok", data: [audio] });
+      await tick();
+      expect(mocks.open).toHaveBeenCalledTimes(2);
+      active();
+      stop();
+      mocks.audioProcesses.mockResolvedValue({ status: "ok", data: [] });
+      await tick(20_000);
+      mocks.audioProcesses.mockResolvedValue({ status: "ok", data: [audio] });
+      await tick(20_000);
+      expect(mocks.open).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("cancels browser release grace on input return and never stops from an unknown audio reading", async () => {
+    const audio = {
+      app: meet.app,
+      pid: 456,
+      inputActive: true,
+    };
+    mocks.audioProcesses.mockResolvedValue({ status: "ok", data: [audio] });
+    const { active, stop } = setup();
     await tick(0);
     active();
     snapshot([
       {
-        ...slack,
+        ...meet,
         activeCall: false,
         warnings: ["no uniquely scoped meeting AXWindow"],
       },
     ]);
-    for (let minute = 0; minute < 3; minute++) {
-      store.setState((state) => ({
-        live: { ...state.live, amplitude: { mic: 0, speaker: 0.2 } },
-      }));
-      await tick(30_000);
-    }
+    mocks.audioProcesses.mockResolvedValue({ status: "ok", data: [] });
+    await tick(10_000);
+    mocks.audioProcesses.mockResolvedValue({ status: "ok", data: [audio] });
+    await tick(20_000);
+    expect(stop).not.toHaveBeenCalled();
+    mocks.audioProcesses.mockResolvedValue({ status: "ok", data: [] });
+    await tick(10_000);
+    mocks.audioProcesses.mockRejectedValue(new Error("audio unavailable"));
+    mocks.inspect.mockRejectedValue(new Error("AX unavailable"));
+    await tick(20_000);
+    expect(stop).not.toHaveBeenCalled();
+    mocks.audioProcesses.mockResolvedValue({ status: "ok", data: [] });
+    await tick();
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it("preserves Teams recording and manual Stop when the bound tab changes its SPA route", async () => {
+    const identity = "https://teams.cloud.microsoft/v2/#/meet/123:tab:42";
+    const joined = {
+      ...meet,
+      platform: "microsoftTeams" as const,
+      callIdentity: identity,
+      openCallIdentities: [identity],
+    };
+    snapshot([joined]);
+    const { active, stop } = setup();
+    await tick(0);
+    active();
+    const changed = {
+      ...joined,
+      callIdentity:
+        "https://teams.cloud.microsoft/v2/?context=updated#/meet/123:tab:42",
+      openCallIdentities: [
+        "https://teams.cloud.microsoft/v2/?context=updated#/meet/123:tab:42",
+      ],
+    };
+    snapshot([changed]);
+    await tick(90_000);
     expect(stop).not.toHaveBeenCalled();
     expect(mocks.open).toHaveBeenCalledOnce();
+    stop();
+    snapshot([joined]);
+    await tick(90_000);
+    expect(mocks.open).toHaveBeenCalledOnce();
+    snapshot([
+      {
+        ...joined,
+        activeCall: false,
+        openCallIdentities: ["https://meet.google.com/abc-defg-hij:tab:42"],
+      },
+    ]);
+    await tick();
+    snapshot([changed]);
+    await tick();
+    expect(mocks.open).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves manual Stop across Teams window URL changes without Automation permission", async () => {
+    const joined = {
+      ...meet,
+      platform: "microsoftTeams" as const,
+      callIdentity: "https://teams.cloud.microsoft/v2/#/meet/123:window:abc",
+    };
+    snapshot([joined]);
+    const { active, stop } = setup();
+    await tick(0);
+    active();
+    stop();
+    snapshot([
+      {
+        ...joined,
+        callIdentity:
+          "https://teams.cloud.microsoft/v2/?context=updated#/meet/123:window:abc",
+      },
+    ]);
+    await tick(90_000);
+    expect(mocks.open).toHaveBeenCalledOnce();
+    snapshot([{ ...joined, activeCall: false }]);
+    await tick();
+    snapshot([joined]);
+    await tick();
+    expect(mocks.open).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops on input release while AX and exclusion requests remain pending", async () => {
+    mocks.auth.mockReturnValue({ session: { user: { id: "account-1" } } });
+    const audio = { app: meet.app, pid: 456, inputActive: true };
+    mocks.audioProcesses.mockResolvedValue({ status: "ok", data: [audio] });
+    const { active, stop } = setup();
+    await tick(0);
+    active();
+    mocks.inspect.mockImplementation(() => new Promise(() => {}));
+    mocks.replay.mockImplementation(() => new Promise(() => {}));
+    await tick();
+    mocks.audioProcesses.mockResolvedValue({ status: "ok", data: [] });
+    await tick(18_000);
+    expect(stop).toHaveBeenCalledOnce();
+    expect(mocks.diagnostic).toHaveBeenCalledWith(
+      "session-1",
+      "stop_requested",
+      "grace_elapsed",
+      expect.objectContaining({
+        inspectionStatus: "timeout",
+        micStatus: "ok",
+        micActive: false,
+      }),
+    );
   });
 
   it("keeps a quiet muted Meet recording across hidden-tab evidence loss until departure is confirmed", async () => {
@@ -450,7 +686,7 @@ describe("automatic local meeting recording", () => {
     await tick();
     expect(mocks.open).toHaveBeenCalledOnce();
     snapshot([{ ...meet, activeCall: false }]);
-    await tick(14_000);
+    await tick(10_000);
     expect(stop).not.toHaveBeenCalled();
     await tick(4_000);
     expect(stop).toHaveBeenCalledOnce();
@@ -464,57 +700,57 @@ describe("automatic local meeting recording", () => {
       await tick(0);
       active();
       snapshot([{ ...meet, pid: meet.pid + 1, activeCall: false }]);
-      await tick(14_000);
+      await tick(10_000);
       expect(stop).not.toHaveBeenCalled();
       await tick(4_000);
       if (os === "macos") expect(stop).toHaveBeenCalledOnce();
       else {
         expect(stop).not.toHaveBeenCalled();
         await tick(90_000);
-        expect(stop).toHaveBeenCalledOnce();
+        expect(stop).not.toHaveBeenCalled();
       }
     },
   );
 
-  it("retains the Slack fallback stop when call evidence and microphone ownership remain unavailable", async () => {
+  it("uses the same input-release grace for Slack when AX cannot confirm departure", async () => {
     snapshot([slack]);
+    mocks.audioProcesses.mockResolvedValue({
+      status: "ok",
+      data: [{ app: slack.app, pid: 456, inputActive: true }],
+    });
     const { active, stop } = setup();
     await tick(0);
     active();
-    snapshot([]);
-    await tick(58_000);
+    snapshot([
+      {
+        ...slack,
+        activeCall: false,
+        warnings: ["no uniquely scoped meeting AXWindow"],
+      },
+    ]);
+    mocks.audioProcesses.mockResolvedValue({ status: "ok", data: [] });
+    await tick(10_000);
     expect(stop).not.toHaveBeenCalled();
-    await tick(6_000);
+    await tick(4_000);
     expect(stop).toHaveBeenCalledOnce();
   });
 
-  it("holds unknown call evidence during a network interruption and stops on reliable leave after reconnect", async () => {
+  it("does not extend input-release grace while offline", async () => {
     const online = vi
       .spyOn(window.navigator, "onLine", "get")
       .mockReturnValue(true);
     try {
-      snapshot([slack]);
+      mocks.audioProcesses.mockResolvedValue({
+        status: "ok",
+        data: [{ app: meet.app, pid: 456, inputActive: true }],
+      });
       const { active, stop } = setup();
       await tick(0);
       active();
       online.mockReturnValue(false);
       window.dispatchEvent(new Event("offline"));
-      snapshot([]);
-      mocks.microphones.mockResolvedValue({ status: "ok", data: [slack.app] });
-      await tick(90_000);
-      expect(stop).not.toHaveBeenCalled();
-
-      online.mockReturnValue(true);
-      window.dispatchEvent(new Event("online"));
-      mocks.microphones.mockResolvedValue({ status: "ok", data: [] });
-      // Reconnection alone must not discard the interruption hold.
-      await tick(70_000);
-      expect(stop).not.toHaveBeenCalled();
-
-      snapshot([{ ...slack, activeCall: false }]);
-      await tick(14_000);
-      expect(stop).not.toHaveBeenCalled();
-      await tick(4_000);
+      mocks.audioProcesses.mockResolvedValue({ status: "ok", data: [] });
+      await tick(18_000);
       expect(stop).toHaveBeenCalledOnce();
     } finally {
       online.mockRestore();
@@ -595,5 +831,132 @@ describe("automatic local meeting recording", () => {
     snapshot([slack]);
     await tick();
     expect(mocks.open).not.toHaveBeenCalled();
+  });
+
+  it("replays native exclusions before creating a detector recording", async () => {
+    mocks.auth.mockReturnValue({ session: { user: { id: "account-1" } } });
+    mocks.replay.mockImplementationOnce(async () => {
+      mocks.excluded.mockReturnValue(true);
+      return [];
+    });
+    setup();
+    await tick(0);
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.open).not.toHaveBeenCalled();
+  });
+
+  it.each(["bound", "selected"])(
+    "checks the %s excluded context of a new capture even while an old exclusion worker is pending",
+    async (blockedContext) => {
+      mocks.auth.mockReturnValue({ session: { user: { id: "account-1" } } });
+      mocks.create
+        .mockResolvedValueOnce("session-1")
+        .mockResolvedValue("session-2");
+      const audio = { app: meet.app, pid: 456, inputActive: true };
+      mocks.audioProcesses.mockResolvedValue({ status: "ok", data: [audio] });
+      const { store, active, stop } = setup();
+      await tick(0);
+      active();
+      mocks.resolve.mockImplementationOnce(() => new Promise(() => {}));
+      await tick();
+      mocks.audioProcesses.mockResolvedValue({ status: "ok", data: [] });
+      await tick(18_000);
+      expect(stop).toHaveBeenCalledOnce();
+      const bound = {
+        ...meet,
+        callIdentity: "https://meet.google.com/xyz-abcd-uvw:tab:99",
+      };
+      const selected = {
+        ...meet,
+        callIdentity: "https://meet.google.com/aaa-bbbb-ccc:tab:100",
+      };
+      snapshot([bound]);
+      mocks.audioProcesses.mockResolvedValue({ status: "ok", data: [audio] });
+      await tick();
+      expect(mocks.open).toHaveBeenCalledTimes(2);
+      store.setState((state) => ({
+        live: {
+          ...state.live,
+          status: "active",
+          sessionId: "session-2",
+          loading: false,
+        },
+      }));
+      const blocked = { ...occurrence, key: "calendar:excluded-call" };
+      mocks.resolve.mockImplementation(async (_owner, { meeting }) =>
+        meeting.callIdentity ===
+        (blockedContext === "bound"
+          ? bound.callIdentity
+          : selected.callIdentity)
+          ? blocked
+          : occurrence,
+      );
+      mocks.excluded.mockImplementation(
+        (_owner, candidate) => candidate.key === blocked.key,
+      );
+      snapshot([selected]);
+      await tick();
+      expect(mocks.block).toHaveBeenCalledWith(
+        "account-1",
+        "session-2",
+        blocked,
+      );
+      expect(stop).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("never arms an excluded occurrence across polling, rejoin, and remount", async () => {
+    mocks.auth.mockReturnValue({ session: { user: { id: "account-1" } } });
+    mocks.excluded.mockReturnValue(true);
+    snapshot([meet]);
+    const { store, view } = setup();
+    await tick(0);
+    expect(mocks.excluded).toHaveBeenCalledWith("account-1", occurrence);
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.open).not.toHaveBeenCalled();
+    expect(store.getState().live.triggerAppIds).toBeNull();
+
+    // Keep polling: the opt-out must hold rather than decay into a start.
+    await tick(90_000);
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.open).not.toHaveBeenCalled();
+
+    // Leave and rejoin the same call: a fresh occurrence stays excluded.
+    snapshot([]);
+    await tick(4_000);
+    snapshot([meet]);
+    await tick(4_000);
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.open).not.toHaveBeenCalled();
+
+    // Remounting the hook (e.g. window reopen) must not re-arm it either.
+    view.unmount();
+    render(<Harness store={store} />);
+    await tick(4_000);
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.open).not.toHaveBeenCalled();
+    expect(store.getState().live.triggerAppIds).toBeNull();
+  });
+
+  it("drops a deferred session when the opt-out lands during createSession", async () => {
+    mocks.auth.mockReturnValue({ session: { user: { id: "account-1" } } });
+    mocks.excluded.mockReturnValue(false);
+    mocks.create.mockImplementationOnce(async () => {
+      // The user opts out while the session is still being created.
+      mocks.excluded.mockReturnValue(true);
+      return "session-1";
+    });
+    snapshot([meet]);
+    const { store } = setup();
+    await tick(0);
+    expect(mocks.create).toHaveBeenCalledOnce();
+    expect(mocks.bind).toHaveBeenCalledWith(
+      "account-1",
+      "session-1",
+      occurrence,
+    );
+    expect(mocks.remove).toHaveBeenCalledWith("session-1");
+    expect(mocks.open).not.toHaveBeenCalled();
+    expect(store.getState().live.triggerAppIds).toBeNull();
   });
 });

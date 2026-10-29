@@ -16,6 +16,76 @@ use super::*;
 const TEST_KEY_ID: &str = "sync-composition-test";
 
 #[tokio::test]
+async fn shared_recordings_gateway_forwards_reads_and_uploads_without_local_storage() {
+    let upstream = MockServer::start().await;
+    let library = "/v1/orgs/org/shared-recordings";
+    let upload = "/v1/orgs/org/shared-recordings/meeting/captures/source";
+    let payload = json!({"wavBase64":"fixture-bytes"});
+    Mock::given(method("GET"))
+        .and(path(library))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"items":[]})))
+        .mount(&upstream)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(upload))
+        .and(body_json(payload.clone()))
+        .respond_with(ResponseTemplate::new(202))
+        .mount(&upstream)
+        .await;
+    let mut raw = deserialize_api_env([]);
+    raw.upstreams.anarlog_core_origin = Some(upstream.uri());
+    assert!(!raw.anarlog_shared_recordings_enabled);
+    let config = Box::leak(Box::new(crate::env::RuntimeConfig::resolve(raw).unwrap()));
+    let app = app_with_env(config).await;
+    for (method, path, body, expected) in [
+        ("GET", library, Value::Null, StatusCode::OK),
+        ("POST", upload, payload, StatusCode::ACCEPTED),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header(header::AUTHORIZATION, "Bearer fixture")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+    }
+}
+
+#[tokio::test]
+async fn shared_recordings_mount_only_when_core_ingestion_is_enabled() {
+    for enabled in [false, true] {
+        let mut raw = deserialize_api_env([("ANARLOG_SERVICE", "core")]);
+        raw.anarlog_shared_recordings_enabled = enabled;
+        let config = Box::leak(Box::new(crate::env::RuntimeConfig::resolve(raw).unwrap()));
+        let app = app_with_env(config).await;
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/shared-recordings/me")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            if enabled {
+                StatusCode::UNAUTHORIZED
+            } else {
+                StatusCode::NOT_FOUND
+            }
+        );
+    }
+}
+
+#[tokio::test]
 async fn standalone_services_build_without_other_services_credentials() {
     for role in ["ai", "sync", "core", "billing"] {
         let mut values = vec![

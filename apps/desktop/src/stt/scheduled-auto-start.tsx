@@ -12,6 +12,7 @@ import { parseEventInstant } from "@anlg/utils";
 import { useAuth } from "~/auth";
 import { getIgnoredEventSets } from "~/calendar/ignored-events";
 import { liveQueryClient } from "~/db";
+import { env } from "~/env";
 import { getOrCreateSessionForEventId } from "~/session/queries";
 import { useConfigValues } from "~/shared/config";
 import { useLatestRef } from "~/shared/hooks/useLatestRef";
@@ -497,20 +498,45 @@ export function ScheduledMeetingAutoStart() {
     auto_start_scheduled_meetings: autoStart,
     auto_join_scheduled_meetings: autoJoin,
     auto_start_detected_meetings: detectedMeetingsOnly,
+    shared_recording_defaults_applied: enrollmentScopes,
   } = useConfigValues([
     "auto_start_scheduled_meetings",
     "auto_join_scheduled_meetings",
     "auto_start_detected_meetings",
+    "shared_recording_defaults_applied",
   ] as const);
-  const autoStartRef = useLatestRef(autoStart);
+  const managedE3 =
+    env.VITE_E3_SCRIBE === "true" &&
+    auth.session?.user?.email?.toLowerCase().split("@")[1] === "e3group.ai";
+  let setupComplete = !managedE3;
+  if (managedE3) {
+    try {
+      const scopes: unknown = JSON.parse(enrollmentScopes || "[]");
+      setupComplete =
+        Array.isArray(scopes) &&
+        scopes.some((entry) => {
+          const scope: unknown =
+            typeof entry === "string" ? JSON.parse(entry) : null;
+          return (
+            Array.isArray(scope) &&
+            scope[0] === auth.session?.user.id &&
+            typeof scope[1] === "string" &&
+            scope[2] === env.VITE_API_URL
+          );
+        });
+    } catch {
+      setupComplete = false;
+    }
+  }
+  const autoStartRef = useLatestRef(autoStart && setupComplete);
   const detectedMeetingsOnlyRef = useLatestRef(detectedMeetingsOnly);
   const autoJoinRef = useLatestRef(autoJoin);
   const configChangedRef = useRef<() => void>(() => {});
   const configChangeNodeRef = useCallback(
     (node: HTMLSpanElement | null) => {
-      if (node) configChangedRef.current();
+      if (node) queueMicrotask(() => configChangedRef.current());
     },
-    [autoJoin, autoStart, detectedMeetingsOnly],
+    [autoJoin, autoStart, detectedMeetingsOnly, setupComplete],
   );
 
   useMountEffect(() => {

@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-shared-recording-enqueue"
+description = "Enables the shared_recording_enqueue command without any pre-configured scope."
+commands.allow = ["shared_recording_enqueue"]
+
+[[permission]]
+identifier = "deny-shared-recording-enqueue"
+description = "Denies the shared_recording_enqueue command without any pre-configured scope."
+commands.deny = ["shared_recording_enqueue"]

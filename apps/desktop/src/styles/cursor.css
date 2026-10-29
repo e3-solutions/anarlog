@@ -1,49 +1,23 @@
 @layer base {
-  *,
-  *::before,
-  *::after {
-    cursor: default !important;
+  body {
+    cursor: default;
   }
 
-  :where([contenteditable="true"]),
-  :where([contenteditable="true"] *) {
-    cursor: text !important;
+  :where(button, a[href], summary, select, input[type="button"], input[type="checkbox"], input[type="color"], input[type="file"], input[type="image"], input[type="radio"], input[type="range"], input[type="reset"], input[type="submit"], [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="checkbox"], [role="radio"], [role="switch"], [role="option"]):not(:disabled):not([aria-disabled="true"]) {
+    cursor: pointer;
   }
 
-  :where([contenteditable="true"] [contenteditable="false"]),
-  :where([contenteditable="true"] [contenteditable="false"] *),
-  :where([contenteditable="true"] button),
-  :where([contenteditable="true"] button *),
-  :where([contenteditable="true"] input[type="button"]),
-  :where([contenteditable="true"] input[type="checkbox"]),
-  :where([contenteditable="true"] input[type="color"]),
-  :where([contenteditable="true"] input[type="file"]),
-  :where([contenteditable="true"] input[type="image"]),
-  :where([contenteditable="true"] input[type="radio"]),
-  :where([contenteditable="true"] input[type="range"]),
-  :where([contenteditable="true"] input[type="reset"]),
-  :where([contenteditable="true"] input[type="submit"]),
-  :where([contenteditable="true"] select),
-  :where([contenteditable="true"] select *) {
-    cursor: default !important;
+  :where([contenteditable="true"], input:not([type]), input[type="date"], input[type="datetime-local"], input[type="email"], input[type="month"], input[type="number"], input[type="password"], input[type="search"], input[type="tel"], input[type="text"], input[type="time"], input[type="url"], input[type="week"], textarea) {
+    cursor: text;
   }
 
-  :where(input:not([type])),
-  :where(input[type="date"]),
-  :where(input[type="datetime-local"]),
-  :where(input[type="email"]),
-  :where(input[type="month"]),
-  :where(input[type="number"]),
-  :where(input[type="password"]),
-  :where(input[type="search"]),
-  :where(input[type="tel"]),
-  :where(input[type="text"]),
-  :where(input[type="time"]),
-  :where(input[type="url"]),
-  :where(input[type="week"]),
-  :where(textarea),
-  :where(.cursor-text) {
-    cursor: text !important;
+  :where([contenteditable="false"]) {
+    cursor: default;
+  }
+
+  :where(:disabled, [aria-disabled="true"]),
+  :where(:disabled, [aria-disabled="true"]) * {
+    cursor: not-allowed !important;
   }
 
   :where(.cursor-not-allowed),
