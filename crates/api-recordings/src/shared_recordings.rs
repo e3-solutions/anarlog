@@ -71,6 +71,7 @@ type Result<T> = std::result::Result<T, RecordingError>;
 pub enum Provider {
     GoogleMeet,
     SlackHuddle,
+    Unverified,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -105,6 +106,8 @@ pub struct CaptureMetadata {
     pub rank: u32,
     pub gaps: Vec<FrameRange>,
     pub timing_basis: TimingBasis,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_timeline_verified: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -254,6 +257,7 @@ impl SharedRecordingService {
         &self,
         workspace: &str,
         id: Option<&str>,
+        include_unverified: bool,
     ) -> Result<Vec<StoredOccurrence>> {
         identifier(workspace)?;
         let mut request = self
@@ -265,6 +269,9 @@ impl SharedRecordingService {
                 ("order", "created_at.desc,id.asc".into()),
                 ("limit", "500".into()),
             ]);
+        if !include_unverified {
+            request = request.query(&[("metadata->>provider", "neq.unverified")]);
+        }
         if let Some(id) = id {
             identifier(id)?;
             request = request.query(&[("id", format!("eq.{id}"))]);
@@ -297,7 +304,61 @@ impl SharedRecordingService {
 
     pub async fn list_occurrences(&self, workspace: &str) -> Result<Vec<OccurrenceManifest>> {
         let mut items = Vec::new();
-        for row in self.occurrences(workspace, None).await? {
+        for row in self.occurrences(workspace, None, false).await? {
+            items.push(self.manifest(workspace, &row.id).await?);
+        }
+        Ok(items)
+    }
+
+    pub async fn admit_unverified(
+        &self,
+        workspace: &str,
+        actor: &str,
+        local_capture_id: &str,
+    ) -> Result<(String, Option<i64>)> {
+        for value in [workspace, actor, local_capture_id] {
+            identifier(value)?;
+        }
+        let id = format!(
+            "unverified-{}",
+            key_hash(&[workspace, actor, local_capture_id])
+        );
+        let started = self
+            .admit_actor(workspace, &id, actor, Provider::Unverified, &id, None)
+            .await?;
+        Ok((id, started))
+    }
+
+    pub async fn actor_can_access(&self, workspace: &str, id: &str, actor: &str) -> Result<bool> {
+        let row = self
+            .occurrences(workspace, Some(id), true)
+            .await?
+            .into_iter()
+            .next()
+            .ok_or(RecordingError::NotFound)?;
+        if row.metadata.provider == Provider::Unverified {
+            self.actor_admitted(workspace, id, actor).await
+        } else {
+            Ok(true)
+        }
+    }
+
+    pub async fn list_for_actor(
+        &self,
+        workspace: &str,
+        actor: &str,
+        include_unverified: bool,
+    ) -> Result<Vec<OccurrenceManifest>> {
+        let mut items = Vec::new();
+        for row in self
+            .occurrences(workspace, None, include_unverified)
+            .await?
+        {
+            if row.metadata.provider == Provider::Unverified
+                && (!include_unverified || !self.actor_admitted(workspace, &row.id, actor).await?)
+            {
+                continue;
+            }
             items.push(self.manifest(workspace, &row.id).await?);
         }
         Ok(items)
@@ -329,7 +390,11 @@ impl SharedRecordingService {
     }
 
     pub async fn actor_admitted(&self, workspace: &str, id: &str, actor: &str) -> Result<bool> {
-        if self.occurrences(workspace, Some(id)).await?.is_empty() {
+        if self
+            .occurrences(workspace, Some(id), true)
+            .await?
+            .is_empty()
+        {
             return Ok(false);
         }
         let rows: Vec<Value> = self
@@ -349,7 +414,7 @@ impl SharedRecordingService {
 
     pub async fn manifest(&self, workspace: &str, id: &str) -> Result<OccurrenceManifest> {
         let row = self
-            .occurrences(workspace, Some(id))
+            .occurrences(workspace, Some(id), true)
             .await?
             .into_iter()
             .next()
@@ -373,7 +438,7 @@ impl SharedRecordingService {
         id: &str,
         capture_id: &str,
     ) -> Result<(CaptureProvenance, Vec<u8>)> {
-        self.occurrences(workspace, Some(id))
+        self.occurrences(workspace, Some(id), true)
             .await?
             .into_iter()
             .next()
@@ -455,6 +520,15 @@ impl SharedRecordingService {
             return Err(RecordingError::Conflict);
         }
         let manifest = self.manifest(workspace, id).await?;
+        if manifest.occurrence.provider == Provider::Unverified
+            && id
+                != format!(
+                    "unverified-{}",
+                    key_hash(&[workspace, &metadata.uploader_id, &metadata.local_capture_id])
+                )
+        {
+            return Err(RecordingError::Conflict);
+        }
         if let Some(existing) = manifest
             .captures
             .iter()
@@ -623,6 +697,10 @@ fn validate_occurrence(request: &CreateOccurrence) -> Result<()> {
                         .bytes()
                         .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte))
             }),
+        Provider::Unverified => request
+            .provider_occurrence_id
+            .strip_prefix("unverified-")
+            .is_some_and(|id| id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit())),
         Provider::SlackHuddle => {
             request
                 .provider_occurrence_id

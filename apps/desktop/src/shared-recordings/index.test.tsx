@@ -220,7 +220,10 @@ it("shows only your audio and transcripts, and retries failed source audio", asy
 
 it("groups your upload parts without exposing another contributor’s audio", async () => {
   const recording = await mocks.readRecording("account-one");
+  recording.occurrence.provider = "unverified";
   const first = recording.captures[0];
+  first.metadata.audioTimelineVerified = false;
+  first.metadata.gaps = [{ start: 0, end: 16000 }];
   recording.captures.push({
     ...first,
     captureId: "earlier-part",
@@ -240,6 +243,13 @@ it("groups your upload parts without exposing another contributor’s audio", as
   const recordings = within(panel).getAllByRole("listitem");
   expect(recordings).toHaveLength(2);
   const firstRecording = within(recordings[0]);
+  expect(
+    screen.getByRole("heading", { name: "Unverified recording" }),
+  ).toBeTruthy();
+  expect(
+    firstRecording.getAllByText(/audio timing could not be verified/i),
+  ).toHaveLength(2);
+  expect(firstRecording.queryByText(/audio is missing/i)).toBeNull();
   expect(
     firstRecording.getAllByRole("button", { name: "Listen" }),
   ).toHaveLength(2);

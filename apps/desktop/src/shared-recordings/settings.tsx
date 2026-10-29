@@ -174,8 +174,13 @@ export function SharedRecordingQueue({ userId }: { userId: string }) {
     onSettled: () => queue.refetch(),
   });
   const pending = queue.data?.filter((job) => job.state !== "uploaded") ?? [];
-  const quarantined = pending.filter((job) => job.state.startsWith("blocked_"));
-  const retryable = pending.filter((job) => !job.state.startsWith("blocked_"));
+  const quarantined = pending.filter(
+    (job) =>
+      job.state.startsWith("blocked_") &&
+      job.state !== "blocked_identity" &&
+      job.state !== "blocked_timeline",
+  );
+  const retryable = pending.filter((job) => !quarantined.includes(job));
   const reasons = [
     ...new Set(quarantined.map((job) => job.error).filter(Boolean)),
   ];
@@ -188,9 +193,7 @@ export function SharedRecordingQueue({ userId }: { userId: string }) {
   if (!pending.length)
     return observation.error || observation.data?.blocked ? (
       <p role="status" className="text-muted-foreground text-sm">
-        {observation.data?.quarantined
-          ? "Meeting activity could not be verified throughout this recording. Original audio stays local; start a new recording in a new note with one verified call to share."
-          : "Meeting identity could not be verified. Recording stays local; sharing will retry while the call is active."}
+        Meeting identity is unverified. Uploads will retry.
       </p>
     ) : null;
   return (

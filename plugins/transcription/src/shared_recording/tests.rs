@@ -23,6 +23,7 @@ fn job_fixture() -> Job {
             end: 9000,
         }],
         raw_frames: Some(16000),
+        audio_timeline_verified: None,
     }
 }
 
@@ -134,8 +135,9 @@ fn read_request(stream: &mut std::net::TcpStream) -> String {
                 .then(|| value.trim().parse::<usize>().unwrap())
         })
         .unwrap_or(0);
-    stream.read_exact(&mut vec![0; length]).unwrap();
-    headers
+    let mut body = vec![0; length];
+    stream.read_exact(&mut body).unwrap();
+    format!("{headers}{}", String::from_utf8_lossy(&body))
 }
 
 #[tokio::test]
@@ -289,16 +291,6 @@ async fn unverified_capture_quarantine_survives_a_late_admission_and_blocks_cach
             .unwrap(),
             None
         );
-        shared_recording_flush(handle.clone(), "token".into(), "user".into())
-            .await
-            .unwrap();
-        assert_eq!(
-            shared_recording_queue(handle.clone(), "user".into())
-                .await
-                .unwrap()[0]
-                .state,
-            "blocked_identity"
-        );
         release.send(()).unwrap();
         drop(gate);
     };
@@ -308,114 +300,78 @@ async fn unverified_capture_quarantine_survives_a_late_admission_and_blocks_cach
     let jobs = shared_recording_queue(handle.clone(), "user".into())
         .await
         .unwrap();
-    assert_eq!(jobs[0].state, "blocked_identity");
-    assert!(jobs[0].binding.is_none());
-    assert!(
-        jobs[0]
-            .error
-            .as_deref()
-            .unwrap()
-            .contains("start a new recording")
-    );
+    assert!(verify_upload_binding(&dir, &jobs[0], &state).is_err());
     assert!(dir.join(&job.id).join("original.audio").exists());
     server.join().unwrap();
 }
 
 #[tokio::test]
-async fn temporary_admission_failure_blocks_uploads_until_the_same_meeting_is_reverified() {
+async fn legacy_identity_and_timeline_holds_upload_without_a_verified_meeting() {
     use std::io::Write;
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    listener.set_nonblocking(true).unwrap();
-    let server = std::thread::spawn(move || {
-        for (status, body, expected) in [
-            (200, r#"{"occurrenceId":"first"}"#, "/admit"),
-            (503, "{}", "/admit"),
-            (503, "{}", "/admit"),
-            (200, r#"{"occurrenceId":"first"}"#, "/admit"),
-            (200, "{}", "/captures/"),
-            (200, "{}", "/process"),
-            (200, "{}", "/captures/"),
-            (200, "{}", "/process"),
-            (200, r#"{"occurrenceId":"first"}"#, "/admit"),
-            (200, r#"{"occurrenceId":"different"}"#, "/admit"),
-        ] {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-            let mut stream = loop {
-                match listener.accept() {
-                    Ok((stream, _)) => break stream,
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        assert!(std::time::Instant::now() < deadline, "missing request");
-                        std::thread::sleep(std::time::Duration::from_millis(1));
-                    }
-                    Err(error) => panic!("{error}"),
-                }
-            };
-            stream.set_nonblocking(false).unwrap();
-            assert!(
-                read_request(&mut stream)
-                    .lines()
-                    .next()
-                    .unwrap()
-                    .contains(expected)
-            );
-            write!(stream, "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
-        }
-    });
-    let fixture = Fixture::new("user", format!("http://{address}"), true).await;
+    let fixture = Fixture::new(
+        "user",
+        format!("http://{}", listener.local_addr().unwrap()),
+        false,
+    )
+    .await;
     let handle = fixture.app.handle().clone();
-    let session_id = fixture.session.clone();
-    assert!(start_raw(&handle, &session_id, Some("user")));
-    observe_raw(&handle, &session_id, 16000, true);
-    let observe = |call_identity| {
-        shared_recording_observe(
-            handle.clone(),
-            session_id.clone(),
-            "slack".into(),
-            call_identity,
-            0,
-            "token".into(),
-            "user".into(),
-            None,
-            None,
-        )
-    };
-    assert_eq!(observe(None).await.unwrap().as_deref(), Some("first"));
-    let before = fixture.enqueue("before").await.unwrap().unwrap();
-    assert_eq!(before.state, "pending");
-    assert!(observe(Some("slack://room/first".into())).await.is_err());
-    let after = fixture.enqueue("after").await.unwrap().unwrap();
-    assert_eq!(after.state, "awaiting_identity");
-    assert!(after.binding.is_none());
+    assert!(start_raw(&handle, &fixture.session, Some("user")));
+    observe_raw(&handle, &fixture.session, 17000, true);
+    let dir = directory(&handle).unwrap();
+    for state in ["blocked_identity", "blocked_timeline"] {
+        let mut job = fixture.enqueue(state).await.unwrap().unwrap();
+        job.state = state.into();
+        job.audio_timeline_verified = None;
+        if state == "blocked_identity" {
+            job.segments.clear();
+        }
+        save(&job_path(&dir, &job.id), &job).unwrap();
+    }
+    let server = std::thread::spawn(move || {
+        let mut capture_ids = Vec::new();
+        for _ in 0..2 {
+            for expected in ["/admit-unverified", "/captures/", "/process"] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let request = read_request(&mut stream);
+                assert!(request.lines().next().unwrap().contains(expected));
+                let body = if expected == "/admit-unverified" {
+                    let payload: Value =
+                        serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+                    assert!(
+                        payload["localCaptureId"]
+                            .as_str()
+                            .unwrap()
+                            .ends_with(":unverified")
+                    );
+                    r#"{"occurrenceId":"unassigned","provider":"unverified"}"#
+                } else {
+                    if expected == "/captures/" {
+                        let payload: Value =
+                            serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap())
+                                .unwrap();
+                        let metadata = &payload["metadata"];
+                        assert_eq!(metadata["audioTimelineVerified"], false);
+                        assert_eq!(metadata["offsetFrames"], 0);
+                        assert_eq!(metadata["gaps"], json!([]));
+                        capture_ids.push(metadata["localCaptureId"].as_str().unwrap().to_owned());
+                    }
+                    "{}"
+                };
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+        }
+        assert_ne!(capture_ids[0], capture_ids[1]);
+    });
     shared_recording_flush(handle.clone(), "token".into(), "user".into())
         .await
         .unwrap();
+    let jobs = shared_recording_queue(handle, "user".into()).await.unwrap();
+    assert_eq!(jobs.len(), 2);
     assert!(
-        shared_recording_queue(handle.clone(), "user".into())
-            .await
-            .unwrap()
-            .iter()
-            .all(|job| job.state != "uploaded")
+        jobs.iter()
+            .all(|job| job.state == "uploaded" && job.audio_timeline_verified == Some(false))
     );
-    shared_recording_flush(handle.clone(), "token".into(), "user".into())
-        .await
-        .unwrap();
-    assert!(
-        shared_recording_queue(handle.clone(), "user".into())
-            .await
-            .unwrap()
-            .iter()
-            .all(|job| job.state == "uploaded")
-    );
-    assert_eq!(
-        observe(Some("slack://room/first".into()))
-            .await
-            .unwrap()
-            .as_deref(),
-        Some("first")
-    );
-    assert!(observe(Some("slack://room/first".into())).await.is_err());
-    assert!(observe(Some("slack://room/first".into())).await.is_err());
     server.join().unwrap();
 }
 
@@ -444,13 +400,23 @@ async fn enqueue_uses_the_authenticated_capture_owner_without_a_local_note_owner
 }
 
 #[test]
-fn codec_padding_keeps_failed_frames_uncovered_and_missing_frames_block_sharing() {
+fn timeline_mismatch_keeps_decoded_audio_uploadable_with_unknown_coverage() {
     let mut job = job_fixture();
     finish_preparation(&mut job);
     assert_eq!((job.gaps[0].start, job.gaps[0].end), (8000, 9100));
     job.raw_frames = Some(17000);
     finish_preparation(&mut job);
-    assert_eq!(job.state, "blocked_timeline");
+    assert_eq!(job.state, "awaiting_identity");
+    assert_eq!(job.audio_timeline_verified, Some(false));
+    assert!(job.gaps.is_empty());
+    job.raw_frames = None;
+    job.gaps = vec![Gap {
+        start: 8000,
+        end: 9000,
+    }];
+    finish_preparation(&mut job);
+    assert_eq!(job.audio_timeline_verified, None);
+    assert_eq!((job.gaps[0].start, job.gaps[0].end), (8000, 9000));
 }
 
 #[test]
@@ -627,7 +593,7 @@ async fn opting_out_cancels_inflight_upload_and_stays_excluded_after_restart() {
         exclude_session(&dir, &state, &fixture.session, "user").unwrap();
         release.send(()).unwrap();
     };
-    let (result, ()) = tokio::join!(upload(&dir, &job, "token", &state), exclude);
+    let ((result, _, _), ()) = tokio::join!(upload(&dir, &job, "token", &state), exclude);
     assert!(result.unwrap_err().contains("excluded"));
     assert!(!capture_allowed(&handle, &fixture.session));
     assert!(

@@ -264,6 +264,110 @@ async fn signed_members_share_one_library_without_spoofing_uploader_or_retaining
             .status(),
         StatusCode::NO_CONTENT
     );
+    let fallback = "/v1/orgs/org/shared-recordings/admit-unverified";
+    assert_eq!(
+        app.clone()
+            .oneshot(request(
+                "POST",
+                fallback,
+                &a,
+                json!({"localCaptureId":"unassigned-capture","uploaderId":"member-b"})
+            ))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let mut receipts = Vec::new();
+    for actor in [&a, &a, &b] {
+        let response = app
+            .clone()
+            .oneshot(request(
+                "POST",
+                fallback,
+                actor,
+                json!({"localCaptureId":"unassigned-capture"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let receipt: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 1024 * 1024).await.unwrap())
+                .unwrap();
+        assert_eq!(receipt["provider"], "unverified");
+        receipts.push(receipt["occurrenceId"].as_str().unwrap().to_string());
+    }
+    assert_eq!(receipts[0], receipts[1]);
+    assert_ne!(receipts[0], receipts[2]);
+    for (url, expected) in [
+        ("/v1/orgs/org/shared-recordings", 1),
+        ("/v1/orgs/org/shared-recordings?includeUnverified=true", 2),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(request("GET", url, &a, Value::Null))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let list: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 1024 * 1024).await.unwrap())
+                .unwrap();
+        assert_eq!(list["items"].as_array().unwrap().len(), expected);
+        assert!(
+            !list["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v["occurrenceId"] == receipts[2])
+        );
+    }
+    let unassigned_path = format!("/v1/orgs/org/shared-recordings/{}", receipts[0]);
+    assert_eq!(
+        app.clone()
+            .oneshot(request("GET", &unassigned_path, &b, Value::Null))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let unassigned_source = format!("{unassigned_path}/captures/unassigned-source");
+    let upload = json!({"metadata":{"uploaderId":"member-b","deviceId":"device-a","localCaptureId":"unassigned-capture","segmentSequence":0,"localSessionId":"session-a","localTranscriptId":"transcript-a","sha256":sha256(&wav),"offsetFrames":0,"rank":0,"gaps":[{"start":0,"end":100}],"timingBasis":"device_clock_hint","audioTimelineVerified":false},"wavBase64":STANDARD.encode(&wav)});
+    assert_eq!(
+        app.clone()
+            .oneshot(request("POST", &unassigned_source, &b, upload.clone()))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.clone()
+            .oneshot(request("POST", &unassigned_source, &a, upload))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    let recovered = service.manifest("org", &receipts[0]).await.unwrap();
+    assert_eq!(recovered.captures[0].metadata.uploader_id, "member-a");
+    assert_eq!(
+        recovered.captures[0].metadata.audio_timeline_verified,
+        Some(false)
+    );
+    assert!(recovered.captures[0].metadata.gaps.is_empty());
+    assert_eq!(
+        app.clone()
+            .oneshot(request(
+                "GET",
+                &format!("{unassigned_source}/audio"),
+                &b,
+                Value::Null
+            ))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
     Mock::given(method("GET"))
         .and(path("/rest/v1/workspace_memberships"))
         .and(has_header("authorization", format!("Bearer {a}")))

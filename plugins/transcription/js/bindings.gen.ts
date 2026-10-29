@@ -1372,6 +1372,7 @@ export type Job = {
   segments: Segment[];
   gaps?: Gap[];
   rawFrames?: number | null;
+  audioTimelineVerified?: boolean | null;
 };
 export type JsonValue =
   | null

@@ -25,6 +25,12 @@ import { SharedRecordingPreferences, SharedRecordingQueue } from "./settings";
 
 import { useAuth } from "~/auth";
 
+const providerLabels = {
+  google_meet: "Google Meet",
+  slack_huddle: "Slack huddle",
+  unverified: "Unverified recording",
+};
+
 export function SharedRecordingsAccount({
   settings = false,
 }: {
@@ -216,9 +222,7 @@ function OrganizationRecordings({
                 ])}
               >
                 <span className="block font-medium">
-                  {item.occurrence.provider === "google_meet"
-                    ? "Google Meet"
-                    : "Slack huddle"}
+                  {providerLabels[item.occurrence.provider]}
                 </span>
                 <span className="text-muted-foreground block w-full truncate text-xs">
                   {sources
@@ -304,10 +308,13 @@ function RecordingDetail({
     <div className="mx-auto max-w-3xl space-y-6">
       <div className="space-y-1">
         <h2 className="text-xl font-semibold">
-          {detail.data.occurrence.provider === "google_meet"
-            ? "Google Meet"
-            : "Slack huddle"}
+          {providerLabels[detail.data.occurrence.provider]}
         </h2>
+        {detail.data.occurrence.provider === "unverified" ? (
+          <p className="text-muted-foreground text-sm">
+            Meeting identity could not be verified.
+          </p>
+        ) : null}
         {sources.length > 1 ? (
           <p className="text-muted-foreground text-sm">
             {sources.length} recordings
@@ -408,7 +415,11 @@ function RecordingDetail({
                           : "Transcribing…")}
                   </p>
                 )}
-                {capture.metadata.gaps.length ? (
+                {capture.metadata.audioTimelineVerified === false ? (
+                  <p className="text-muted-foreground text-sm">
+                    Audio timing could not be verified.
+                  </p>
+                ) : capture.metadata.gaps.length ? (
                   <p className="text-muted-foreground text-sm">
                     Some audio is missing from this recording.
                   </p>
