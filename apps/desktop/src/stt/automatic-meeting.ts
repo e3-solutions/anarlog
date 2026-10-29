@@ -7,7 +7,6 @@ import {
 
 export const AUTOMATIC_MEETING_POLL_MS = 2_000;
 export const AUTOMATIC_MEETING_STOP_GRACE_MS = 15_000;
-export const AUTOMATIC_MEETING_UNKNOWN_GRACE_MS = 60_000;
 
 export type AutomaticMeetingOptions = {
   googleMeet: boolean;
@@ -244,11 +243,4 @@ export function automaticMeetingObservation(
     return "unknown";
   }
   return "inactive";
-}
-
-export function automaticMeetingIsActive(
-  meeting: AutomaticMeeting,
-  inspections: MeetingAccessibilityInspection[],
-) {
-  return automaticMeetingObservation(meeting, inspections) === "active";
 }

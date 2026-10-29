@@ -4,18 +4,15 @@ import { useRef } from "react";
 import { commands as detectCommands } from "@anlg/plugin-detect";
 import { useMountEffect } from "@anlg/ui/hooks/use-mount-effect";
 
-import { AUTO_STOP_NETWORK_HOLD_MS } from "./auto-stop";
 import {
   AUTOMATIC_MEETING_POLL_MS,
   AUTOMATIC_MEETING_STOP_GRACE_MS,
-  AUTOMATIC_MEETING_UNKNOWN_GRACE_MS,
   automaticMeetingObservation,
   selectAutomaticMeeting,
   sameAutomaticMeeting,
   sameSuppressedAutomaticMeeting,
   type AutomaticMeeting,
 } from "./automatic-meeting";
-import { BROWSER_AUTO_STOP_APP_IDS } from "./meeting-apps";
 import {
   replayNativeRecordingExclusions,
   stopMeetingRecordingForExcludedOccurrence,
@@ -61,15 +58,40 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
       seenActive: boolean;
       seenInputActive: boolean;
       inputReleasedSince: number | null;
-      missingSince: number | null;
-      missingObservation: "inactive" | "unknown" | null;
-      lastAudibleAt: number;
-      networkHoldUntil: number | null;
+      inactiveSince: number | null;
     } | null = null;
     const suppressed = new Map<
       string,
       { meeting: AutomaticMeeting; untilAudioReturns: boolean }
     >();
+    let pendingInspection: ReturnType<
+      typeof detectCommands.inspectMeetingAccessibility
+    > | null = null;
+    let completedInspection: {
+      result: Awaited<
+        ReturnType<typeof detectCommands.inspectMeetingAccessibility>
+      >;
+      startedAt: number;
+    } | null = null;
+    let inspectionStartedAt = 0;
+    const requestInspection = () => {
+      if (!pendingInspection) {
+        const startedAt = Date.now();
+        inspectionStartedAt = startedAt;
+        pendingInspection = detectCommands
+          .inspectMeetingAccessibility()
+          .catch((error) => ({
+            status: "error" as const,
+            error: String(error),
+          }))
+          .then((result) => {
+            if (!cancelled) completedInspection = { result, startedAt };
+            pendingInspection = null;
+            return result;
+          });
+      }
+      return pendingInspection;
+    };
     let retryAfter = 0;
     let probeStartedAt = 0;
     let phase: "probe" | "sharing" | "recording" = "probe";
@@ -105,8 +127,6 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
         state.live.sessionId === capture.sessionId
       ) {
         capture.seenActive = true;
-        if (state.live.amplitude.speaker > 0.01)
-          capture.lastAudibleAt = Date.now();
       } else if (
         capture.seenActive &&
         previous.live.status === "active" &&
@@ -121,6 +141,52 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
         ownedSession.current = null;
       }
     });
+
+    let exclusionCheck: {
+      owner: string | undefined;
+      sessionId: string;
+    } | null = null;
+    async function checkAdmission(
+      meeting: AutomaticMeeting | null,
+      sessionId: string | null,
+    ) {
+      const owner = account.current;
+      const current = () =>
+        !cancelled &&
+        identityReady.current &&
+        account.current === owner &&
+        (!sessionId || capture?.sessionId === sessionId);
+      if (!current()) return null;
+      if (owner) await replayNativeRecordingExclusions(owner);
+      if (!current()) return null;
+      const occurrence =
+        owner && meeting
+          ? await resolveRecordingOccurrence(owner, { meeting })
+          : null;
+      if (!current()) return null;
+      if (owner && occurrence && isRecordingExcluded(owner, occurrence)) {
+        if (sessionId && store.getState().live.sessionId === sessionId) {
+          report("recording_excluded", {}, "stop_requested");
+          capture = null;
+          ownedSession.current = null;
+          try {
+            await stopMeetingRecordingForExcludedOccurrence(
+              owner,
+              sessionId,
+              occurrence,
+            );
+          } finally {
+            if (
+              account.current === owner &&
+              store.getState().live.sessionId === sessionId
+            )
+              store.getState().stop();
+          }
+        }
+        return null;
+      }
+      return { owner, occurrence };
+    }
 
     async function reconcile() {
       if (cancelled) return;
@@ -145,33 +211,17 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
       checking = true;
       probeStartedAt = Date.now();
       phase = "probe";
+      const macOS = platform() === "macos";
       const currentProbe: typeof probeEvidence = {
         inspectionStatus: "pending",
-        micStatus: "pending",
+        micStatus: macOS ? "pending" : "unavailable",
       };
       probeEvidence = currentProbe;
-      const track = <T extends { status: "ok" | "error" }>(
-        request: Promise<T>,
-        field: "inspectionStatus" | "micStatus",
-      ) =>
-        request.then(
-          (result) => {
-            currentProbe[field] = result.status;
-            return result;
-          },
-          (error) => {
-            currentProbe[field] = "error";
-            return { status: "error" as const, error: String(error) };
-          },
-        );
       try {
-        const [inspection, microphones, audioProcesses] = await Promise.all([
-          track(
-            detectCommands.inspectMeetingAccessibility(),
-            "inspectionStatus",
-          ),
-          track(detectCommands.listMicUsingApplications(), "micStatus"),
-          platform() === "macos"
+        const inspecting = requestInspection();
+        const [, audioProcesses] = await Promise.all([
+          capture ? Promise.resolve() : inspecting,
+          macOS
             ? detectCommands.listMeetingAudioProcesses().catch((error) => ({
                 status: "error" as const,
                 error: String(error),
@@ -181,6 +231,22 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
                 error: "unsupported",
               }),
         ]);
+        if (macOS) currentProbe.micStatus = audioProcesses.status;
+        const completed = completedInspection;
+        completedInspection = null;
+        const freshInspection =
+          completed && Date.now() - completed.startedAt < 10_000;
+        const inspection = freshInspection
+          ? completed.result
+          : {
+              status: "error" as const,
+              error: "AX inspection pending or expired",
+            };
+        currentProbe.inspectionStatus = freshInspection
+          ? inspection.status
+          : Date.now() - inspectionStartedAt >= 10_000
+            ? "timeout"
+            : "pending";
         if (
           cancelled ||
           !policy.current.enabled ||
@@ -222,246 +288,129 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
             suppressed.delete(key);
         }
 
-        const owner = account.current;
-        phase = "sharing";
-        if (owner) await replayNativeRecordingExclusions(owner);
-        if (cancelled || !identityReady.current || account.current !== owner) {
-          report("account_changed");
-          return;
-        }
-        const occurrence =
-          owner && selected
-            ? await resolveRecordingOccurrence(owner, { meeting: selected })
-            : null;
-        if (cancelled || !identityReady.current || account.current !== owner) {
-          report("account_changed");
-          return;
-        }
-        phase = "recording";
-        if (owner && occurrence && isRecordingExcluded(owner, occurrence)) {
-          const live = store.getState().live;
-          const blockedSession =
-            capture && live.sessionId === capture.sessionId
-              ? capture.sessionId
+        const live = store.getState().live;
+        const reconciledCapture = Boolean(
+          capture &&
+          live.status === "active" &&
+          live.sessionId === capture.sessionId,
+        );
+        if (capture && reconciledCapture) {
+          capture.seenActive = true;
+          if (
+            selected &&
+            sameAutomaticMeeting(capture.meeting, selected) &&
+            selected.callIdentity?.includes(":tab:")
+          )
+            capture.meeting = selected;
+          let observation = automaticMeetingObservation(
+            capture.meeting,
+            inspections,
+          );
+          if (
+            observation === "unknown" &&
+            macOS &&
+            inspection.status === "ok" &&
+            !inspections.some(
+              (entry) =>
+                entry.app.id === capture!.meeting.app.id &&
+                entry.pid === capture!.meeting.pid,
+            )
+          )
+            observation = "inactive";
+          const inputActive =
+            audioProcesses.status === "ok"
+              ? audioProcesses.data.some(
+                  (process) =>
+                    process.app.id === capture!.meeting.app.id &&
+                    process.inputActive,
+                )
               : null;
-          if (blockedSession) {
-            report("recording_excluded", {}, "stop_requested");
+          if (inputActive === true) {
+            capture.seenInputActive = true;
+            capture.inputReleasedSince = null;
+          } else if (inputActive === false && capture.seenInputActive)
+            capture.inputReleasedSince ??= now;
+          if (observation === "active") capture.inactiveSince = null;
+          else if (observation === "inactive") capture.inactiveSince ??= now;
+          const uiEndedSince =
+            observation === "inactive" ? capture.inactiveSince : null;
+          const inputEndedSince =
+            inputActive === false ? capture.inputReleasedSince : null;
+          const endedSince =
+            uiEndedSince === null
+              ? inputEndedSince
+              : inputEndedSince === null
+                ? uiEndedSince
+                : Math.min(uiEndedSince, inputEndedSince);
+          const evidence = {
+            observation,
+            ...(inputActive === null ? {} : { micActive: inputActive }),
+            missingForMs: endedSince === null ? 0 : now - endedSince,
+          };
+          if (
+            policy.current.autoStop !== false &&
+            endedSince !== null &&
+            now - endedSince >= AUTOMATIC_MEETING_STOP_GRACE_MS
+          ) {
+            report("grace_elapsed", evidence, "stop_requested");
+            if (
+              inputEndedSince !== null &&
+              (uiEndedSince === null || inputEndedSince <= uiEndedSince)
+            )
+              suppressed.set(capture.meeting.key, {
+                meeting: capture.meeting,
+                untilAudioReturns: true,
+              });
             capture = null;
             ownedSession.current = null;
-            try {
-              await stopMeetingRecordingForExcludedOccurrence(
-                owner,
-                blockedSession,
-                occurrence,
-              );
-            } finally {
-              if (
-                account.current === owner &&
-                store.getState().live.sessionId === blockedSession
-              )
-                store.getState().stop();
-            }
-          }
-          return;
-        }
-        const live = store.getState().live;
-        if (capture) {
-          if (
-            live.status === "active" &&
-            live.sessionId === capture.sessionId
-          ) {
-            capture.seenActive = true;
-            if (
-              selected &&
-              sameAutomaticMeeting(capture.meeting, selected) &&
-              selected.callIdentity?.includes(":tab:")
-            )
-              capture.meeting = selected;
-            let observation = automaticMeetingObservation(
-              capture.meeting,
-              inspections,
-            );
-            const macBrowser =
-              platform() === "macos" &&
-              BROWSER_AUTO_STOP_APP_IDS.has(capture.meeting.app.id);
-            if (
-              observation === "unknown" &&
-              macBrowser &&
-              inspection.status === "ok" &&
-              !inspections.some(
-                (entry) =>
-                  entry.app.id === capture!.meeting.app.id &&
-                  entry.pid === capture!.meeting.pid,
-              )
-            ) {
-              // macOS returns a row for every recognized running process,
-              // including unreadable ones. Missing that process is a departure.
-              observation = "inactive";
-            }
-            const matchingAudioProcesses =
-              audioProcesses.status === "ok"
-                ? audioProcesses.data.filter(
-                    (process) => process.app.id === capture!.meeting.app.id,
-                  )
-                : [];
-            const ownedAudioActive = matchingAudioProcesses.some(
-              (process) => process.inputActive || process.outputActive,
-            );
-            const audioUnknown =
-              platform() === "macos" && audioProcesses.status !== "ok";
-            const micActive =
-              platform() === "macos" && audioProcesses.status === "ok"
-                ? matchingAudioProcesses.some((process) => process.inputActive)
-                : microphones.status !== "ok" ||
-                  microphones.data.some(
-                    (app) => app.id === capture!.meeting.app.id,
-                  );
-            if (macBrowser && audioProcesses.status === "ok") {
-              if (
-                matchingAudioProcesses.some((process) => process.inputActive)
-              ) {
-                capture.seenInputActive = true;
-                capture.inputReleasedSince = null;
-                capture.networkHoldUntil = null;
-              } else if (capture.seenInputActive) {
-                capture.inputReleasedSince ??= now;
-              }
-            }
-            const evidence = {
-              observation,
-              micActive,
-              speakerRecent:
-                now - capture.lastAudibleAt <
-                AUTOMATIC_MEETING_UNKNOWN_GRACE_MS,
-              missingForMs:
-                capture.missingSince === null ? 0 : now - capture.missingSince,
-              networkHoldRemainingMs: Math.max(
-                0,
-                (capture.networkHoldUntil ?? now) - now,
-              ),
-            };
-            if (
-              macBrowser &&
-              audioProcesses.status === "ok" &&
-              capture.inputReleasedSince !== null &&
-              (observation !== "inactive" ||
-                now - capture.inputReleasedSince >=
-                  AUTOMATIC_MEETING_STOP_GRACE_MS)
-            ) {
-              const releasedForMs = now - capture.inputReleasedSince;
-              if (observation !== "inactive" && !navigator.onLine)
-                capture.networkHoldUntil ??= now + AUTO_STOP_NETWORK_HOLD_MS;
-              if (
-                observation !== "inactive" &&
-                capture.networkHoldUntil !== null &&
-                now < capture.networkHoldUntil
-              ) {
-                report("network_recovery_hold", {
-                  ...evidence,
-                  networkHoldRemainingMs: capture.networkHoldUntil - now,
-                });
-                return;
-              }
-              if (
-                policy.current.autoStop !== false &&
-                releasedForMs >= AUTOMATIC_MEETING_STOP_GRACE_MS
-              ) {
-                report(
-                  "grace_elapsed",
-                  { ...evidence, missingForMs: releasedForMs },
-                  "stop_requested",
-                );
-                suppressed.set(capture.meeting.key, {
-                  meeting: capture.meeting,
-                  untilAudioReturns: true,
-                });
-                capture = null;
-                ownedSession.current = null;
-                store.getState().stop();
-              } else {
-                report(
-                  policy.current.autoStop === false
-                    ? "auto_stop_disabled"
-                    : "grace_pending",
-                  { ...evidence, missingForMs: releasedForMs },
-                );
-              }
-              return;
-            }
-            if (observation === "unknown" && !navigator.onLine)
-              capture.networkHoldUntil ??= now + AUTO_STOP_NETWORK_HOLD_MS;
-            if (
-              observation === "active" ||
-              (observation === "unknown" &&
-                (macBrowser || micActive || ownedAudioActive || audioUnknown))
-            ) {
-              // A browser started while muted has no input-release edge yet.
-              // Preserve it through missing AX until a confirmed departure.
-              // Keep prior departure timing so a fresh inactive poll can finish
-              // its grace; positive attendance resets that evidence.
-              if (observation === "active" || !macBrowser) {
-                capture.missingSince = null;
-                capture.missingObservation = null;
-              }
-              if (observation === "active") capture.networkHoldUntil = null;
-              report(
-                policy.current.autoStop === false
-                  ? "auto_stop_disabled"
-                  : observation === "active"
-                    ? "meeting_active"
-                    : micActive
-                      ? "mic_still_active"
-                      : "ax_unknown",
-                evidence,
-              );
-              return;
-            }
-            if (capture.missingObservation !== observation) {
-              capture.missingSince = now;
-              capture.missingObservation = observation;
-            }
-            capture.missingSince ??= now;
-            evidence.missingForMs = now - capture.missingSince;
-            if (observation === "unknown") {
-              if (
-                capture.networkHoldUntil !== null &&
-                now < capture.networkHoldUntil
-              ) {
-                report("network_recovery_hold", {
-                  ...evidence,
-                  networkHoldRemainingMs: capture.networkHoldUntil - now,
-                });
-                return;
-              }
-            }
-            if (
-              observation === "unknown" &&
-              now - capture.lastAudibleAt < AUTOMATIC_MEETING_UNKNOWN_GRACE_MS
-            ) {
-              report("ax_unknown", evidence);
-              return;
-            }
-            if (
-              policy.current.autoStop !== false &&
-              now - capture.missingSince >=
-                (observation === "unknown"
-                  ? AUTOMATIC_MEETING_UNKNOWN_GRACE_MS
-                  : AUTOMATIC_MEETING_STOP_GRACE_MS)
-            ) {
-              report("grace_elapsed", evidence, "stop_requested");
-              capture = null;
-              ownedSession.current = null;
-              store.getState().stop();
-            } else {
-              report(
-                policy.current.autoStop === false
-                  ? "auto_stop_disabled"
-                  : "grace_pending",
-                evidence,
-              );
-            }
+            store.getState().stop();
             return;
           }
+          report(
+            policy.current.autoStop === false
+              ? "auto_stop_disabled"
+              : endedSince !== null
+                ? "grace_pending"
+                : observation === "active"
+                  ? "meeting_active"
+                  : inputActive === true
+                    ? "mic_still_active"
+                    : "ax_unknown",
+            evidence,
+          );
+        }
+
+        if (capture) {
+          if (
+            exclusionCheck?.owner !== account.current ||
+            exclusionCheck?.sessionId !== capture.sessionId
+          ) {
+            const check = {
+              owner: account.current,
+              sessionId: capture.sessionId,
+            };
+            exclusionCheck = check;
+            const meetings = [capture.meeting];
+            if (selected && !sameAutomaticMeeting(capture.meeting, selected))
+              meetings.push(selected);
+            void (async () => {
+              for (const meeting of meetings) {
+                if (account.current !== check.owner) return;
+                await checkAdmission(meeting, check.sessionId);
+              }
+            })()
+              .catch((error) => {
+                report("sharing_lookup_failed");
+                console.warn(
+                  "[listener] recording exclusions unavailable",
+                  error,
+                );
+              })
+              .finally(() => {
+                if (exclusionCheck === check) exclusionCheck = null;
+              });
+          }
+          if (reconciledCapture) return;
           if (capture.seenActive) {
             report("owner_mismatch");
             return;
@@ -502,11 +451,20 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
           )
         )
           return;
-        if (live.status === "active") {
-          if (live.sessionId && live.triggerAppIds?.includes(selected.app.id)) {
+        phase = "sharing";
+        const admission = await checkAdmission(selected, null);
+        if (!admission) return;
+        const { owner, occurrence } = admission;
+        phase = "recording";
+        const available = store.getState().live;
+        if (available.status === "active") {
+          if (
+            available.sessionId &&
+            available.triggerAppIds?.includes(selected.app.id)
+          ) {
             capture = {
               meeting: selected,
-              sessionId: live.sessionId,
+              sessionId: available.sessionId,
               startedAt: now,
               seenActive: true,
               seenInputActive:
@@ -516,16 +474,13 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
                     process.app.id === selected.app.id && process.inputActive,
                 ),
               inputReleasedSince: null,
-              missingSince: null,
-              missingObservation: null,
-              lastAudibleAt: now,
-              networkHoldUntil: null,
+              inactiveSince: null,
             };
-            ownedSession.current = live.sessionId;
+            ownedSession.current = available.sessionId;
           }
           return;
         }
-        if (live.loading || now < retryAfter) return;
+        if (available.loading || now < retryAfter) return;
 
         const sessionId = await createSession(selected.title);
         if (owner && occurrence)
@@ -553,6 +508,7 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
             !store.getState().canStartLiveSession(sessionId)
           )
             return;
+          completedInspection = null;
           capture = {
             meeting: selected,
             sessionId,
@@ -565,10 +521,7 @@ export function useAutomaticMeetingRecording(store: ListenerStore) {
                   process.app.id === selected.app.id && process.inputActive,
               ),
             inputReleasedSince: null,
-            missingSince: null,
-            missingObservation: null,
-            lastAudibleAt: Date.now(),
-            networkHoldUntil: null,
+            inactiveSince: null,
           };
           ownedSession.current = sessionId;
           store.getState().setTriggerAppIds([selected.app.id]);

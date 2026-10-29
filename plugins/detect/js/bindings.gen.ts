@@ -258,7 +258,6 @@ export type MeetingAudioProcess = {
   pid: number;
   app: InstalledApp;
   inputActive: boolean;
-  outputActive: boolean;
 };
 export type MeetingCapturedChatMessage = {
   id: string;

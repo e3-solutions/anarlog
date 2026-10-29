@@ -115,10 +115,7 @@ pub fn list_meeting_audio_processes() -> Result<Vec<MeetingAudioProcess>, crate:
         let input_active = process
             .is_running_input()
             .map_err(|e| crate::Error::AudioProcessState(format!("input: {e:?}")))?;
-        let output_active = process
-            .is_running_output()
-            .map_err(|e| crate::Error::AudioProcessState(format!("output: {e:?}")))?;
-        if !input_active && !output_active {
+        if !input_active {
             continue;
         }
         let pid = process.pid().map_err(|e| {
@@ -131,7 +128,6 @@ pub fn list_meeting_audio_processes() -> Result<Vec<MeetingAudioProcess>, crate:
             pid,
             app,
             input_active,
-            output_active,
         });
     }
 

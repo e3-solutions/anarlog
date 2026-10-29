@@ -97,7 +97,6 @@ pub struct MeetingAudioProcess {
     pub pid: i32,
     pub app: InstalledApp,
     pub input_active: bool,
-    pub output_active: bool,
 }
 
 pub fn list_meeting_audio_processes() -> Result<Vec<MeetingAudioProcess>, crate::Error> {
