@@ -71,6 +71,32 @@ fn browser_inspection_reports_join_and_departure_beside_home_without_ambiguity()
 }
 
 #[test]
+fn browser_inspection_recognizes_prefixed_meet_routes_and_binds_the_same_chrome_tab() {
+    for url in [
+        "https://meet.google.com/abc-defg-hij",
+        "https://meet.google.com/meet/abc-defg-hij?authuser=0",
+        "https://meet.google.com/meet/abc-defg-hij/?authuser=1#details",
+    ] {
+        let mut root = meet_window("abc-defg-hij", 0x1000, true);
+        root.web_area_url = Some(url.to_string());
+        let rows = browser_rows(vec![root]);
+        assert!(rows[0].active_call);
+        assert_eq!(
+            rows[0].call_identity.as_deref(),
+            Some("https://meet.google.com/abc-defg-hij:window:1000")
+        );
+        let inventory =
+            chrome_tabs::parse_inventory(&format!("E3_MEET_TABS_V1\n42\t{url}\nE3_MEET_TABS_END"))
+                .unwrap();
+        assert_eq!(
+            chrome_tabs::unique_identity("https://meet.google.com/abc-defg-hij", &inventory)
+                .as_deref(),
+            Some("https://meet.google.com/abc-defg-hij:tab:42")
+        );
+    }
+}
+
+#[test]
 fn browser_inspection_identity_is_stable_across_url_query_but_not_other_calls_or_windows() {
     let a = meet_window("abc-defg-hij", 0x1000, true);
     let mut refreshed = meet_window("abc-defg-hij", 0x1000, false);

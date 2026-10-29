@@ -233,12 +233,7 @@ fn browser_call_identity(root: &BrowserMeetingRoot) -> Option<String> {
     if root.platform != MeetingPlatform::GoogleMeet {
         return None;
     }
-    let mut url = url::Url::parse(&context::browser_meeting_identity(root)?).ok()?;
-    let code = url.path().trim_matches('/');
-    let code = platform::google_meet_code_from_title(&format!("Meet - {code}"))?;
-    url.set_path(&format!("/{code}"));
-    url.set_query(None);
-    url.set_fragment(None);
+    let url = platform::google_meet_url(&context::browser_meeting_identity(root)?)?;
     let window_hash = root
         .nodes
         .iter()
