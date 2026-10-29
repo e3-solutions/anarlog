@@ -149,6 +149,8 @@ function ActiveSharedRecordingLifecycle({ userId }: { userId: string }) {
         });
         return { blocked: true, quarantined: true };
       };
+      if (selected?.platform === "microsoftTeams")
+        return quarantine("meeting_unverified");
       const scope = JSON.stringify([
         userId,
         config.data?.organizationId,

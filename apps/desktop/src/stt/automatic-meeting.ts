@@ -1,14 +1,17 @@
 import type { MeetingAccessibilityInspection } from "@anlg/plugin-detect";
 
-import { inspectionShowsActiveMeeting } from "./meeting-accessibility";
+import {
+  inspectionHasUncertainMeetingEvidence,
+  inspectionShowsActiveMeeting,
+} from "./meeting-accessibility";
 
 export const AUTOMATIC_MEETING_POLL_MS = 2_000;
-export const AUTOMATIC_MEETING_STOP_GRACE_MS = 15_000;
-export const AUTOMATIC_MEETING_UNKNOWN_GRACE_MS = 60_000;
+export const AUTOMATIC_MEETING_STOP_GRACE_MS = 10_000;
 
 export type AutomaticMeetingOptions = {
   googleMeet: boolean;
   slack: boolean;
+  teams?: boolean;
 };
 
 export type AutomaticMeeting = {
@@ -16,7 +19,7 @@ export type AutomaticMeeting = {
   app: { id: string; name: string };
   pid: number;
   callIdentity: string | null;
-  platform: "googleMeet" | "slack";
+  platform: "googleMeet" | "slack" | "microsoftTeams";
   title: string;
 };
 
@@ -25,30 +28,82 @@ function inspectionCallIdentity(inspection: MeetingAccessibilityInspection) {
   return typeof value === "string" && value.trim() ? value : null;
 }
 
-function meetIdentity(value: string | null) {
-  const match = value?.match(
-    /^(https:\/\/meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}):(tab|window):([a-zA-Z0-9]+)$/,
-  );
+function browserIdentity(value: string | null) {
+  const match = value?.match(/^(.*):(tab|window):([a-zA-Z0-9]+)$/);
   if (!match || (match[2] === "tab" && !/^[1-9]\d*$/.test(match[3]!)))
     return null;
-  return { url: match[1]!, mode: match[2]! };
+  try {
+    const url = new URL(match[1]!);
+    if (
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      url.port ||
+      ![
+        "meet.google.com",
+        "teams.microsoft.com",
+        "teams.live.com",
+        "teams.cloud.microsoft",
+      ].includes(url.hostname)
+    )
+      return null;
+    if (
+      url.hostname === "meet.google.com" &&
+      !/^\/[a-z]{3}-[a-z]{4}-[a-z]{3}$/.test(url.pathname)
+    )
+      return null;
+    return {
+      url: url.href,
+      mode: match[2]!,
+      id: match[3]!,
+      platform:
+        url.hostname === "meet.google.com" ? "googleMeet" : "microsoftTeams",
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** A permission-driven identity upgrade must preserve capture and manual Stop. */
 export function sameAutomaticMeeting(a: AutomaticMeeting, b: AutomaticMeeting) {
   if (a.key === b.key) return true;
   if (
-    a.platform !== "googleMeet" ||
+    a.platform === "slack" ||
     b.platform !== a.platform ||
     a.app.id !== b.app.id ||
     a.pid !== b.pid
   )
     return false;
-  const left = meetIdentity(a.callIdentity);
-  const right = meetIdentity(b.callIdentity);
+  const left = browserIdentity(a.callIdentity);
+  const right = browserIdentity(b.callIdentity);
   return (
     a.callIdentity === b.callIdentity ||
+    (a.platform === "microsoftTeams" &&
+      left?.mode === "tab" &&
+      right?.mode === "tab" &&
+      left.id === right.id) ||
     (!!left && !!right && left.url === right.url && left.mode !== right.mode)
+  );
+}
+
+export function sameSuppressedAutomaticMeeting(
+  a: AutomaticMeeting,
+  b: AutomaticMeeting,
+) {
+  if (sameAutomaticMeeting(a, b)) return true;
+  if (
+    a.platform !== "microsoftTeams" ||
+    b.platform !== a.platform ||
+    a.app.id !== b.app.id ||
+    a.pid !== b.pid
+  )
+    return false;
+  const left = browserIdentity(a.callIdentity);
+  const right = browserIdentity(b.callIdentity);
+  // Without tab inventory, URL changes cannot safely undo manual Stop.
+  // This suppresses ambiguous tabs in that window, never ownership adoption.
+  return (
+    left?.mode === "window" && right?.mode === "window" && left.id === right.id
   );
 }
 
@@ -56,12 +111,9 @@ function inventoryProvesDeparture(
   meeting: Pick<AutomaticMeeting, "app" | "pid" | "callIdentity" | "platform">,
   inspections: MeetingAccessibilityInspection[],
 ) {
-  if (
-    meeting.platform !== "googleMeet" ||
-    meeting.app.id !== "com.google.Chrome"
-  )
+  if (meeting.platform === "slack" || meeting.app.id !== "com.google.Chrome")
     return false;
-  const identity = meetIdentity(meeting.callIdentity);
+  const identity = browserIdentity(meeting.callIdentity);
   if (!identity) return false;
   const inventories = inspections
     .filter((row) => row.app.id === meeting.app.id && row.pid === meeting.pid)
@@ -76,7 +128,7 @@ function inventoryProvesDeparture(
         !Array.isArray(value) ||
         value.some(
           (item) =>
-            typeof item !== "string" || meetIdentity(item)?.mode !== "tab",
+            typeof item !== "string" || browserIdentity(item)?.mode !== "tab",
         ),
     )
   )
@@ -86,9 +138,22 @@ function inventoryProvesDeparture(
     inventories.some((value) => JSON.stringify(value) !== JSON.stringify(first))
   )
     return false;
+  if (meeting.platform === "microsoftTeams") {
+    // Teams can change its SPA route during the same call. Only closure of
+    // the bound tab proves departure; a window identity cannot establish that.
+    return (
+      identity.mode === "tab" &&
+      !first.some((value) => {
+        const current = browserIdentity(value);
+        return (
+          current?.platform === "microsoftTeams" && current.id === identity.id
+        );
+      })
+    );
+  }
   return identity.mode === "tab"
     ? !first.includes(meeting.callIdentity!)
-    : !first.some((value) => meetIdentity(value)?.url === identity.url);
+    : !first.some((value) => browserIdentity(value)?.url === identity.url);
 }
 
 function hasAmbiguousInspection(inspections: MeetingAccessibilityInspection[]) {
@@ -118,7 +183,8 @@ export function selectAutomaticMeeting(
     !inspectionShowsActiveMeeting(inspection) ||
     !(
       (inspection.platform === "googleMeet" && options.googleMeet) ||
-      (inspection.platform === "slack" && options.slack)
+      (inspection.platform === "slack" && options.slack) ||
+      (inspection.platform === "microsoftTeams" && options.teams)
     )
   )
     return null;
@@ -130,7 +196,12 @@ export function selectAutomaticMeeting(
     pid: inspection.pid,
     callIdentity,
     platform,
-    title: platform === "slack" ? "Slack huddle" : "Google Meet",
+    title:
+      platform === "slack"
+        ? "Slack huddle"
+        : platform === "microsoftTeams"
+          ? "Microsoft Teams"
+          : "Google Meet",
   };
   return inventoryProvesDeparture(meeting, inspections) ? null : meeting;
 }
@@ -167,24 +238,9 @@ export function automaticMeetingObservation(
   }
   if (
     matching.length === 0 ||
-    matching.some(
-      (inspection) =>
-        !inspection.accessibilityTrusted ||
-        inspection.warnings.some((warning) =>
-          /ambiguous|incomplete|no uniquely scoped|truncat|timed?\s*out|permission|failed/i.test(
-            warning,
-          ),
-        ),
-    )
+    matching.some(inspectionHasUncertainMeetingEvidence)
   ) {
     return "unknown";
   }
   return "inactive";
-}
-
-export function automaticMeetingIsActive(
-  meeting: AutomaticMeeting,
-  inspections: MeetingAccessibilityInspection[],
-) {
-  return automaticMeetingObservation(meeting, inspections) === "active";
 }

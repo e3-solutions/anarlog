@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   inspectionsShowActiveMeetingForApps,
   inspectionShowsActiveMeeting,
+  meetingObservationForApps,
 } from "./meeting-accessibility";
 
 const activeInspection = {
@@ -66,6 +67,24 @@ describe("meeting accessibility activity", () => {
         windowTitle: null,
       }),
     ).toBe(false);
+    expect(
+      meetingObservationForApps(
+        [{ ...activeInspection, windowTitle: "   " }],
+        [activeInspection.app.id],
+      ),
+    ).toBe("unknown");
+    expect(
+      meetingObservationForApps(
+        [{ ...activeInspection, platform: "unknown" }],
+        [activeInspection.app.id],
+      ),
+    ).toBe("unknown");
+    expect(
+      meetingObservationForApps(
+        [{ ...activeInspection, activeCall: false, windowTitle: null }],
+        [activeInspection.app.id],
+      ),
+    ).toBe("inactive");
   });
 
   it("only accepts active meetings from the expected trigger app", () => {

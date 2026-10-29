@@ -6,6 +6,7 @@ pub(crate) const COMMANDS: &[&str] = &[
     "list_installed_applications",
     "get_installed_application_icons",
     "list_mic_using_applications",
+    "list_meeting_audio_processes",
     "set_respect_do_not_disturb",
     "set_ignored_bundle_ids",
     "set_included_bundle_ids",

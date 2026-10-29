@@ -20,7 +20,7 @@ import {
   showMeetingEndedPrompt,
 } from "./auto-stop";
 import { cancelAutoStopEndedNotification } from "./auto-stop-notification";
-import { inspectionsShowActiveMeetingForApps } from "./meeting-accessibility";
+import { meetingObservationForApps } from "./meeting-accessibility";
 import {
   getBrowserMeetingPlatform,
   getIgnorableApps,
@@ -54,6 +54,7 @@ type PendingAutoStop = {
   sessionId: string | null;
   networkInterrupted: boolean;
   networkHoldUntilMs?: number;
+  uncertainCall: boolean;
 };
 
 function getMicDetectedNotificationTitle(event: NearbyEvent | null): string {
@@ -192,6 +193,7 @@ export const useHandleDetectEvents = (store: ListenerStore) => {
       sessionId: string | null,
       networkInterrupted: boolean,
       networkHoldUntilMs?: number,
+      uncertainCall = false,
     ) {
       clearPendingAutoStop();
 
@@ -200,6 +202,7 @@ export const useHandleDetectEvents = (store: ListenerStore) => {
         sessionId,
         networkInterrupted,
         networkHoldUntilMs,
+        uncertainCall,
       };
       pending.timeout = setTimeout(
         () => {
@@ -236,7 +239,8 @@ export const useHandleDetectEvents = (store: ListenerStore) => {
       if (
         pendingAutoStopRef.current !== pending ||
         live.status !== "active" ||
-        live.sessionId !== pending.sessionId
+        live.sessionId !== pending.sessionId ||
+        automaticMeetings.ownedSession.current === pending.sessionId
       ) {
         return;
       }
@@ -314,17 +318,22 @@ export const useHandleDetectEvents = (store: ListenerStore) => {
       const accessibilityResult =
         await detectCommands.inspectMeetingAccessibility();
       evidence.inspectionStatus = accessibilityResult.status;
-      if (
-        accessibilityResult.status === "ok" &&
-        inspectionsShowActiveMeetingForApps(
-          accessibilityResult.data,
-          activeCheckAppIds,
-        )
-      ) {
+      const observation = meetingObservationForApps(
+        accessibilityResult.status === "ok" ? accessibilityResult.data : null,
+        activeCheckAppIds,
+      );
+      if (observation !== "inactive" || pending.uncertainCall) {
         if (pendingAutoStopRef.current !== pending) {
           return;
         }
-        record("meeting_active", { ...evidence, observation: "active" });
+        record(
+          observation === "active"
+            ? "meeting_active"
+            : observation === "unknown"
+              ? "ax_unknown"
+              : "grace_pending",
+          { ...evidence, observation },
+        );
         scheduleAutoStop(
           AUTO_STOP_CONFIRM_DELAY_MS,
           candidateAppIds,
@@ -333,6 +342,7 @@ export const useHandleDetectEvents = (store: ListenerStore) => {
           pending.sessionId,
           pending.networkInterrupted,
           pending.networkHoldUntilMs,
+          observation === "unknown",
         );
         return;
       }
